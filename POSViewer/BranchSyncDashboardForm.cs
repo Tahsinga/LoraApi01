@@ -407,6 +407,7 @@ public sealed class BranchSyncDashboardForm : Form
                 deletion_id = deletion.id,
                 deleted_rows = deletedCount,
                 branch = await GetBranchNameAsync(),
+                deleted_by = Environment.UserName,
                 success = deletedCount > 0
             };
 
