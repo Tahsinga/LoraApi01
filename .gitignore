@@ -16,3 +16,5 @@ installer-output/
 *.db-shm
 *.db-wal
 config/db.sqlite3
+config/loraApi/runtime_state.json
+.env
