@@ -1,5 +1,6 @@
 using System.Data;
 using System.Data.SqlClient;
+using System.Globalization;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -161,8 +162,9 @@ public sealed class BranchSyncDashboardForm : Form
             }
 
             var pendingDeletions = result.pending_deletions ?? new List<DeletionTrigger>();
+            var pendingReports = result.pending_reports ?? new List<SalesReportRequest>();
             
-            if (pendingDeletions.Count > 0)
+            if (pendingDeletions.Count > 0 || pendingReports.Count > 0)
             {
                 _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] RECEIVED {pendingDeletions.Count} cancellation command(s) from API for branch {branchName}.");
                 _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] === PROCESSING {pendingDeletions.Count} DELETION TRIGGER(S) ===");
@@ -184,8 +186,19 @@ public sealed class BranchSyncDashboardForm : Form
                     }
                 }
 
+                foreach (var report in pendingReports)
+                {
+                    if (!string.Equals(report.branch?.Trim(), branchName.Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ SAFETY CHECK: Ignored report for branch {report.branch}; this app is {branchName}.");
+                        continue;
+                    }
+
+                    await ProcessSalesReportAsync(report, client, branchName);
+                }
+
                 _statusLabel.ForeColor = Color.DarkGreen;
-                _statusLabel.Text = $"✓ Processed {pendingDeletions.Count} trigger(s) | {result.count} total pending";
+                _statusLabel.Text = $"✓ Processed {pendingDeletions.Count} deletion(s), {pendingReports.Count} report(s) | {result.count} total pending";
                 _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] === SYNC COMPLETE ===");
             }
             else
@@ -410,7 +423,6 @@ public sealed class BranchSyncDashboardForm : Form
                 deleted_by = Environment.UserName,
                 success = deletedCount > 0
             };
-
             var confirmJson = JsonSerializer.Serialize(confirmPayload);
             using var confirmContent = new StringContent(confirmJson, Encoding.UTF8, "application/json");
             var confirmResponse = await client.PostAsync(
@@ -591,12 +603,105 @@ public sealed class BranchSyncDashboardForm : Form
         }
     }
 
+    private async Task ProcessSalesReportAsync(SalesReportRequest report, HttpClient client, string branchName)
+    {
+        var success = false;
+        var rowCount = 0;
+        var error = string.Empty;
+
+        try
+        {
+            if (!DateTime.TryParseExact(report.report_date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var reportDate))
+            {
+                throw new InvalidOperationException($"Invalid report date: {report.report_date}");
+            }
+
+            using var connection = new SqlConnection(_settings.BuildConnectionString());
+            await connection.OpenAsync();
+                        const string query = @"
+                            WITH Sales AS (
+                                SELECT
+                                    COALESCE(NULLIF(LTRIM(RTRIM(m.DoneBy)), ''), 'Unknown') AS Cashier,
+                                    COALESCE(pm.PaymentMethodDesc, CONCAT('Method ', COALESCE(CAST(m.ReceiptDisplayPaymentMethod AS nvarchar(20)), '0'))) AS PaymentMethod,
+                                    COALESCE(NULLIF(pm.Currency, ''), 'UNKNOWN') AS Currency,
+                                    CAST((
+                                        (
+                                            (COALESCE(m.Quantity, 0) * COALESCE(m.SellingPrice, 0))
+                                            - COALESCE(m.DiscountAmt, 0)
+                                            - COALESCE(m.InvDiscount, 0)
+                                            + COALESCE(m.TaxAmt, 0)
+                                        ) * COALESCE(m.ReceiptDisplayRate, 1)
+                                    ) AS decimal(28, 6)) AS SaleTotal
+                                    ,CAST((COALESCE(m.TaxAmt, 0) * COALESCE(m.ReceiptDisplayRate, 1)) AS decimal(28, 6)) AS TaxTotal
+                                FROM [dbo].[Movement] AS m
+                                OUTER APPLY (
+                                    SELECT TOP 1 PaymentMethodDesc, Currency
+                                    FROM [dbo].[PaymentMethods]
+                                    WHERE PaymentMethodID = m.ReceiptDisplayPaymentMethod
+                                      AND (coid = m.coid OR coid IS NULL)
+                                    ORDER BY CASE WHEN coid = m.coid THEN 0 ELSE 1 END
+                                ) AS pm
+                                WHERE m.TranDate = @reportDate
+                                  AND UPPER(CAST(m.Branch AS nvarchar(100))) = UPPER(@branch)
+                                  AND ISNULL(m.IsStockIn, 0) = 0
+                            )
+                                SELECT
+                                Cashier,
+                                PaymentMethod,
+                                Currency,
+                                CAST(SUM(SaleTotal) AS decimal(28, 2)) AS Total,
+                                CAST(SUM(TaxTotal) AS decimal(28, 2)) AS TaxTotal,
+                                COUNT_BIG(*) AS ReceiptCount
+                                FROM Sales
+                                        GROUP BY Cashier, PaymentMethod, Currency
+                                        ORDER BY Cashier, PaymentMethod, Currency;";
+
+            using var command = new SqlCommand(query, connection);
+            command.Parameters.Add("@reportDate", SqlDbType.Int).Value = int.Parse(reportDate.ToString("yyyyMMdd"));
+            command.Parameters.AddWithValue("@branch", branchName);
+            using var adapter = new SqlDataAdapter(command);
+            var table = new DataTable();
+            adapter.Fill(table);
+            rowCount = table.Rows.Count;
+
+            success = ReceiptPrinter.TryPrintMovementReport(
+                _settings.PrinterName,
+                "END-OF-DAY SALES REPORT",
+                table,
+                branchName,
+                reportDate,
+                out error);
+
+            _syncQueueListBox.Items.Insert(0, success
+                ? $"[{DateTime.Now:HH:mm:ss}] ✓ SALES REPORT PRINTED: {rowCount} row(s) for {branchName} on {reportDate:yyyy-MM-dd}"
+                : $"[{DateTime.Now:HH:mm:ss}] ✗ SALES REPORT NOT PRINTED: {error}");
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ SALES REPORT FAILED: {error}");
+        }
+
+        var completion = new
+        {
+            report_id = report.id,
+            success,
+            row_count = rowCount,
+            error,
+            branch = branchName,
+            printed_by = Environment.MachineName
+        };
+        using var content = new StringContent(JsonSerializer.Serialize(completion), Encoding.UTF8, "application/json");
+        await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/sales-report/complete/", content);
+    }
+
     private sealed class BranchSyncTriggerResponse
     {
         public string? status { get; set; }
         public string? service { get; set; }
         public string? branch_filter { get; set; }
         public List<DeletionTrigger>? pending_deletions { get; set; }
+        public List<SalesReportRequest>? pending_reports { get; set; }
         public int count { get; set; }
         public string? message { get; set; }
     }
@@ -614,5 +719,13 @@ public sealed class BranchSyncDashboardForm : Form
         public string? status { get; set; }
         public string? source { get; set; }
         public string? message { get; set; }
+    }
+
+    private sealed class SalesReportRequest
+    {
+        public string? id { get; set; }
+        public string? branch { get; set; }
+        public string? report_date { get; set; }
+        public string? status { get; set; }
     }
 }
