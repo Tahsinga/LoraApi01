@@ -130,6 +130,14 @@
           <button id="transfer-submit" type="submit">Send stock to branch</button>
         </form>
         <div id="transfer-notice" class="notice" role="status"></div>
+        <form id="branch-product-form" class="transfer-form">
+          <label>New branch product<input id="branch-product-name" type="text" maxlength="250" required placeholder="Product name"></label>
+          <label>Product code<input id="branch-product-code" type="text" maxlength="50" placeholder="Optional code"></label>
+          <label>Barcode<input id="branch-product-barcode" type="text" maxlength="100" placeholder="Optional barcode"></label>
+          <label>Selling price<input id="branch-product-price" type="number" min="0" step="0.01" required placeholder="0.00"></label>
+          <button id="branch-product-submit" type="submit">Create branch product</button>
+        </form>
+        <div id="branch-product-notice" class="notice" role="status"></div>
         <form id="branch-price-form" class="transfer-form">
           <label>Current branch price<input id="branch-current-price" type="text" readonly placeholder="Select a branch product"></label>
           <label>New branch price<input id="branch-price-input" type="number" min="0" step="0.01" required placeholder="Current price appears after selecting a product"></label>
@@ -177,6 +185,9 @@
   const transferForm = document.querySelector('#transfer-form');
   const transferNotice = document.querySelector('#transfer-notice');
   const transferSubmit = document.querySelector('#transfer-submit');
+  const branchProductForm = document.querySelector('#branch-product-form');
+  const branchProductSubmit = document.querySelector('#branch-product-submit');
+  const branchProductNotice = document.querySelector('#branch-product-notice');
   const branchPriceForm = document.querySelector('#branch-price-form');
   const branchCurrentPrice = document.querySelector('#branch-current-price');
   const branchPriceInput = document.querySelector('#branch-price-input');
@@ -475,6 +486,17 @@
       transferNotice.className = 'notice ok'; transferNotice.textContent = `${data.transfer.product_name} transfer queued for ${data.transfer.branch}. The branch app will apply it on its next sync.`; transferForm.reset(); await loadBranchProducts(); await loadStockMovements(); await loadStockTransfers();
     } catch (error) { transferNotice.className = 'notice error'; transferNotice.textContent = error.message; }
     finally { transferSubmit.disabled = false; }
+  });
+  branchProductForm.addEventListener('submit', async event => {
+    event.preventDefault(); branchProductSubmit.disabled = true; branchProductNotice.className = 'notice'; branchProductNotice.textContent = '';
+    try {
+      if (!selectedBranch.value) throw new Error('Select a connected branch first.');
+      const response = await fetch('/api/products/create/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch:selectedBranch.value, product_name:document.querySelector('#branch-product-name').value, product_code:document.querySelector('#branch-product-code').value, barcode:document.querySelector('#branch-product-barcode').value, selling_price:document.querySelector('#branch-product-price').value }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'Branch product could not be queued.');
+      branchProductNotice.className = 'notice ok'; branchProductNotice.textContent = `${data.product_name} queued for ${data.branch}. The branch will create it on its next sync.`; branchProductForm.reset();
+    } catch (error) { branchProductNotice.className = 'notice error'; branchProductNotice.textContent = error.message; }
+    finally { branchProductSubmit.disabled = false; }
   });
   branchPriceForm.addEventListener('submit', async event => {
     event.preventDefault(); branchPriceSubmit.disabled = true; branchPriceNotice.className = 'notice'; branchPriceNotice.textContent = '';
