@@ -88,6 +88,7 @@ class ProductCatalog(models.Model):
 	available_quantity = models.DecimalField(max_digits=18, decimal_places=0, default=0)
 	selling_price = models.DecimalField(max_digits=18, decimal_places=2, default=0)
 	sold_quantity = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
+	branch_confirmed = models.BooleanField(default=True)
 	pending_price_update = models.BooleanField(default=False)
 	pending_selling_price = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
 	tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
