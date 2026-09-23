@@ -9,7 +9,7 @@ from django.contrib.auth import get_user_model, update_session_auth_hash
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.forms import SetPasswordForm, UserCreationForm
 from django.db import OperationalError, transaction
-from django.db.models import IntegerField, Q, Sum
+from django.db.models import IntegerField, Max, Q, Sum
 from django.db.models.functions import Cast
 from django.http import JsonResponse, HttpResponse
 from django.shortcuts import render
@@ -448,7 +448,7 @@ def stock_summary(request):
     branch = str(request.GET.get('branch', '')).strip()
     if not branch:
         return JsonResponse({'status': 'error', 'message': 'Branch is required.'}, status=400)
-    products = list(ProductCatalog.objects.filter(branch__iexact=branch))
+    products = list(ProductCatalog.objects.filter(branch__iexact=branch, branch_confirmed=True))
     product_ids = [product.product_id for product in products]
     balance_by_product = dict(MainStockBalance.objects.filter(
         product_id__in=product_ids,
@@ -746,6 +746,79 @@ def request_branch_price_update(request):
     }, status=202)
 
 
+@login_required(login_url='/login/')
+@csrf_exempt
+def create_branch_product(request):
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+
+    try:
+        payload = json.loads(request.body or '{}')
+        branch = str(payload.get('branch', '')).strip()
+        product_name = str(payload.get('product_name', '')).strip()
+        product_code = str(payload.get('product_code', '')).strip()
+        barcode = str(payload.get('barcode', '')).strip()
+        selling_price = Decimal(str(payload.get('selling_price', 0) or 0))
+    except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
+        return JsonResponse({'status': 'error', 'message': 'Branch, product name, and a valid price are required.'}, status=400)
+
+    if not branch or branch.casefold() == 'main' or not product_name or len(product_name) > 250:
+        return JsonResponse({'status': 'error', 'message': 'A branch and product name are required.'}, status=400)
+    if len(product_code) > 50 or len(barcode) > 100 or selling_price < 0:
+        return JsonResponse({'status': 'error', 'message': 'Product code, barcode, and price are invalid.'}, status=400)
+
+    with transaction.atomic():
+        maximum_id = ProductCatalog.objects.select_for_update().filter(product_id__gte=1_000_000).aggregate(max_id=Max('product_id'))['max_id']
+        product_id = (maximum_id or 999_999) + 1
+        product = ProductCatalog.objects.create(
+            branch=branch,
+            product_id=product_id,
+            product_name=product_name,
+            product_code=product_code,
+            barcode=barcode,
+            selling_price=selling_price,
+            branch_confirmed=False,
+            pending_product_creation=True,
+        )
+
+    return JsonResponse({
+        'status': 'accepted',
+        'branch': product.branch,
+        'product_id': product.product_id,
+        'product_name': product.product_name,
+        'product_code': product.product_code,
+        'barcode': product.barcode,
+        'selling_price': str(product.selling_price),
+    }, status=202)
+
+
+@csrf_exempt
+def complete_branch_product_creation(request):
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+
+    try:
+        payload = json.loads(request.body or '{}')
+        branch = str(payload.get('branch', '')).strip()
+        product_id = int(payload.get('product_id'))
+        actual_product_id = int(payload.get('actual_product_id') or product_id)
+        success = bool(payload.get('success'))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return JsonResponse({'status': 'error', 'message': 'Branch and product are required.'}, status=400)
+
+    try:
+        product = ProductCatalog.objects.get(branch__iexact=branch, product_id=product_id)
+    except ProductCatalog.DoesNotExist:
+        return JsonResponse({'status': 'error', 'message': 'The pending product was not found.'}, status=404)
+
+    if success:
+        product.product_id = actual_product_id
+        product.branch_confirmed = True
+        product.pending_product_creation = False
+        product.save(update_fields=['product_id', 'branch_confirmed', 'pending_product_creation', 'updated_at'])
+    return JsonResponse({'status': 'ok', 'branch': product.branch, 'product_id': product.product_id, 'success': success})
+
+
 @csrf_exempt
 def complete_branch_price_update(request):
     if request.method != 'POST':
@@ -784,6 +857,8 @@ def product_catalog(request):
     query = str(request.GET.get('q', '')).strip()
     branch = str(request.GET.get('branch', '')).strip()
     products = ProductCatalog.objects.filter(branch__iexact=branch or 'MAIN')
+    if branch and branch.casefold() != 'main':
+        products = products.filter(branch_confirmed=True)
     if query:
         products = products.filter(
             Q(product_name__icontains=query)
@@ -830,8 +905,9 @@ def sync_product_catalog(request):
             catalog, created = ProductCatalog.objects.select_for_update().get_or_create(
                 branch=branch,
                 product_id=product_id,
-                defaults={'available_quantity': available_quantity, 'selling_price': selling_price},
+                defaults={'available_quantity': available_quantity, 'selling_price': selling_price, 'branch_confirmed': True},
             )
+            catalog.branch_confirmed = True
             previous_quantity = catalog.available_quantity
             previous_sold_quantity = catalog.sold_quantity or Decimal('0')
             stock_take_sale_sync = False
@@ -914,7 +990,7 @@ def product_sync_inbox(request):
     if request.method != 'GET':
         return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
 
-    products = ProductCatalog.objects.exclude(branch__iexact='MAIN')
+    products = ProductCatalog.objects.exclude(branch__iexact='MAIN').filter(branch_confirmed=True)
     return JsonResponse({'status': 'ok', 'products': [product_payload(product) for product in products]})
 
 
@@ -952,6 +1028,7 @@ def publish_product_catalog(request):
             barcode=str(item.get('barcode', '')).strip(),
             available_quantity=available_quantity,
             selling_price=selling_price,
+            branch_confirmed=True,
             tax_rate=tax_rate,
             pending_price_update=False,
             pending_selling_price=None,
@@ -967,7 +1044,7 @@ def publish_product_catalog(request):
                     update_conflicts=True,
                     update_fields=[
                         'product_name', 'product_code', 'barcode', 'available_quantity',
-                        'selling_price', 'tax_rate', 'pending_price_update',
+                        'selling_price', 'branch_confirmed', 'tax_rate', 'pending_price_update',
                         'pending_selling_price', 'pending_product_creation', 'updated_at',
                     ],
                     unique_fields=['branch', 'product_id'],
@@ -1165,6 +1242,10 @@ def branch_sync(request):
             pending_price_update=True,
             pending_selling_price__isnull=False,
         ).values('branch', 'product_id', 'product_name', 'pending_selling_price'))
+        pending_product_creations = list(ProductCatalog.objects.filter(
+            branch__iexact=branch_name,
+            pending_product_creation=True,
+        ).values('branch', 'product_id', 'product_name', 'product_code', 'barcode', 'selling_price'))
 
         return JsonResponse({
             'status': 'ok',
@@ -1182,6 +1263,17 @@ def branch_sync(request):
                     'selling_price': str(item['pending_selling_price']),
                 }
                 for item in pending_price_updates
+            ],
+            'pending_product_creations': [
+                {
+                    'branch': item['branch'],
+                    'product_id': item['product_id'],
+                    'product_name': item['product_name'],
+                    'product_code': item['product_code'],
+                    'barcode': item['barcode'],
+                    'selling_price': str(item['selling_price']),
+                }
+                for item in pending_product_creations
             ],
             'message': f'Found {len(pending)} deletion(s) to process'
         })

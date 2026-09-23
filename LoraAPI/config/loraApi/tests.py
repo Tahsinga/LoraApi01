@@ -282,6 +282,49 @@ class StockTransferTests(TestCase):
 		self.assertEqual(product.product_name, 'Published Product')
 		self.assertEqual(product.available_quantity, 8)
 
+	def test_web_can_queue_branch_product_and_branch_can_acknowledge_it(self):
+		response = self.client.post(
+			'/api/products/create/',
+			data=json.dumps({
+				'branch': 'BranchA', 'product_name': 'New Branch Product',
+				'product_code': 'NEW-001', 'barcode': '990001', 'selling_price': '4.25',
+			}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 202)
+		product_id = response.json()['product_id']
+		self.assertGreaterEqual(product_id, 1_000_000)
+		self.assertFalse(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).branch_confirmed)
+		not_visible = self.client.get('/api/products/?branch=BranchA&q=New%20Branch%20Product')
+		self.assertEqual(not_visible.status_code, 200)
+		self.assertEqual(not_visible.json()['products'], [])
+
+		poll = self.client.get('/api/branch-sync/?branch=BranchA')
+		self.assertEqual(poll.status_code, 200)
+		self.assertEqual(poll.json()['pending_product_creations'][0]['product_name'], 'New Branch Product')
+
+		complete = self.client.post(
+			'/api/products/create/complete/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': product_id, 'actual_product_id': 2001, 'success': True}),
+			content_type='application/json',
+		)
+		self.assertEqual(complete.status_code, 200)
+		product = ProductCatalog.objects.get(branch='BranchA', product_id=2001)
+		self.assertFalse(product.pending_product_creation)
+		self.assertTrue(product.branch_confirmed)
+		visible = self.client.get('/api/products/?branch=BranchA&q=New%20Branch%20Product')
+		self.assertEqual([item['product_id'] for item in visible.json()['products']], [2001])
+
+	def test_web_rejects_main_as_branch_product_target(self):
+		response = self.client.post(
+			'/api/products/create/',
+			data=json.dumps({'branch': 'MAIN', 'product_name': 'Invalid Product', 'selling_price': '1.00'}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 400)
+
 	def test_product_search_matches_code_barcode_and_id(self):
 		ProductCatalog.objects.create(
 			branch='BranchA', product_id=1001, product_name='Search Product',
