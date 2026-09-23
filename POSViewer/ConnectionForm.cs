@@ -13,6 +13,7 @@ public sealed class ConnectionForm : Form
     private readonly CheckBox _rememberLoginCheckBox = new();
     private readonly TextBox _apiUrlTextBox = new();
     private readonly ComboBox _deviceRoleComboBox = new();
+    private readonly TextBox _branchNameTextBox = new();
     private readonly ComboBox _printerComboBox = new();
     private readonly Button _testPrinterButton = new();
     private readonly Button _testSqlButton = new();
@@ -43,6 +44,7 @@ public sealed class ConnectionForm : Form
         _rememberLoginCheckBox.Checked = true;
         _apiUrlTextBox.Text = ConnectionSettings.DefaultApiBaseUrl;
         _deviceRoleComboBox.SelectedItem = "Branch PC";
+        _branchNameTextBox.Clear();
 
         var saved = ConnectionSettings.Load();
         if (saved.RememberLogin)
@@ -58,6 +60,7 @@ public sealed class ConnectionForm : Form
             {
                 _deviceRoleComboBox.SelectedItem = saved.DeviceRole;
             }
+            _branchNameTextBox.Text = saved.BranchName;
             SelectSavedPrinter(saved.PrinterName);
         }
 
@@ -83,12 +86,14 @@ public sealed class ConnectionForm : Form
         }
 
         var saved = ConnectionSettings.Load();
-        if (saved.RememberLogin && !string.IsNullOrWhiteSpace(saved.Server) && !string.IsNullOrWhiteSpace(saved.Database))
+        if (!saved.RememberLogin || string.IsNullOrWhiteSpace(saved.Server) || string.IsNullOrWhiteSpace(saved.Database))
         {
-            _autoLoginAttempted = true;
-            _autoLoginRetryCts = new CancellationTokenSource();
-            _ = TryConnectUntilConnectedAsync(saved, _autoLoginRetryCts.Token);
+            return;
         }
+
+        _autoLoginAttempted = true;
+        _autoLoginRetryCts = new CancellationTokenSource();
+        _ = TryConnectUntilConnectedAsync(saved, _autoLoginRetryCts.Token);
     }
 
     private void InitializeComponent()
@@ -162,38 +167,49 @@ public sealed class ConnectionForm : Form
         _deviceRoleComboBox.Location = new Point(160, 326);
         _deviceRoleComboBox.Size = new Size(300, 28);
         _deviceRoleComboBox.Items.Add("Branch PC");
+        _deviceRoleComboBox.Items.Add("Main PC");
         _deviceRoleComboBox.SelectedItem = "Branch PC";
+
+        var branchNameLabel = new Label
+        {
+            Text = "Branch name:",
+            Location = new Point(20, 370),
+            AutoSize = true
+        };
+        _branchNameTextBox.Location = new Point(160, 366);
+        _branchNameTextBox.Size = new Size(300, 28);
+        _branchNameTextBox.PlaceholderText = "Required for Branch PC";
 
         var printerLabel = new Label
         {
             Text = "Receipt Printer:",
-            Location = new Point(20, 370),
+            Location = new Point(20, 410),
             AutoSize = true
         };
 
         _printerComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
-        _printerComboBox.Location = new Point(160, 366);
+        _printerComboBox.Location = new Point(160, 406);
         _printerComboBox.Size = new Size(300, 28);
         LoadPrinters();
 
         _testSqlButton.Text = "Test SQL";
         _testSqlButton.Size = new Size(125, 35);
-        _testSqlButton.Location = new Point(160, 410);
+        _testSqlButton.Location = new Point(160, 450);
         _testSqlButton.Click += async (_, _) => await TestSqlConnectionAsync();
 
         _testPrinterButton.Text = "Test Printer";
         _testPrinterButton.Size = new Size(125, 35);
-        _testPrinterButton.Location = new Point(25, 410);
+        _testPrinterButton.Location = new Point(25, 450);
         _testPrinterButton.Click += (_, _) => TestPrinter();
 
         _testApiButton.Text = "Test API";
         _testApiButton.Size = new Size(125, 35);
-        _testApiButton.Location = new Point(295, 410);
+        _testApiButton.Location = new Point(295, 450);
         _testApiButton.Click += async (_, _) => await TestApiConnectionAsync();
 
         _saveAndConnectButton.Text = "Save & Connect";
         _saveAndConnectButton.Size = new Size(150, 35);
-        _saveAndConnectButton.Location = new Point(160, 455);
+        _saveAndConnectButton.Location = new Point(160, 495);
         _saveAndConnectButton.BackColor = Color.FromArgb(0, 120, 215);
         _saveAndConnectButton.ForeColor = Color.White;
         _saveAndConnectButton.FlatStyle = FlatStyle.Flat;
@@ -204,7 +220,7 @@ public sealed class ConnectionForm : Form
         };
 
         _statusLabel.AutoSize = true;
-        _statusLabel.Location = new Point(20, 505);
+        _statusLabel.Location = new Point(20, 545);
         _statusLabel.ForeColor = Color.ForestGreen;
 
         Controls.Add(titleLabel);
@@ -222,6 +238,8 @@ public sealed class ConnectionForm : Form
         Controls.Add(_apiUrlTextBox);
         Controls.Add(deviceRoleLabel);
         Controls.Add(_deviceRoleComboBox);
+        Controls.Add(branchNameLabel);
+        Controls.Add(_branchNameTextBox);
         Controls.Add(printerLabel);
         Controls.Add(_printerComboBox);
         Controls.Add(_testPrinterButton);
@@ -257,6 +275,7 @@ public sealed class ConnectionForm : Form
         _rememberLoginCheckBox.Checked = saved.RememberLogin;
         _passwordTextBox.Text = saved.Password;
         _apiUrlTextBox.Text = string.IsNullOrWhiteSpace(saved.ApiBaseUrl) ? ConnectionSettings.DefaultApiBaseUrl : saved.ApiBaseUrl;
+        _branchNameTextBox.Text = saved.BranchName;
         SelectSavedPrinter(saved.PrinterName);
         UpdateAuthenticationFields();
     }
@@ -305,6 +324,7 @@ public sealed class ConnectionForm : Form
             IntegratedSecurity = _integratedSecurityCheckBox.Checked,
             RememberLogin = _rememberLoginCheckBox.Checked,
             DeviceRole = _deviceRoleComboBox.SelectedItem?.ToString() ?? "Branch PC",
+            BranchName = _branchNameTextBox.Text.Trim(),
             ApiBaseUrl = string.IsNullOrWhiteSpace(_apiUrlTextBox.Text) ? ConnectionSettings.DefaultApiBaseUrl : _apiUrlTextBox.Text.Trim(),
             PrinterName = _printerComboBox.SelectedItem?.ToString() == "No printers found" ? string.Empty : _printerComboBox.SelectedItem?.ToString() ?? string.Empty
         };
@@ -496,7 +516,7 @@ public sealed class ConnectionForm : Form
 
             Form dashboard = settings.DeviceRole == "Branch PC"
                 ? new BranchSyncDashboardForm(settings, this)
-                : new DashboardForm(settings, this);
+                : new MainSyncDashboardForm(settings, this);
 
             dashboard.Show();
             if (StartHidden)

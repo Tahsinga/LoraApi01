@@ -1,6 +1,7 @@
 using System.Data;
 using System.Data.SqlClient;
 using System.Drawing;
+using System.Globalization;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -19,13 +20,14 @@ public sealed class DashboardForm : Form
     private readonly System.Windows.Forms.Timer _refreshTimer = new();
     private readonly RichTextBox _logTextBox = new();
     private readonly DateTimePicker _dateFilterPicker = new();
+    private readonly Label _statusLabel = new();
 
     public DashboardForm(ConnectionSettings settings, ConnectionForm connectionForm)
     {
         _settings = settings;
         _connectionForm = connectionForm;
 
-        Text = "Movements Dashboard";
+        Text = "Main PC Dashboard";
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
@@ -35,14 +37,14 @@ public sealed class DashboardForm : Form
         var topPanel = new Panel
         {
             Dock = DockStyle.Top,
-            Height = 180,
+            Height = 160,
             BackColor = Color.FromArgb(236, 236, 236),
             BorderStyle = BorderStyle.FixedSingle
         };
 
         var titleLabel = new Label
         {
-            Text = "Movements",
+            Text = "Main PC Dashboard",
             Font = new Font("Segoe UI", 22F, FontStyle.Bold),
             AutoSize = true,
             Location = new Point(20, 18),
@@ -51,12 +53,18 @@ public sealed class DashboardForm : Form
 
         var statusLabel = new Label
         {
-            Text = $"Connected to: {_settings.Server} / {_settings.Database}",
+            Text = $"Main PC | Connected to: {_settings.Server} / {_settings.Database}",
             Font = new Font("Segoe UI", 10.5F),
             AutoSize = true,
             Location = new Point(22, 62),
             ForeColor = Color.FromArgb(70, 70, 70)
         };
+
+        _statusLabel.Text = "Main PC sync complete.";
+        _statusLabel.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
+        _statusLabel.AutoSize = true;
+        _statusLabel.Location = new Point(515, 94);
+        _statusLabel.ForeColor = Color.DarkGreen;
 
         var dateLabel = new Label
         {
@@ -105,13 +113,13 @@ public sealed class DashboardForm : Form
 
         _branchComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
         _branchComboBox.Location = new Point(548, 117);
-        _branchComboBox.Width = 180;
+        _branchComboBox.Width = 175;
         _branchComboBox.Height = 28;
         _branchComboBox.Font = new Font("Segoe UI", 10F);
         _branchComboBox.SelectedIndexChanged += async (_, _) => await LoadMovementsAsync();
 
         _refreshButton.Text = "Refresh";
-        _refreshButton.Location = new Point(800, 116);
+        _refreshButton.Location = new Point(760, 116);
         _refreshButton.Width = 110;
         _refreshButton.Height = 30;
         _refreshButton.FlatStyle = FlatStyle.Flat;
@@ -120,50 +128,19 @@ public sealed class DashboardForm : Form
         _refreshButton.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
         _refreshButton.Click += async (_, _) => await LoadMovementsAsync();
 
-        _returnButton.Text = "Cancel Invoice";
-        _returnButton.Location = new Point(920, 116);
-        _returnButton.Width = 140;
+        _returnButton.Text = "Cancel";
+        _returnButton.Location = new Point(880, 116);
+        _returnButton.Width = 110;
         _returnButton.Height = 30;
         _returnButton.FlatStyle = FlatStyle.Flat;
-        _returnButton.BackColor = Color.FromArgb(20, 90, 50);
+        _returnButton.BackColor = Color.FromArgb(22, 88, 50);
         _returnButton.ForeColor = Color.White;
         _returnButton.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
         _returnButton.Click += async (_, _) => await TryCreateReturnAsync();
 
-        var returnButton = new Button
-        {
-            Text = "Login Screen",
-            Location = new Point(1050, 116),
-            Width = 170,
-            Height = 30,
-            BackColor = Color.FromArgb(0, 120, 215),
-            ForeColor = Color.White,
-            FlatStyle = FlatStyle.Flat,
-            Font = new Font("Segoe UI", 10F, FontStyle.Bold)
-        };
-        returnButton.Click += (_, _) =>
-        {
-            _connectionForm.ShowConnectionScreen();
-            Hide();
-        };
-
-        var disconnectButton = new Button
-        {
-            Text = "Disconnect",
-            Location = new Point(1100, 116),
-            Width = 120,
-            Height = 30,
-            FlatStyle = FlatStyle.Flat,
-            Font = new Font("Segoe UI", 10F, FontStyle.Bold)
-        };
-        disconnectButton.Click += (_, _) =>
-        {
-            _connectionForm.ResetAndShow();
-            Hide();
-        };
-
         topPanel.Controls.Add(titleLabel);
         topPanel.Controls.Add(statusLabel);
+        topPanel.Controls.Add(_statusLabel);
         topPanel.Controls.Add(dateLabel);
         topPanel.Controls.Add(_dateFilterPicker);
         topPanel.Controls.Add(searchLabel);
@@ -172,8 +149,6 @@ public sealed class DashboardForm : Form
         topPanel.Controls.Add(_branchComboBox);
         topPanel.Controls.Add(_refreshButton);
         topPanel.Controls.Add(_returnButton);
-        topPanel.Controls.Add(returnButton);
-        topPanel.Controls.Add(disconnectButton);
 
         Controls.Add(topPanel);
 
@@ -216,15 +191,27 @@ public sealed class DashboardForm : Form
         _logTextBox.ScrollBars = RichTextBoxScrollBars.Vertical;
 
         _refreshTimer.Interval = 15000;
-        _refreshTimer.Tick += async (_, _) => await LoadMovementsAsync();
+        _refreshTimer.Tick += async (_, _) =>
+        {
+            _statusLabel.Text = "Main PC syncing...";
+            await ImportBranchProductCatalogAsync();
+            await SyncProductCatalogAsync();
+            await LoadMovementsAsync();
+            _statusLabel.Text = "Main PC sync complete.";
+        };
+        _refreshTimer.Start();
 
         Controls.Add(_gridView);
         Controls.Add(logLabel);
         Controls.Add(_logTextBox);
 
+        FormClosing += (_, _) => _refreshTimer.Stop();
+
         Shown += async (_, _) =>
         {
             await LoadBranchListAsync();
+            await ImportBranchProductCatalogAsync();
+            await SyncProductCatalogAsync();
             await LoadMovementsAsync();
         };
         Resize += (_, _) =>
@@ -235,11 +222,85 @@ public sealed class DashboardForm : Form
             _logTextBox.Height = 170;
         };
 
-        AddLog("[INFO] Connected successfully.", Color.LightBlue);
+        AddLog("[INFO] Main PC connected successfully.", Color.LightBlue);
+    }
+
+    private async Task ImportBranchProductCatalogAsync()
+    {
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+            var response = await client.GetAsync($"{_settings.GetApiBaseUrl()}/api/products/inbox/");
+            if (!response.IsSuccessStatusCode)
+            {
+                AddLog($"[WARNING] Branch product inbox request failed: {response.StatusCode}", Color.Orange);
+                return;
+            }
+
+            var payload = await response.Content.ReadFromJsonAsync<ProductInboxResponse>();
+            var products = payload?.products ?? new List<ProductCatalogItem>();
+            using var connection = new SqlConnection(_settings.BuildConnectionString());
+            await connection.OpenAsync();
+
+            const string createTableSql = @"
+                IF OBJECT_ID(N'dbo.BranchProductCatalog', N'U') IS NULL
+                BEGIN
+                    CREATE TABLE [dbo].[BranchProductCatalog](
+                        Branch nvarchar(255) NOT NULL,
+                        ProductID int NOT NULL,
+                        ProductDesc nvarchar(250) NOT NULL,
+                        ProductCode nvarchar(50) NULL,
+                        BarCode nvarchar(100) NULL,
+                        SellingPrice decimal(18,2) NOT NULL CONSTRAINT DF_BranchProductCatalog_SellingPrice DEFAULT 0,
+                        UpdatedAt datetime2 NOT NULL CONSTRAINT DF_BranchProductCatalog_UpdatedAt DEFAULT SYSUTCDATETIME(),
+                        CONSTRAINT PK_BranchProductCatalog PRIMARY KEY (Branch, ProductID)
+                    );
+                END";
+            using (var createCommand = new SqlCommand(createTableSql, connection))
+            {
+                await createCommand.ExecuteNonQueryAsync();
+            }
+            using (var alterCommand = new SqlCommand(@"
+                IF COL_LENGTH('dbo.BranchProductCatalog', 'SellingPrice') IS NULL
+                    ALTER TABLE [dbo].[BranchProductCatalog] ADD SellingPrice decimal(18,2) NOT NULL CONSTRAINT DF_BranchProductCatalog_SellingPrice_Existing DEFAULT 0;", connection))
+            {
+                await alterCommand.ExecuteNonQueryAsync();
+            }
+
+            foreach (var product in products)
+            {
+                const string upsertSql = @"
+                    UPDATE [dbo].[BranchProductCatalog]
+                    SET ProductDesc = @productName, ProductCode = @productCode, BarCode = @barcode, SellingPrice = @sellingPrice, UpdatedAt = SYSUTCDATETIME()
+                    WHERE Branch = @branch AND ProductID = @productId;
+                    IF @@ROWCOUNT = 0
+                    INSERT INTO [dbo].[BranchProductCatalog](Branch, ProductID, ProductDesc, ProductCode, BarCode, SellingPrice)
+                    VALUES (@branch, @productId, @productName, @productCode, @barcode, @sellingPrice);";
+                using var command = new SqlCommand(upsertSql, connection);
+                command.Parameters.AddWithValue("@branch", product.branch ?? string.Empty);
+                command.Parameters.AddWithValue("@productId", product.product_id);
+                command.Parameters.AddWithValue("@productName", product.product_name ?? string.Empty);
+                command.Parameters.AddWithValue("@productCode", product.product_code ?? string.Empty);
+                command.Parameters.AddWithValue("@barcode", product.barcode ?? string.Empty);
+                command.Parameters.AddWithValue("@sellingPrice", product.selling_price);
+                await command.ExecuteNonQueryAsync();
+            }
+
+            AddLog($"[SUCCESS] Main received {products.Count} product(s) from branch inbox and stored them in dbo.BranchProductCatalog.", Color.LightGreen);
+        }
+        catch (Exception ex)
+        {
+            AddLog($"[WARNING] Branch product import failed: {ex.Message}", Color.Orange);
+        }
     }
 
     private void AddLog(string message, Color color)
     {
+        if (IsDisposed || Disposing || _logTextBox.IsDisposed || _logTextBox.Disposing)
+        {
+            return;
+        }
+
         var originalSelection = _logTextBox.SelectionStart;
         _logTextBox.SelectionColor = color;
         _logTextBox.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
@@ -284,6 +345,67 @@ public sealed class DashboardForm : Form
         {
             AddLog($"[ERROR] Unable to load branch list: {ex.Message}", Color.IndianRed);
         }
+    }
+
+    private async Task SyncProductCatalogAsync()
+    {
+        _statusLabel.Text = "Syncing main product catalog to web...";
+        try
+        {
+            using var connection = new SqlConnection(_settings.BuildConnectionString());
+            await connection.OpenAsync();
+                        const string query = @"
+                                SELECT ProductID, ProductDesc, ProductCode, BarCode, SellingPrice
+                                FROM [dbo].[BranchProductCatalog]
+                                WHERE ProductID IS NOT NULL
+                                    AND ProductDesc IS NOT NULL
+                                    AND LTRIM(RTRIM(ProductDesc)) <> '';";
+            using var command = new SqlCommand(query, connection);
+            using var reader = await command.ExecuteReaderAsync();
+            var products = new List<object>();
+            while (await reader.ReadAsync())
+            {
+                products.Add(new
+                {
+                    product_id = Convert.ToInt32(reader["ProductID"]),
+                    product_name = reader["ProductDesc"]?.ToString()?.Trim() ?? string.Empty,
+                    product_code = reader["ProductCode"]?.ToString()?.Trim() ?? string.Empty,
+                    barcode = reader["BarCode"]?.ToString()?.Trim() ?? string.Empty,
+                    selling_price = Convert.ToDecimal(reader["SellingPrice"], CultureInfo.InvariantCulture),
+                });
+            }
+
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+            var payload = JsonSerializer.Serialize(new { products });
+            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+            var response = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/products/publish/", content);
+            AddLog(response.IsSuccessStatusCode
+                ? $"[SUCCESS] Synced {products.Count} products to the web catalog."
+                : $"[WARNING] Product catalog sync failed: {response.StatusCode}", response.IsSuccessStatusCode ? Color.LightGreen : Color.Orange);
+            _statusLabel.Text = response.IsSuccessStatusCode
+                ? $"Main PC catalog synced: {products.Count} products."
+                : "Main PC catalog sync failed.";
+        }
+        catch (Exception ex)
+        {
+            AddLog($"[WARNING] Product catalog sync unavailable: {ex.Message}", Color.Orange);
+            _statusLabel.Text = "Main PC catalog sync unavailable.";
+        }
+    }
+
+    private sealed class ProductInboxResponse
+    {
+        public List<ProductCatalogItem>? products { get; set; }
+    }
+
+    private sealed class ProductCatalogItem
+    {
+        public string? branch { get; set; }
+        public int product_id { get; set; }
+        public string? product_name { get; set; }
+        public string? product_code { get; set; }
+        public string? barcode { get; set; }
+        public decimal selling_price { get; set; }
     }
 
     private async Task TryCreateReturnAsync()
@@ -689,6 +811,7 @@ public sealed class DashboardForm : Form
 
     private async Task LoadMovementsAsync()
     {
+        _statusLabel.Text = "Loading main movement data...";
         try
         {
             using var connection = new SqlConnection(_settings.BuildConnectionString());
@@ -728,11 +851,13 @@ public sealed class DashboardForm : Form
             if (_gridView.Columns.Contains("DigSig")) _gridView.Columns["DigSig"].Visible = false;
 
             AddLog($"[SUCCESS] Loaded {table.Rows.Count} movement records.", Color.LightGreen);
+            _statusLabel.Text = $"Main PC ready. Loaded {table.Rows.Count} movement records.";
         }
         catch (Exception ex)
         {
             _gridView.DataSource = null;
             AddLog($"[ERROR] Unable to load Movements data: {ex.Message}", Color.IndianRed);
+            _statusLabel.Text = "Main PC movement load failed.";
         }
         finally
         {

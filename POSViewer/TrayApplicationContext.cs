@@ -25,20 +25,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _notifyIcon.DoubleClick += (_, _) => ShowApplication();
 
         _connectionForm = new ConnectionForm();
-        _connectionForm.StartHidden = true;
+        _connectionForm.StartHidden = false;
         _connectionForm.FormClosed += HandleFormClosed;
 
         // Let the form initialize its saved connection and dashboard before hiding it.
         _connectionForm.Show();
-        _connectionForm.BeginInvoke(HideStartupForms);
-    }
-
-    private void HideStartupForms()
-    {
-        foreach (Form form in Application.OpenForms)
-        {
-            form.Hide();
-        }
     }
 
     private void ShowApplication()

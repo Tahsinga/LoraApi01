@@ -16,8 +16,17 @@ public sealed class ConnectionSettings
     public bool IntegratedSecurity { get; set; } = true;
     public bool RememberLogin { get; set; } = true;
     public string DeviceRole { get; set; } = "Branch PC";
+    public string BranchName { get; set; } = "";
     public string ApiBaseUrl { get; set; } = DefaultApiBaseUrl;
     public string PrinterName { get; set; } = "";
+    public static string ProfileName { get; private set; } = "default";
+
+    public static void ConfigureProfile(string[] args)
+    {
+        const string profilePrefix = "--profile=";
+        var profile = args.FirstOrDefault(argument => argument.StartsWith(profilePrefix, StringComparison.OrdinalIgnoreCase))?.Substring(profilePrefix.Length);
+        ProfileName = string.IsNullOrWhiteSpace(profile) ? "default" : SanitizeProfileName(profile);
+    }
 
     public string GetApiBaseUrl()
     {
@@ -41,8 +50,16 @@ public sealed class ConnectionSettings
         {
             var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LoraPOSReturns");
             Directory.CreateDirectory(folder);
-            return Path.Combine(folder, "connection.json");
+            var fileName = ProfileName == "default" ? "connection.json" : $"connection-{ProfileName}.json";
+            return Path.Combine(folder, fileName);
         }
+    }
+
+    private static string SanitizeProfileName(string profile)
+    {
+        var invalidCharacters = Path.GetInvalidFileNameChars();
+        var sanitized = new string(profile.Trim().Where(character => !invalidCharacters.Contains(character)).ToArray());
+        return string.IsNullOrWhiteSpace(sanitized) ? "default" : sanitized;
     }
 
     public string BuildConnectionString()
@@ -77,7 +94,8 @@ public sealed class ConnectionSettings
                 : string.Empty,
             IntegratedSecurity = settings.IntegratedSecurity,
             RememberLogin = settings.RememberLogin,
-            DeviceRole = "Branch PC",
+            DeviceRole = string.IsNullOrWhiteSpace(settings.DeviceRole) ? "Branch PC" : settings.DeviceRole,
+            BranchName = settings.BranchName?.Trim() ?? string.Empty,
             ApiBaseUrl = string.IsNullOrWhiteSpace(settings.ApiBaseUrl)
                 ? DefaultApiBaseUrl
                 : settings.ApiBaseUrl.TrimEnd('/'),
@@ -114,7 +132,12 @@ public sealed class ConnectionSettings
                 settings.ApiBaseUrl = DefaultApiBaseUrl;
             }
 
-            settings.DeviceRole = "Branch PC";
+            if (string.IsNullOrWhiteSpace(settings.DeviceRole))
+            {
+                settings.DeviceRole = "Branch PC";
+            }
+
+            settings.BranchName = settings.BranchName?.Trim() ?? string.Empty;
 
             return settings;
         }
