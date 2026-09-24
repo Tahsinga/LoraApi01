@@ -60,6 +60,13 @@
     .transfer-panel .transfer-form input { height:40px; padding:8px 11px; }
     .transfer-panel .transfer-form button { grid-column:auto; margin-top:0; padding:10px 14px; white-space:nowrap; }
     .transfer-panel .notice { min-height:0; margin-top:8px; }
+    .toggle-row { display:flex; align-items:center; justify-content:space-between; gap:14px; margin:10px 0 18px; padding:10px 12px; background:#f3f9f8; border:1px solid #d8e9e4; border-radius:6px; }
+    .toggle-row .toggle-label { color:var(--ink); font:700 12px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; }
+    .toggle-button { width:auto; min-width:220px; margin:0; padding:10px 14px; color:var(--teal-dark); background:#dbe8e4; border:1px solid #b9d0ca; border-radius:4px; cursor:pointer; font:700 11px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; }
+    .toggle-button:hover { color:#fff; background:var(--teal); }
+    .toggle-button.is-on { color:#fff; background:var(--teal); border-color:var(--teal-dark); }
+    .branch-product-form-wrap { display:none; margin-top:4px; }
+    .branch-product-form-wrap.is-open { display:block; }
     .product-list { display:grid; gap:8px; max-height:360px; overflow:auto; margin-top:14px; }
     .product-row { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:16px; align-items:center; width:100%; margin:0; padding:12px 14px; color:var(--ink); background:#fbfcfa; border:1px solid var(--line); text-align:left; text-transform:none; letter-spacing:0; }
     .product-row:hover { color:var(--ink); background:#e7f2ee; border-color:#9dcac0; }
@@ -130,14 +137,22 @@
           <button id="transfer-submit" type="submit">Send stock to branch</button>
         </form>
         <div id="transfer-notice" class="notice" role="status"></div>
-        <form id="branch-product-form" class="transfer-form">
-          <label>New branch product<input id="branch-product-name" type="text" maxlength="250" required placeholder="Product name"></label>
-          <label>Product code<input id="branch-product-code" type="text" maxlength="50" placeholder="Optional code"></label>
-          <label>Barcode<input id="branch-product-barcode" type="text" maxlength="100" placeholder="Optional barcode"></label>
-          <label>Selling price<input id="branch-product-price" type="number" min="0" step="0.01" required placeholder="0.00"></label>
-          <button id="branch-product-submit" type="submit">Create branch product</button>
-        </form>
-        <div id="branch-product-notice" class="notice" role="status"></div>
+        <div class="toggle-row">
+          <span class="toggle-label">New branch product fields</span>
+          <button id="branch-product-toggle" class="toggle-button" type="button" aria-pressed="false">Turn on new product fields</button>
+        </div>
+        <div id="branch-product-form-wrap" class="branch-product-form-wrap">
+          <form id="branch-product-form" class="transfer-form">
+            <label>Product name<input id="branch-product-name" type="text" maxlength="250" required placeholder="Product name"></label>
+            <label>Product ID<input id="branch-product-id" type="number" min="12100000" step="1" value="12100000" required></label>
+            <label>Product code<input id="branch-product-code" type="text" maxlength="50" value="12100001" readonly></label>
+            <label>Barcode<input id="branch-product-barcode" type="text" maxlength="100" placeholder="Optional barcode"></label>
+            <label>Opening quantity<input id="branch-product-quantity" type="number" min="0" step="1" required placeholder="0"></label>
+            <label>Selling price<input id="branch-product-price" type="number" min="0" step="0.01" required placeholder="0.00"></label>
+            <button id="branch-product-submit" type="submit">Create branch product</button>
+          </form>
+          <div id="branch-product-notice" class="notice" role="status"></div>
+        </div>
         <form id="branch-price-form" class="transfer-form">
           <label>Current branch price<input id="branch-current-price" type="text" readonly placeholder="Select a branch product"></label>
           <label>New branch price<input id="branch-price-input" type="number" min="0" step="0.01" required placeholder="Current price appears after selecting a product"></label>
@@ -186,6 +201,10 @@
   const transferNotice = document.querySelector('#transfer-notice');
   const transferSubmit = document.querySelector('#transfer-submit');
   const branchProductForm = document.querySelector('#branch-product-form');
+  const branchProductToggle = document.querySelector('#branch-product-toggle');
+  const branchProductFormWrap = document.querySelector('#branch-product-form-wrap');
+  const branchProductId = document.querySelector('#branch-product-id');
+  const branchProductCode = document.querySelector('#branch-product-code');
   const branchProductSubmit = document.querySelector('#branch-product-submit');
   const branchProductNotice = document.querySelector('#branch-product-notice');
   const branchPriceForm = document.querySelector('#branch-price-form');
@@ -487,14 +506,40 @@
     } catch (error) { transferNotice.className = 'notice error'; transferNotice.textContent = error.message; }
     finally { transferSubmit.disabled = false; }
   });
+  function setBranchProductFormState(enabled) {
+    branchProductFormWrap.classList.toggle('is-open', enabled);
+    branchProductToggle.classList.toggle('is-on', enabled);
+    branchProductToggle.setAttribute('aria-pressed', String(enabled));
+    branchProductToggle.textContent = enabled ? 'Turn off new product fields' : 'Turn on new product fields';
+    branchProductForm.querySelectorAll('input, button').forEach(control => {
+      if (control === branchProductSubmit) {
+        control.disabled = !enabled;
+        return;
+      }
+      control.disabled = !enabled;
+    });
+    if (!enabled) {
+      branchProductForm.reset();
+      branchProductNotice.className = 'notice';
+      branchProductNotice.textContent = '';
+    }
+  }
+  branchProductToggle.addEventListener('click', () => setBranchProductFormState(!branchProductFormWrap.classList.contains('is-open')));
+  branchProductId.addEventListener('input', () => { const productId = Number(branchProductId.value); branchProductCode.value = Number.isSafeInteger(productId) ? String(productId + 1) : ''; });
+  function setNextBranchProductId(productId) {
+    const nextProductId = Number(productId) + 1;
+    branchProductId.value = Number.isSafeInteger(nextProductId) ? String(nextProductId) : '';
+    branchProductCode.value = Number.isSafeInteger(nextProductId) ? String(nextProductId + 1) : '';
+  }
+  setBranchProductFormState(false);
   branchProductForm.addEventListener('submit', async event => {
     event.preventDefault(); branchProductSubmit.disabled = true; branchProductNotice.className = 'notice'; branchProductNotice.textContent = '';
     try {
       if (!selectedBranch.value) throw new Error('Select a connected branch first.');
-      const response = await fetch('/api/products/create/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch:selectedBranch.value, product_name:document.querySelector('#branch-product-name').value, product_code:document.querySelector('#branch-product-code').value, barcode:document.querySelector('#branch-product-barcode').value, selling_price:document.querySelector('#branch-product-price').value }) });
+      const response = await fetch('/api/products/create/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch:selectedBranch.value, product_id:document.querySelector('#branch-product-id').value, product_name:document.querySelector('#branch-product-name').value, product_code:document.querySelector('#branch-product-code').value, barcode:document.querySelector('#branch-product-barcode').value, initial_quantity:document.querySelector('#branch-product-quantity').value, selling_price:document.querySelector('#branch-product-price').value }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || 'Branch product could not be queued.');
-      branchProductNotice.className = 'notice ok'; branchProductNotice.textContent = `${data.product_name} queued for ${data.branch}. The branch will create it on its next sync.`; branchProductForm.reset();
+      branchProductNotice.className = 'notice ok'; branchProductNotice.textContent = `${data.product_name} queued for ${data.branch}. The branch will create it on its next sync.`; branchProductForm.reset(); setNextBranchProductId(data.product_id);
     } catch (error) { branchProductNotice.className = 'notice error'; branchProductNotice.textContent = error.message; }
     finally { branchProductSubmit.disabled = false; }
   });

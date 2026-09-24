@@ -287,15 +287,17 @@ class StockTransferTests(TestCase):
 			'/api/products/create/',
 			data=json.dumps({
 				'branch': 'BranchA', 'product_name': 'New Branch Product',
-				'product_code': 'NEW-001', 'barcode': '990001', 'selling_price': '4.25',
+				'product_id': '12100001', 'product_code': 'NEW-001', 'barcode': '990001', 'initial_quantity': '8', 'selling_price': '4.25',
 			}),
 			content_type='application/json',
 		)
 
 		self.assertEqual(response.status_code, 202)
 		product_id = response.json()['product_id']
-		self.assertGreaterEqual(product_id, 1_000_000)
+		self.assertEqual(product_id, 12_100_001)
+		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).product_code, '12100002')
 		self.assertFalse(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).branch_confirmed)
+		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).pending_stock_quantity, 8)
 		not_visible = self.client.get('/api/products/?branch=BranchA&q=New%20Branch%20Product')
 		self.assertEqual(not_visible.status_code, 200)
 		self.assertEqual(not_visible.json()['products'], [])
@@ -303,6 +305,7 @@ class StockTransferTests(TestCase):
 		poll = self.client.get('/api/branch-sync/?branch=BranchA')
 		self.assertEqual(poll.status_code, 200)
 		self.assertEqual(poll.json()['pending_product_creations'][0]['product_name'], 'New Branch Product')
+		self.assertEqual(poll.json()['pending_product_creations'][0]['initial_quantity'], '8')
 
 		complete = self.client.post(
 			'/api/products/create/complete/',
@@ -315,6 +318,15 @@ class StockTransferTests(TestCase):
 		self.assertTrue(product.branch_confirmed)
 		visible = self.client.get('/api/products/?branch=BranchA&q=New%20Branch%20Product')
 		self.assertEqual([item['product_id'] for item in visible.json()['products']], [2001])
+		main_products = self.client.get('/api/products/?branch=MAIN&q=New%20Branch%20Product')
+		self.assertEqual([item['product_id'] for item in main_products.json()['products']], [2001])
+		transfer = self.client.post(
+			'/api/stock/transfers/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': 2001, 'product_name': 'New Branch Product', 'quantity': 6}),
+			content_type='application/json',
+		)
+		self.assertEqual(transfer.status_code, 202)
+		self.assertEqual(MainStockBalance.objects.get(product_id=2001).quantity, 6)
 
 	def test_web_rejects_main_as_branch_product_target(self):
 		response = self.client.post(
@@ -324,6 +336,17 @@ class StockTransferTests(TestCase):
 		)
 
 		self.assertEqual(response.status_code, 400)
+
+	def test_web_rejects_duplicate_product_id_with_clear_message(self):
+		ProductCatalog.objects.create(branch='BranchA', product_id=12100002, product_name='Existing Product')
+		response = self.client.post(
+			'/api/products/create/',
+			data=json.dumps({'branch': 'BranchB', 'product_id': 12100002, 'product_name': 'Duplicate Product', 'selling_price': '1.00'}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 409)
+		self.assertIn('already queued', response.json()['message'])
 
 	def test_product_search_matches_code_barcode_and_id(self):
 		ProductCatalog.objects.create(
