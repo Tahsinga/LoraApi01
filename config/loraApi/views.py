@@ -1052,12 +1052,6 @@ def sync_product_catalog(request):
                 else:
                     available_quantity = catalog.pending_stock_quantity
                     sold_quantity = catalog.sold_quantity
-            latest_adjustment = StockMovement.objects.filter(
-                branch__iexact=branch,
-                product_id=product_id,
-                movement_type='adjusted',
-            ).order_by('-created_at').first()
-            adjustment_sync_pending = latest_adjustment is not None and latest_adjustment.created_at >= catalog.updated_at
             if created and available_quantity > 0:
                 transfer_already_logged = StockMovement.objects.filter(
                     branch__iexact=branch,
@@ -1075,15 +1069,22 @@ def sync_product_catalog(request):
                         quantity=available_quantity,
                         source=entered_by,
                     )
-            elif available_quantity < previous_quantity and (not adjustment_sync_pending or stock_take_sale_sync):
-                StockMovement.objects.create(
-                    branch=branch,
+            elif available_quantity < previous_quantity:
+                latest_adjustment = StockMovement.objects.filter(
+                    branch__iexact=branch,
                     product_id=product_id,
-                    product_name=product_name,
-                    movement_type='sold',
-                    quantity=previous_quantity - available_quantity,
-                    source=entered_by,
-                )
+                    movement_type='adjusted',
+                ).order_by('-created_at').first()
+                adjustment_sync_pending = latest_adjustment is not None and latest_adjustment.created_at >= catalog.updated_at
+                if not adjustment_sync_pending or stock_take_sale_sync:
+                    StockMovement.objects.create(
+                        branch=branch,
+                        product_id=product_id,
+                        product_name=product_name,
+                        movement_type='sold',
+                        quantity=previous_quantity - available_quantity,
+                        source=entered_by,
+                    )
             elif available_quantity > previous_quantity:
                 increase = available_quantity - previous_quantity
                 transfer_already_logged = StockMovement.objects.filter(
