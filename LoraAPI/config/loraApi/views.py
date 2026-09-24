@@ -8,7 +8,7 @@ from threading import Lock
 from django.contrib.auth import get_user_model, update_session_auth_hash
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.forms import SetPasswordForm, UserCreationForm
-from django.db import OperationalError, transaction
+from django.db import OperationalError, close_old_connections, transaction
 from django.db.models import IntegerField, Max, Q, Sum
 from django.db.models.functions import Cast
 from django.http import JsonResponse, HttpResponse
@@ -56,13 +56,26 @@ def retry_on_database_lock(view_func):
     @wraps(view_func)
     def wrapped_view(request, *args, **kwargs):
         with PRODUCT_SYNC_QUEUE:
-            for attempt in range(8):
+            for attempt in range(5):
                 try:
+                    close_old_connections()
                     return view_func(request, *args, **kwargs)
                 except OperationalError as error:
-                    if 'locked' not in str(error).lower() or attempt == 7:
+                    message = str(error).lower()
+                    transient_error = any(
+                        marker in message
+                        for marker in (
+                            'locked',
+                            'server closed the connection',
+                            'connection refused',
+                            'connection is closed',
+                            'terminating connection',
+                        )
+                    )
+                    if not transient_error or attempt == 4:
                         raise
-                    time.sleep(0.5 * (attempt + 1))
+                    close_old_connections()
+                    time.sleep(1.0 * (attempt + 1))
 
     return wrapped_view
 
