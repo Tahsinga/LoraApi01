@@ -557,8 +557,8 @@
   });
   productSearches.forEach(setupProductSearch);
   refreshAll();
+  setInterval(refreshBranches, 5000);
   setInterval(() => {
-    refreshBranches();
     loadBranchProducts(false);
     loadStockMovements();
     loadStockTransfers();
