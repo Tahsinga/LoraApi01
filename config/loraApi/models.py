@@ -13,6 +13,8 @@ class DeletionRecord(models.Model):
 	source = models.CharField(max_length=100, default='unknown')
 	deleted_from_main = models.BooleanField(default=False)
 	message = models.TextField(blank=True, default='')
+	receipt_products = models.TextField(blank=True, default='[]')
+	receipt_total = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
 	deleted_rows = models.IntegerField(null=True, blank=True)
 	deleted_by = models.CharField(max_length=255, blank=True, default='')
 	confirmed_branch = models.CharField(max_length=255, blank=True, null=True)

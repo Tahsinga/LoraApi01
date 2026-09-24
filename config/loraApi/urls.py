@@ -3,7 +3,7 @@ from .views import (
     branch_status, branch_sync, cancel_sale, health_check, main_sync,
     index, favicon, confirm_deletion, cancellation_history_api, request_sales_report, complete_sales_report, request_invoice_reprint, complete_invoice_reprint,
     adjust_main_stock, create_stock_transfer, complete_stock_transfer, request_branch_price_update, complete_branch_price_update, create_branch_product, complete_branch_product_creation, product_catalog, sync_product_catalog,
-    product_sync_inbox, publish_product_catalog, stock_summary, stock_movements, product_movement_history_api, stock_transfer_logs, stock_transfer_device_logs, stock_movement_device_logs, record_branch_sales,
+    product_sync_inbox, publish_product_catalog, stock_summary, stock_movements, product_movement_history_api, stock_transfer_logs, stock_transfer_device_logs, stock_movement_device_logs, cancellation_device_logs, record_branch_sales,
 )
 
 urlpatterns = [
@@ -31,6 +31,7 @@ urlpatterns = [
     path('stock/movements/history/', product_movement_history_api, name='product_movement_history_api'),
     path('stock/transfers/log/', stock_transfer_logs, name='stock_transfer_logs'),
     path('stock/transfers/device-log/', stock_transfer_device_logs, name='stock_transfer_device_logs'),
+    path('cancellations/device-log/', cancellation_device_logs, name='cancellation_device_logs'),
     path('stock/movements/device-log/', stock_movement_device_logs, name='stock_movement_device_logs'),
     path('stock/sales/', record_branch_sales, name='record_branch_sales'),
     path('products/', product_catalog, name='product_catalog'),
