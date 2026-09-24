@@ -138,8 +138,9 @@
           <button id="load-stock-button" class="load-stock-button" type="button">Load stock</button>
           <button id="refresh-stock-button" class="refresh-stock-button" type="button">Refresh figures</button>
         </div>
+        <p class="sub">Filter and select a Main POS product, then enter the quantity to send.</p>
         <form id="transfer-form" class="transfer-form">
-          <label>Product<input id="transfer-search" type="search" list="transfer-products" required placeholder="Type product name"><datalist id="transfer-products"></datalist></label>
+          <label>Product<input id="transfer-search" type="search" list="transfer-products" autocomplete="off" required placeholder="Type to filter products"><datalist id="transfer-products"></datalist></label>
           <input id="transfer-product" type="hidden"><input id="transfer-name" type="hidden">
           <label>Quantity<input id="transfer-quantity" type="number" min="1" step="1" required></label>
           <button id="transfer-submit" type="submit">Send stock to branch</button>
