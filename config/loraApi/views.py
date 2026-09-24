@@ -56,13 +56,13 @@ def retry_on_database_lock(view_func):
     @wraps(view_func)
     def wrapped_view(request, *args, **kwargs):
         with PRODUCT_SYNC_QUEUE:
-            for attempt in range(5):
+            for attempt in range(8):
                 try:
                     return view_func(request, *args, **kwargs)
                 except OperationalError as error:
-                    if 'locked' not in str(error).lower() or attempt == 4:
+                    if 'locked' not in str(error).lower() or attempt == 7:
                         raise
-                    time.sleep(0.25 * (attempt + 1))
+                    time.sleep(0.5 * (attempt + 1))
 
     return wrapped_view
 
@@ -229,12 +229,18 @@ def cancellation_history_api(request):
         'branches': branches,
         'cancellations': [
             {
+                'id': record.deletion_id,
                 'invoice': record.invoice,
                 'branch': record.confirmed_branch or record.branch,
+                'product_id': record.product_id,
+                'entry_no': record.entry_no,
                 'cancelled_at': (record.confirmation_timestamp or record.timestamp).isoformat(),
                 'deleted_rows': record.deleted_rows,
                 'deleted_by': record.deleted_by or 'Not reported',
                 'source': record.source,
+                'message': record.message,
+                'products': json.loads(record.receipt_products or '[]'),
+                'total': str(record.receipt_total) if record.receipt_total is not None else '0.00',
             }
             for record in records
         ],
@@ -307,6 +313,7 @@ def user_management(request):
 
 @login_required(login_url='/login/')
 @csrf_exempt
+@retry_on_database_lock
 def cancel_sale(request):
     """Queue a sale cancellation requested from the browser dashboard."""
     if request.method != 'POST':
@@ -343,6 +350,7 @@ def cancel_sale(request):
 
 @login_required(login_url='/login/')
 @csrf_exempt
+@retry_on_database_lock
 def request_sales_report(request):
     """Queue a Movement sales report for printing on a connected branch PC."""
     if request.method != 'POST':
@@ -407,6 +415,7 @@ def request_invoice_reprint(request):
 
 
 @csrf_exempt
+@retry_on_database_lock
 def complete_invoice_reprint(request):
     if request.method != 'POST':
         return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
@@ -689,6 +698,34 @@ def stock_transfer_device_logs(request):
 
 
 @csrf_exempt
+def cancellation_device_logs(request):
+    if request.method != 'GET':
+        return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
+
+    cancellations = DeletionRecord.objects.filter(
+        status='processed',
+        action='cancel_invoice',
+    ).order_by('-confirmation_timestamp', '-timestamp')[:2000]
+    return JsonResponse({
+        'status': 'ok',
+        'cancellations': [
+            {
+                'id': record.deletion_id,
+                'invoice': record.invoice,
+                'branch': record.branch,
+                'product_id': int(record.product_id) if str(record.product_id or '').isdigit() else None,
+                'entry_no': record.entry_no,
+                'deleted_rows': record.deleted_rows or 0,
+                'status': record.status,
+                'cancelled_at': (record.confirmation_timestamp or record.timestamp).isoformat(),
+                'message': record.message,
+            }
+            for record in cancellations
+        ],
+    })
+
+
+@csrf_exempt
 def record_branch_sales(request):
     if request.method != 'POST':
         return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
@@ -708,6 +745,7 @@ def record_branch_sales(request):
 
 @login_required(login_url='/login/')
 @csrf_exempt
+@retry_on_database_lock
 def create_stock_transfer(request):
     if request.method != 'POST':
         return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
@@ -794,6 +832,7 @@ def request_branch_price_update(request):
 
 @login_required(login_url='/login/')
 @csrf_exempt
+@retry_on_database_lock
 def create_branch_product(request):
     if request.method != 'POST':
         return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
@@ -851,6 +890,7 @@ def create_branch_product(request):
 
 
 @csrf_exempt
+@retry_on_database_lock
 def complete_branch_product_creation(request):
     if request.method != 'POST':
         return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
@@ -896,6 +936,7 @@ def complete_branch_product_creation(request):
 
 
 @csrf_exempt
+@retry_on_database_lock
 def complete_branch_price_update(request):
     if request.method != 'POST':
         return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
@@ -1136,6 +1177,7 @@ def publish_product_catalog(request):
 
 
 @csrf_exempt
+@retry_on_database_lock
 def complete_sales_report(request):
     if request.method != 'POST':
         return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
@@ -1163,6 +1205,7 @@ def complete_sales_report(request):
 
 
 @csrf_exempt
+@retry_on_database_lock
 def complete_stock_transfer(request):
     if request.method != 'POST':
         return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
@@ -1469,6 +1512,7 @@ def main_sync(request):
 
 
 @csrf_exempt
+@retry_on_database_lock
 def confirm_deletion(request):
     """
     CONFIRMATION ENDPOINT - Branch confirms deletion was successful
@@ -1486,12 +1530,19 @@ def confirm_deletion(request):
         return JsonResponse({'status': 'error', 'message': 'Invalid JSON'}, status=400)
 
     deletion_id = payload.get('deletion_id')
-    deleted_rows = payload.get('deleted_rows', 0)
+    deleted_rows_raw = payload.get('deleted_rows', 0)
+    try:
+        deleted_rows = int(deleted_rows_raw)
+    except (TypeError, ValueError):
+        deleted_rows = 0
     branch = payload.get('branch')
-    success = payload.get('success', False)
+    success_flag = payload.get('success')
+    success = bool(success_flag) if success_flag is not None else deleted_rows > 0
     deleted_by = str(
         payload.get('deleted_by') or payload.get('username') or payload.get('user_number') or ''
     ).strip()
+    receipt_products = payload.get('receipt_products') or []
+    receipt_total = payload.get('receipt_total')
 
     if not deletion_id:
         return JsonResponse({
@@ -1508,19 +1559,26 @@ def confirm_deletion(request):
                 'message': f'Deletion ID {deletion_id} not found in queue'
             }, status=404)
 
-        deletion_record.status = 'processed'
+        deletion_record.status = 'processed' if success and deleted_rows > 0 else 'failed'
         deletion_record.deleted_rows = deleted_rows
         if deleted_by and not deletion_record.deleted_by:
             deletion_record.deleted_by = deleted_by
         deletion_record.confirmed_branch = branch
         deletion_record.confirmation_timestamp = timezone.now()
+        if deletion_record.status == 'failed':
+            deletion_record.message = f'{deletion_record.message} Branch matched no invoice rows.'
+        deletion_record.receipt_products = json.dumps(receipt_products)
+        try:
+            deletion_record.receipt_total = Decimal(str(receipt_total or '0'))
+        except InvalidOperation:
+            deletion_record.receipt_total = Decimal('0')
         deletion_record.save(update_fields=[
-            'status', 'deleted_rows', 'deleted_by', 'confirmed_branch', 'confirmation_timestamp'
+            'status', 'deleted_rows', 'deleted_by', 'confirmed_branch', 'confirmation_timestamp', 'receipt_products', 'receipt_total'
         ])
 
     return JsonResponse({
-        'status': 'confirmed',
-        'message': f'Deletion confirmed: {deleted_rows} row(s) deleted',
+            'status': deletion_record.status,
+            'message': f'Deletion {deletion_record.status}: {deleted_rows} row(s) deleted',
         'deletion_id': deletion_id,
         'branch': branch
     })
