@@ -629,6 +629,15 @@ public sealed class BranchSyncDashboardForm : Form
                 deleted_rows = deletedCount,
                 branch = await GetBranchNameAsync(),
                 deleted_by = Environment.UserName,
+                receipt_products = stockLines.Select(line => new
+                {
+                    product_id = line.ProductId,
+                    product_name = line.ProductName,
+                    quantity = line.Quantity,
+                    unit_price = line.UnitPrice,
+                    total = line.LineTotal,
+                }).ToList(),
+                receipt_total = stockLines.Sum(line => line.LineTotal),
                 success = deletedCount > 0
             };
             var confirmJson = JsonSerializer.Serialize(confirmPayload);
@@ -638,7 +647,7 @@ public sealed class BranchSyncDashboardForm : Form
                 confirmContent
             );
 
-            if (confirmResponse.IsSuccessStatusCode)
+            if (confirmResponse.IsSuccessStatusCode && deletedCount > 0)
             {
                 _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] → API confirmed: deletion_id={deletion.id}");
 
@@ -670,7 +679,7 @@ public sealed class BranchSyncDashboardForm : Form
             }
             else
             {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ⚠ API confirmation failed: {confirmResponse.StatusCode}");
+                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ⚠ Cancellation not printed because no invoice rows were deleted (API: {confirmResponse.StatusCode}).");
             }
         }
         catch (Exception ex)

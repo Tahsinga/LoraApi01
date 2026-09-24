@@ -112,6 +112,8 @@ public sealed class MainSyncDashboardForm : Form
         {
             _statusLabel.Text = "Main PC receiving branch products...";
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+            await EnsureCancellationTableAsync();
+            await StoreCancellationRecordsAsync(client);
             await PollStockTransfersAsync(client);
             await StoreStockMovementsAsync(client);
             var response = await client.GetAsync($"{_settings.GetApiBaseUrl()}/api/products/inbox/");
@@ -212,6 +214,85 @@ public sealed class MainSyncDashboardForm : Form
         }
 
         AddLog($"[MOVEMENTS] Stored {stored} new movement record(s) in CloudPOS.dbo.BranchStockMovements.");
+    }
+
+    private async Task EnsureCancellationTableAsync()
+    {
+        using var connection = new SqlConnection(_settings.BuildConnectionString());
+        await connection.OpenAsync();
+        const string createTableSql = @"
+            IF OBJECT_ID(N'dbo.InvoiceCancellations', N'U') IS NULL
+            BEGIN
+                CREATE TABLE [dbo].[InvoiceCancellations](
+                    CancellationID nvarchar(255) NOT NULL,
+                    InvoiceNumber nvarchar(255) NOT NULL,
+                    Branch nvarchar(255) NOT NULL,
+                    ProductID int NULL,
+                    EntryNo nvarchar(255) NULL,
+                    DeletedRows int NOT NULL CONSTRAINT DF_InvoiceCancellations_DeletedRows DEFAULT 0,
+                    Status nvarchar(20) NOT NULL,
+                    CancelledAt datetime2 NOT NULL,
+                    Message nvarchar(1000) NULL,
+                    CONSTRAINT PK_InvoiceCancellations PRIMARY KEY (CancellationID)
+                );
+                CREATE INDEX IX_InvoiceCancellations_InvoiceBranch
+                    ON [dbo].[InvoiceCancellations](InvoiceNumber, Branch, CancelledAt);
+            END";
+        using var command = new SqlCommand(createTableSql, connection);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private async Task StoreCancellationRecordsAsync(HttpClient client)
+    {
+        var response = await client.GetAsync($"{_settings.GetApiBaseUrl()}/api/cancellations/device-log/");
+        if (!response.IsSuccessStatusCode)
+        {
+            AddLog($"[ERROR] Cancellation history sync returned {response.StatusCode}.");
+            return;
+        }
+
+        var payload = await response.Content.ReadFromJsonAsync<CancellationLogResponse>();
+        var cancellations = payload?.cancellations ?? new List<CancellationLog>();
+        if (cancellations.Count == 0)
+        {
+            return;
+        }
+
+        using var connection = new SqlConnection(_settings.BuildConnectionString());
+        await connection.OpenAsync();
+        const string upsertSql = @"
+            IF EXISTS (SELECT 1 FROM [dbo].[InvoiceCancellations] WHERE CancellationID = @id)
+                UPDATE [dbo].[InvoiceCancellations]
+                SET InvoiceNumber = @invoice, Branch = @branch, ProductID = @productId, EntryNo = @entryNo,
+                    DeletedRows = @deletedRows, Status = @status, CancelledAt = @cancelledAt, Message = @message
+                WHERE CancellationID = @id;
+            ELSE
+                INSERT INTO [dbo].[InvoiceCancellations]
+                    (CancellationID, InvoiceNumber, Branch, ProductID, EntryNo, DeletedRows, Status, CancelledAt, Message)
+                VALUES
+                    (@id, @invoice, @branch, @productId, @entryNo, @deletedRows, @status, @cancelledAt, @message);";
+        var stored = 0;
+        foreach (var cancellation in cancellations)
+        {
+            if (string.IsNullOrWhiteSpace(cancellation.id) || string.IsNullOrWhiteSpace(cancellation.invoice) || string.IsNullOrWhiteSpace(cancellation.cancelled_at))
+            {
+                continue;
+            }
+
+            using var command = new SqlCommand(upsertSql, connection);
+            command.Parameters.AddWithValue("@id", cancellation.id);
+            command.Parameters.AddWithValue("@invoice", cancellation.invoice);
+            command.Parameters.AddWithValue("@branch", cancellation.branch ?? string.Empty);
+            command.Parameters.AddWithValue("@productId", cancellation.product_id.HasValue ? cancellation.product_id.Value : DBNull.Value);
+            command.Parameters.AddWithValue("@entryNo", cancellation.entry_no ?? string.Empty);
+            command.Parameters.AddWithValue("@deletedRows", cancellation.deleted_rows);
+            command.Parameters.AddWithValue("@status", cancellation.status ?? "processed");
+            command.Parameters.AddWithValue("@cancelledAt", DateTimeOffset.Parse(cancellation.cancelled_at).UtcDateTime);
+            command.Parameters.AddWithValue("@message", cancellation.message ?? string.Empty);
+            stored += await command.ExecuteNonQueryAsync();
+        }
+
+        AddLog($"[CANCELLATIONS] Stored {stored} cancellation record(s) in CloudPOS.dbo.InvoiceCancellations.");
     }
 
     private async Task PollStockTransfersAsync(HttpClient client)
@@ -424,6 +505,24 @@ public sealed class MainSyncDashboardForm : Form
     private sealed class StockMovementLogResponse
     {
         public List<StockMovementLog>? movements { get; set; }
+    }
+
+    private sealed class CancellationLogResponse
+    {
+        public List<CancellationLog>? cancellations { get; set; }
+    }
+
+    private sealed class CancellationLog
+    {
+        public string? id { get; set; }
+        public string? invoice { get; set; }
+        public string? branch { get; set; }
+        public int? product_id { get; set; }
+        public string? entry_no { get; set; }
+        public int deleted_rows { get; set; }
+        public string? status { get; set; }
+        public string? cancelled_at { get; set; }
+        public string? message { get; set; }
     }
 
     private sealed class StockMovementLog

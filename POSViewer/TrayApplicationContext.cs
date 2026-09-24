@@ -1,4 +1,5 @@
 using System.Drawing;
+using Microsoft.Win32;
 
 namespace POSViewer;
 
@@ -11,8 +12,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     public TrayApplicationContext()
     {
+        RegisterStartup();
         _contextMenu = new ContextMenuStrip();
-        _contextMenu.Items.Add("Show", null, (_, _) => ShowApplication());
+        _contextMenu.Items.Add("Continue", null, (_, _) => ShowApplication());
         _contextMenu.Items.Add("Exit", null, (_, _) => ExitApplication());
 
         _notifyIcon = new NotifyIcon
@@ -25,11 +27,17 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _notifyIcon.DoubleClick += (_, _) => ShowApplication();
 
         _connectionForm = new ConnectionForm();
-        _connectionForm.StartHidden = false;
+        _connectionForm.StartHidden = true;
         _connectionForm.FormClosed += HandleFormClosed;
 
         // Let the form initialize its saved connection and dashboard before hiding it.
         _connectionForm.Show();
+    }
+
+    private static void RegisterStartup()
+    {
+        using var startupKey = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
+        startupKey?.SetValue("LoraPOSViewer", $"\"{Application.ExecutablePath}\"");
     }
 
     private void ShowApplication()
