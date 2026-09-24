@@ -222,7 +222,7 @@
   const localDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
   document.querySelector('#report-date').value = localDate;
   document.querySelector('#refresh').addEventListener('click', refreshQueue);
-  refreshQueue(); refreshBranches(); setInterval(refreshQueue, 8000); setInterval(refreshBranches, 8000);
+  refreshQueue(); refreshBranches(); setInterval(refreshQueue, 8000); setInterval(refreshBranches, 5000);
 </script>
 </body>
 </html>
