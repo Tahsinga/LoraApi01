@@ -1,7 +1,7 @@
 from django.urls import path
 from .views import (
     branch_status, branch_sync, cancel_sale, health_check, main_sync,
-    index, favicon, confirm_deletion, cancellation_history_api, request_sales_report, complete_sales_report,
+    index, favicon, confirm_deletion, cancellation_history_api, request_sales_report, complete_sales_report, request_invoice_reprint, complete_invoice_reprint,
     adjust_main_stock, create_stock_transfer, complete_stock_transfer, request_branch_price_update, complete_branch_price_update, create_branch_product, complete_branch_product_creation, product_catalog, sync_product_catalog,
     product_sync_inbox, publish_product_catalog, stock_summary, stock_movements, product_movement_history_api, stock_transfer_logs, stock_transfer_device_logs, stock_movement_device_logs, record_branch_sales,
 )
@@ -17,6 +17,8 @@ urlpatterns = [
     path('cancellation-history/', cancellation_history_api, name='cancellation_history_api'),
     path('sales-report/', request_sales_report, name='request_sales_report'),
     path('sales-report/complete/', complete_sales_report, name='complete_sales_report'),
+    path('invoice-reprint/', request_invoice_reprint, name='request_invoice_reprint'),
+    path('invoice-reprint/complete/', complete_invoice_reprint, name='complete_invoice_reprint'),
     path('stock/main/adjust/', adjust_main_stock, name='adjust_main_stock'),
     path('stock/transfers/', create_stock_transfer, name='create_stock_transfer'),
     path('stock/transfers/complete/', complete_stock_transfer, name='complete_stock_transfer'),

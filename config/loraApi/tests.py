@@ -2,7 +2,7 @@ from django.test import TestCase
 from django.contrib.auth import authenticate, get_user_model
 from django.core.management import call_command
 from loraApi.state_store import load_state
-from loraApi.models import MainStockBalance, ProductCatalog, StockMovement, StockTransfer
+from loraApi.models import InvoiceReprintRequest, MainStockBalance, ProductCatalog, StockMovement, StockTransfer
 import json
 
 
@@ -347,6 +347,26 @@ class StockTransferTests(TestCase):
 
 		self.assertEqual(response.status_code, 409)
 		self.assertIn('already queued', response.json()['message'])
+
+	def test_web_can_queue_and_branch_can_claim_invoice_reprint(self):
+		response = self.client.post(
+			'/api/invoice-reprint/',
+			data=json.dumps({'branch': 'BranchA', 'invoice': 'INV-100'}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 202)
+		poll = self.client.get('/api/branch-sync/?branch=BranchA')
+		self.assertEqual(poll.status_code, 200)
+		self.assertEqual(poll.json()['pending_invoice_reprints'][0]['invoice'], 'INV-100')
+		request_id = poll.json()['pending_invoice_reprints'][0]['request_id']
+		complete = self.client.post(
+			'/api/invoice-reprint/complete/',
+			data=json.dumps({'request_id': request_id, 'success': True}),
+			content_type='application/json',
+		)
+		self.assertEqual(complete.status_code, 200)
+		self.assertEqual(InvoiceReprintRequest.objects.get(request_id=request_id).status, 'completed')
 
 	def test_product_search_matches_code_barcode_and_id(self):
 		ProductCatalog.objects.create(

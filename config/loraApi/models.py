@@ -37,6 +37,20 @@ class SalesReportRequest(models.Model):
 		ordering = ['-requested_at']
 
 
+class InvoiceReprintRequest(models.Model):
+	request_id = models.CharField(max_length=255, primary_key=True)
+	branch = models.CharField(max_length=255)
+	invoice = models.CharField(max_length=255)
+	status = models.CharField(max_length=20, default='pending')
+	requested_by = models.CharField(max_length=255, blank=True, default='')
+	requested_at = models.DateTimeField(auto_now_add=True)
+	completed_at = models.DateTimeField(null=True, blank=True)
+	error_message = models.TextField(blank=True, default='')
+
+	class Meta:
+		ordering = ['requested_at']
+
+
 class MainStockBalance(models.Model):
 	product_id = models.IntegerField(unique=True)
 	product_name = models.CharField(max_length=255, blank=True, default='')
