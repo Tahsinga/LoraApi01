@@ -94,6 +94,14 @@
     .transfer-status { display:inline-block; padding:5px 8px; color:#176342; background:#dff2e7; font:700 10px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; }
     .transfer-status.processing { color:#78570b; background:#fff1c7; }
     .transfer-status.failed { color:#a53b2e; background:#f9dfda; }
+    .transfer-queue { margin-top:12px; border:1px solid var(--line); background:#fbfaf6; }
+    .transfer-queue:empty { display:none; }
+    .transfer-queue-item { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; border-bottom:1px solid var(--line); font:13px Arial,sans-serif; }
+    .transfer-queue-item:last-child { border-bottom:0; }
+    .transfer-queue-product { color:var(--ink); font-weight:700; }
+    .transfer-queue-detail { color:var(--muted); font-size:11px; }
+    .transfer-queue-state { flex:none; padding:4px 7px; color:#78570b; background:#fff1c7; font:700 10px Arial,sans-serif; letter-spacing:.6px; text-transform:uppercase; }
+    .transfer-queue-state.sending { color:#176342; background:#dff2e7; }
     .notice { min-height:22px; margin-top:14px; font:14px/1.4 Arial,sans-serif; }
     .notice.ok { color:var(--teal-dark); } .notice.error { color:#a53b2e; }
     .section-jump-button { display:none; position:fixed; right:24px; bottom:24px; z-index:20; width:auto; margin:0; padding:12px 16px; color:#fff; background:var(--teal-dark); border:1px solid rgba(255,255,255,.35); border-radius:999px; box-shadow:0 10px 24px rgba(28,62,54,.2); grid-column:auto; }
@@ -137,6 +145,7 @@
           <button id="transfer-submit" type="submit">Send stock to branch</button>
         </form>
         <div id="transfer-notice" class="notice" role="status"></div>
+        <div id="transfer-queue" class="transfer-queue" aria-live="polite" aria-label="Transfers waiting to be sent"></div>
         <div class="toggle-row">
           <span class="toggle-label">New branch product fields</span>
           <button id="branch-product-toggle" class="toggle-button" type="button" aria-pressed="false">Turn on new product fields</button>
@@ -200,6 +209,7 @@
   const transferForm = document.querySelector('#transfer-form');
   const transferNotice = document.querySelector('#transfer-notice');
   const transferSubmit = document.querySelector('#transfer-submit');
+  const transferQueueList = document.querySelector('#transfer-queue');
   const branchProductForm = document.querySelector('#branch-product-form');
   const branchProductToggle = document.querySelector('#branch-product-toggle');
   const branchProductFormWrap = document.querySelector('#branch-product-form-wrap');
@@ -221,12 +231,18 @@
   let refreshAllLoading = false;
   const transferQueue = [];
   let transferQueueProcessing = false;
+  let activeTransfer = null;
   const productSearches = [
     { source: 'branch', input: document.querySelector('#main-stock-search'), list: document.querySelector('#main-stock-products'), id: document.querySelector('#main-stock-product'), name: document.querySelector('#main-stock-name') },
     { source: 'main', input: document.querySelector('#transfer-search'), list: document.querySelector('#transfer-products'), id: document.querySelector('#transfer-product'), name: document.querySelector('#transfer-name') },
   ];
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
   const productOptions = products => products.map(product => `<option value="${escapeHtml(product.product_name)}" label="ID ${escapeHtml(product.product_id)}${product.product_code ? ` · ${escapeHtml(product.product_code)}` : ''}"></option>`).join('');
+  function renderTransferQueue() {
+    const waiting = transferQueue.map((transfer, index) => `<div class="transfer-queue-item"><div><div class="transfer-queue-product">${escapeHtml(transfer.product_name)}</div><div class="transfer-queue-detail">${escapeHtml(transfer.quantity)} to ${escapeHtml(transfer.branch)} · #${index + 1} waiting</div></div><span class="transfer-queue-state">Waiting</span></div>`).join('');
+    const sending = activeTransfer ? `<div class="transfer-queue-item"><div><div class="transfer-queue-product">${escapeHtml(activeTransfer.product_name)}</div><div class="transfer-queue-detail">${escapeHtml(activeTransfer.quantity)} to ${escapeHtml(activeTransfer.branch)}</div></div><span class="transfer-queue-state sending">Sending</span></div>` : '';
+    transferQueueList.innerHTML = sending + waiting;
+  }
   function setBranchPriceFields(price) {
     const numericPrice = Number(price);
     const value = Number.isFinite(numericPrice) && numericPrice === 0 ? '' : (price ?? '');
@@ -503,6 +519,7 @@
       if (!Number.isFinite(Number(transferQuantity)) || Number(transferQuantity) <= 0) throw new Error('Enter a positive transfer quantity.');
       transferQueue.push({ product_id: transferProduct.value, product_name: transferName.value, quantity: transferQuantity, branch: selectedBranch.value });
       transferForm.reset(); transferSearch.focus();
+      renderTransferQueue();
       transferNotice.className = 'notice ok';
       transferNotice.textContent = `${transferQueue.length} transfer${transferQueue.length === 1 ? '' : 's'} queued for sending.`;
       void processTransferQueue();
@@ -513,6 +530,8 @@
     transferQueueProcessing = true;
     while (transferQueue.length) {
       const transfer = transferQueue.shift();
+      activeTransfer = transfer;
+      renderTransferQueue();
       try {
         transferNotice.className = 'notice';
         transferNotice.textContent = `Sending ${transfer.product_name}... ${transferQueue.length ? `${transferQueue.length} more queued.` : ''}`;
@@ -526,6 +545,8 @@
         transferNotice.className = 'notice error';
         transferNotice.textContent = `${transfer.product_name} failed: ${error.message}`;
       }
+      activeTransfer = null;
+      renderTransferQueue();
     }
     transferQueueProcessing = false;
   }
