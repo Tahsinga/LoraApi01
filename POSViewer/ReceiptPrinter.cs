@@ -236,6 +236,21 @@ public static class ReceiptPrinter
                 foreach (var detail in details)
                 {
                     var label = $"{detail.Label}:";
+                    if (string.Equals(detail.Label, "Products", StringComparison.OrdinalIgnoreCase))
+                    {
+                        eventArgs.Graphics.DrawString(label, boldFont, Brushes.Black, bounds.Left, y);
+                        y += 18;
+                        var productLines = (detail.Value ?? string.Empty).Split(Environment.NewLine, StringSplitOptions.None);
+                        foreach (var productLine in productLines)
+                        {
+                            var productBounds = new RectangleF(bounds.Left + 10, y, bounds.Width - 10, 60);
+                            var productSize = eventArgs.Graphics.MeasureString(productLine, bodyFont, productBounds.Size);
+                            eventArgs.Graphics.DrawString(productLine, bodyFont, Brushes.Black, productBounds);
+                            y += Math.Max(16, (int)Math.Ceiling(productSize.Height + 2));
+                        }
+                        continue;
+                    }
+
                     eventArgs.Graphics.DrawString(label, boldFont, Brushes.Black, bounds.Left, y);
                     var labelWidth = eventArgs.Graphics.MeasureString(label, boldFont).Width + 4;
                     var valueBounds = new RectangleF(bounds.Left + labelWidth, y, bounds.Width - labelWidth, 60);

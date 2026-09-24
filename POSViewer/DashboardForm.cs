@@ -16,6 +16,7 @@ public sealed class DashboardForm : Form
     private readonly TextBox _searchTextBox = new();
     private readonly ComboBox _branchComboBox = new();
     private readonly Button _refreshButton = new();
+    private readonly Button _reprintButton = new();
     private readonly Button _returnButton = new();
     private readonly System.Windows.Forms.Timer _refreshTimer = new();
     private readonly RichTextBox _logTextBox = new();
@@ -138,6 +139,18 @@ public sealed class DashboardForm : Form
         _returnButton.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
         _returnButton.Click += async (_, _) => await TryCreateReturnAsync();
 
+        _reprintButton.Text = "Reprint";
+        _reprintButton.Location = new Point(760, 150);
+        _reprintButton.Width = 110;
+        _reprintButton.Height = 30;
+        _reprintButton.FlatStyle = FlatStyle.Flat;
+        _reprintButton.BackColor = Color.FromArgb(240, 240, 240);
+        _reprintButton.ForeColor = Color.FromArgb(30, 30, 30);
+        _reprintButton.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+        _reprintButton.Click += async (_, _) => await ReprintInvoiceAsync();
+
+        _returnButton.Location = new Point(880, 150);
+
         topPanel.Controls.Add(titleLabel);
         topPanel.Controls.Add(statusLabel);
         topPanel.Controls.Add(_statusLabel);
@@ -148,12 +161,14 @@ public sealed class DashboardForm : Form
         topPanel.Controls.Add(branchLabel);
         topPanel.Controls.Add(_branchComboBox);
         topPanel.Controls.Add(_refreshButton);
+        topPanel.Controls.Add(_reprintButton);
         topPanel.Controls.Add(_returnButton);
 
         Controls.Add(topPanel);
 
-        _gridView.Location = new Point(20, 170);
-        _gridView.Size = new Size(ClientSize.Width - 40, ClientSize.Height - 270);
+        topPanel.Height = 195;
+        _gridView.Location = new Point(20, 205);
+        _gridView.Size = new Size(ClientSize.Width - 40, ClientSize.Height - 305);
         _gridView.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         _gridView.ReadOnly = true;
         _gridView.AllowUserToAddRows = false;
@@ -580,6 +595,86 @@ public sealed class DashboardForm : Form
         catch (Exception ex)
         {
             AddLog($"[ERROR] Unable to create return credit: {ex.Message}", Color.IndianRed);
+        }
+    }
+
+    private async Task ReprintInvoiceAsync()
+    {
+        var invoiceNum = _searchTextBox.Text.Trim();
+        var branch = _branchComboBox.SelectedItem?.ToString()?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(invoiceNum) || string.IsNullOrWhiteSpace(branch))
+        {
+            AddLog("[WARNING] Enter an invoice number and select a branch before reprinting.", Color.Orange);
+            return;
+        }
+
+        try
+        {
+            using var connection = new SqlConnection(_settings.BuildConnectionString());
+            await connection.OpenAsync();
+            const string invoiceLinesSql = @"
+                SELECT
+                    m.ProductID,
+                    COALESCE(NULLIF(LTRIM(RTRIM(p.ProductDesc)), ''), CONCAT('Product ', m.ProductID)) AS ProductName,
+                    ABS(COALESCE(m.Quantity, 0)) AS Quantity,
+                    COALESCE(m.SellingPrice, 0) AS UnitPrice,
+                    ABS(
+                        (COALESCE(m.Quantity, 0) * COALESCE(m.SellingPrice, 0))
+                        - COALESCE(m.DiscountAmt, 0)
+                        - COALESCE(m.InvDiscount, 0)
+                        + COALESCE(m.TaxAmt, 0)
+                    ) AS LineTotal
+                FROM [dbo].[Movement] AS m
+                LEFT JOIN [dbo].[Products] AS p ON p.ProductID = m.ProductID
+                WHERE (m.InvoiceNum = @invoiceNum OR CAST(m.InvoiceNum AS nvarchar(50)) = @invoiceNum)
+                  AND UPPER(CAST(m.Branch AS nvarchar(100))) = UPPER(@branch)
+                ORDER BY m.ProductID;";
+
+            var products = new List<string>();
+            decimal total = 0m;
+            using var command = new SqlCommand(invoiceLinesSql, connection);
+            command.Parameters.AddWithValue("@invoiceNum", invoiceNum);
+            command.Parameters.AddWithValue("@branch", branch);
+            using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var productName = reader[1]?.ToString()?.Trim() ?? string.Empty;
+                var quantity = Convert.ToDecimal(reader[2], CultureInfo.InvariantCulture);
+                var unitPrice = Convert.ToDecimal(reader[3], CultureInfo.InvariantCulture);
+                var lineTotal = Convert.ToDecimal(reader[4], CultureInfo.InvariantCulture);
+                products.Add($"{productName} x{quantity:0.##} @ {unitPrice:0.00} = {lineTotal:0.00}");
+                total += lineTotal;
+            }
+
+            if (products.Count == 0)
+            {
+                AddLog($"[WARNING] No products were found for invoice {invoiceNum} at branch {branch}.", Color.Orange);
+                return;
+            }
+
+            var printed = ReceiptPrinter.TryPrint(
+                _settings.PrinterName,
+                "INVOICE REPRINT",
+                new List<(string Label, string Value)>
+                {
+                    ("Status", "REPRINTED"),
+                    ("Invoice", invoiceNum),
+                    ("Branch", branch),
+                    ("Products", string.Join(Environment.NewLine, products)),
+                    ("Total", total.ToString("0.00", CultureInfo.InvariantCulture)),
+                    ("Date", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")),
+                    ("Machine", Environment.MachineName)
+                },
+                out var printError);
+
+            AddLog(printed
+                ? $"[SUCCESS] Invoice {invoiceNum} reprinted with {products.Count} product line(s)."
+                : $"[WARNING] Invoice was found, but reprint failed: {printError}",
+                printed ? Color.LightGreen : Color.Orange);
+        }
+        catch (Exception ex)
+        {
+            AddLog($"[ERROR] Unable to reprint invoice {invoiceNum}: {ex.Message}", Color.IndianRed);
         }
     }
 

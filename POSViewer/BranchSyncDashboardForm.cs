@@ -183,9 +183,10 @@ public sealed class BranchSyncDashboardForm : Form
             var pendingTransfers = result.pending_transfers ?? new List<StockTransfer>();
             var pendingPriceUpdates = result.pending_price_updates ?? new List<BranchPriceUpdate>();
             var pendingProductCreations = result.pending_product_creations ?? new List<BranchProductCreation>();
+            var pendingInvoiceReprints = result.pending_invoice_reprints ?? new List<InvoiceReprintRequest>();
             _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [CONNECTION] Transfer poll succeeded for {branchName}: {pendingTransfers.Count} command(s).");
             
-            if (pendingDeletions.Count > 0 || pendingReports.Count > 0 || pendingTransfers.Count > 0 || pendingPriceUpdates.Count > 0 || pendingProductCreations.Count > 0)
+            if (pendingDeletions.Count > 0 || pendingReports.Count > 0 || pendingTransfers.Count > 0 || pendingPriceUpdates.Count > 0 || pendingProductCreations.Count > 0 || pendingInvoiceReprints.Count > 0)
             {
                 _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] RECEIVED {pendingDeletions.Count} cancellation command(s) from API for branch {branchName}.");
                 _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] RECEIVED {pendingTransfers.Count} stock transfer(s) for branch {branchName}.");
@@ -217,6 +218,16 @@ public sealed class BranchSyncDashboardForm : Form
                     }
 
                     await ProcessSalesReportAsync(report, client, branchName);
+                }
+
+                foreach (var reprint in pendingInvoiceReprints)
+                {
+                    if (!string.Equals(reprint.branch?.Trim(), branchName.Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    await ProcessInvoiceReprintAsync(reprint, client, branchName);
                 }
 
                 foreach (var priceUpdate in pendingPriceUpdates)
@@ -446,7 +457,7 @@ public sealed class BranchSyncDashboardForm : Form
             string branchName = deletion.branch ?? await GetBranchNameAsync();
             string entryNo = deletion.entry_no ?? "";
             var wholeInvoice = string.Equals(deletion.action, "cancel_invoice", StringComparison.OrdinalIgnoreCase);
-            var stockLines = new List<(int ProductId, decimal Quantity)>();
+            var stockLines = new List<(int ProductId, string ProductName, decimal Quantity, decimal UnitPrice, decimal LineTotal)>();
 
             // Log what we're about to delete
             _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] DEBUG: DeleteAndConfirmAsync called");
@@ -455,10 +466,21 @@ public sealed class BranchSyncDashboardForm : Form
             if (wholeInvoice)
             {
                 const string stockLinesSql = @"
-                    SELECT ProductID, Quantity
-                    FROM [dbo].[Movement]
-                    WHERE (InvoiceNum = @invoiceNum OR CAST(InvoiceNum AS nvarchar(50)) = @invoiceNum)
-                      AND UPPER(CAST(Branch AS nvarchar(100))) = UPPER(@branchName);";
+                    SELECT
+                        m.ProductID,
+                        COALESCE(NULLIF(LTRIM(RTRIM(p.ProductDesc)), ''), CONCAT('Product ', m.ProductID)) AS ProductName,
+                        ABS(COALESCE(m.Quantity, 0)) AS Quantity,
+                        COALESCE(m.SellingPrice, 0) AS UnitPrice,
+                        ABS(
+                            (COALESCE(m.Quantity, 0) * COALESCE(m.SellingPrice, 0))
+                            - COALESCE(m.DiscountAmt, 0)
+                            - COALESCE(m.InvDiscount, 0)
+                            + COALESCE(m.TaxAmt, 0)
+                        ) AS LineTotal
+                    FROM [dbo].[Movement] AS m
+                    LEFT JOIN [dbo].[Products] AS p ON p.ProductID = m.ProductID
+                    WHERE (m.InvoiceNum = @invoiceNum OR CAST(m.InvoiceNum AS nvarchar(50)) = @invoiceNum)
+                      AND UPPER(CAST(m.Branch AS nvarchar(100))) = UPPER(@branchName);";
 
                 using var stockLinesCommand = new SqlCommand(stockLinesSql, connection);
                 stockLinesCommand.Parameters.AddWithValue("@invoiceNum", invoiceNum);
@@ -469,7 +491,12 @@ public sealed class BranchSyncDashboardForm : Form
                     {
                         if (!stockReader.IsDBNull(0) && !stockReader.IsDBNull(1))
                         {
-                            stockLines.Add((Convert.ToInt32(stockReader[0]), Math.Abs(Convert.ToDecimal(stockReader[1]))));
+                            stockLines.Add((
+                                Convert.ToInt32(stockReader[0]),
+                                stockReader[1]?.ToString()?.Trim() ?? string.Empty,
+                                Convert.ToDecimal(stockReader[2]),
+                                Convert.ToDecimal(stockReader[3]),
+                                Convert.ToDecimal(stockReader[4])));
                         }
                     }
                 }
@@ -625,6 +652,11 @@ public sealed class BranchSyncDashboardForm : Form
                         ("Branch", branchName),
                         ("Product", productId > 0 ? productId.ToString() : "All products"),
                         ("Entry No", entryNo),
+                        ("Products", stockLines.Count == 0
+                            ? (productId > 0 ? $"Product {productId}" : "No product lines found")
+                            : string.Join(Environment.NewLine, stockLines.Select(line =>
+                                $"{line.ProductName} x{line.Quantity:0.##} @ {line.UnitPrice:0.00} = {line.LineTotal:0.00}"))),
+                        ("Total returned", stockLines.Sum(line => line.LineTotal).ToString("0.00", CultureInfo.InvariantCulture)),
                         ("Rows deleted", deletedCount.ToString()),
                         ("Date", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")),
                         ("Machine", Environment.MachineName)
@@ -1086,6 +1118,82 @@ public sealed class BranchSyncDashboardForm : Form
         }
     }
 
+    private async Task ProcessInvoiceReprintAsync(InvoiceReprintRequest reprint, HttpClient client, string branchName)
+    {
+        var success = false;
+        var error = string.Empty;
+        try
+        {
+            using var connection = new SqlConnection(_settings.BuildConnectionString());
+            await connection.OpenAsync();
+            const string invoiceLinesSql = @"
+                SELECT
+                    m.ProductID,
+                    COALESCE(NULLIF(LTRIM(RTRIM(p.ProductDesc)), ''), CONCAT('Product ', m.ProductID)) AS ProductName,
+                    ABS(COALESCE(m.Quantity, 0)) AS Quantity,
+                    COALESCE(m.SellingPrice, 0) AS UnitPrice,
+                    ABS((COALESCE(m.Quantity, 0) * COALESCE(m.SellingPrice, 0)) - COALESCE(m.DiscountAmt, 0) - COALESCE(m.InvDiscount, 0) + COALESCE(m.TaxAmt, 0)) AS LineTotal
+                FROM [dbo].[Movement] AS m
+                LEFT JOIN [dbo].[Products] AS p ON p.ProductID = m.ProductID
+                WHERE (m.InvoiceNum = @invoiceNum OR CAST(m.InvoiceNum AS nvarchar(50)) = @invoiceNum)
+                  AND UPPER(CAST(m.Branch AS nvarchar(100))) = UPPER(@branch)
+                ORDER BY m.ProductID;";
+
+            var products = new List<string>();
+            decimal total = 0m;
+            using var command = new SqlCommand(invoiceLinesSql, connection);
+            command.Parameters.AddWithValue("@invoiceNum", reprint.invoice ?? string.Empty);
+            command.Parameters.AddWithValue("@branch", branchName);
+            using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var productName = reader[1]?.ToString()?.Trim() ?? string.Empty;
+                var quantity = Convert.ToDecimal(reader[2], CultureInfo.InvariantCulture);
+                var unitPrice = Convert.ToDecimal(reader[3], CultureInfo.InvariantCulture);
+                var lineTotal = Convert.ToDecimal(reader[4], CultureInfo.InvariantCulture);
+                products.Add($"{productName} x{quantity:0.##} @ {unitPrice:0.00} = {lineTotal:0.00}");
+                total += lineTotal;
+            }
+
+            if (products.Count == 0)
+            {
+                throw new InvalidOperationException($"No products found for invoice {reprint.invoice}.");
+            }
+
+            success = ReceiptPrinter.TryPrint(
+                _settings.PrinterName,
+                "INVOICE REPRINT",
+                new List<(string Label, string Value)>
+                {
+                    ("Status", "REPRINTED"),
+                    ("Invoice", reprint.invoice ?? string.Empty),
+                    ("Branch", branchName),
+                    ("Products", string.Join(Environment.NewLine, products)),
+                    ("Total", total.ToString("0.00", CultureInfo.InvariantCulture)),
+                    ("Date", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")),
+                    ("Machine", Environment.MachineName)
+                },
+                out error);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+
+        var completion = new
+        {
+            request_id = reprint.request_id,
+            branch = branchName,
+            success,
+            error,
+        };
+        using var content = new StringContent(JsonSerializer.Serialize(completion), Encoding.UTF8, "application/json");
+        await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/invoice-reprint/complete/", content);
+        _syncQueueListBox.Items.Insert(0, success
+            ? $"[{DateTime.Now:HH:mm:ss}] ✓ INVOICE REPRINTED: {reprint.invoice}"
+            : $"[{DateTime.Now:HH:mm:ss}] ✗ INVOICE REPRINT FAILED: {reprint.invoice} | {error}");
+    }
+
     private async Task ProcessSalesReportAsync(SalesReportRequest report, HttpClient client, string branchName)
     {
         var success = false;
@@ -1190,6 +1298,7 @@ public sealed class BranchSyncDashboardForm : Form
         public List<StockTransfer>? pending_transfers { get; set; }
         public List<BranchPriceUpdate>? pending_price_updates { get; set; }
         public List<BranchProductCreation>? pending_product_creations { get; set; }
+        public List<InvoiceReprintRequest>? pending_invoice_reprints { get; set; }
         public int count { get; set; }
         public string? message { get; set; }
     }
@@ -1234,6 +1343,13 @@ public sealed class BranchSyncDashboardForm : Form
         public int product_id { get; set; }
         public string? product_name { get; set; }
         public string? selling_price { get; set; }
+    }
+
+    private sealed class InvoiceReprintRequest
+    {
+        public string? request_id { get; set; }
+        public string? branch { get; set; }
+        public string? invoice { get; set; }
     }
 
     private sealed class BranchProductCreation

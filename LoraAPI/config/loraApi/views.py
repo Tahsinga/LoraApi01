@@ -17,7 +17,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.views.decorators.csrf import csrf_exempt
 
-from .models import DeletionRecord, MainStockBalance, ProductCatalog, SalesReportRequest, StockMovement, StockTransfer
+from .models import DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, SalesReportRequest, StockMovement, StockTransfer
 from .state_store import sync_users_to_state
 
 """
@@ -381,6 +381,52 @@ def request_sales_report(request):
         'message': f'Sales reports queued for {len(reports)} branch(es) on {report_date.isoformat()}.',
         'reports': [report_payload(report) for report in reports],
     }, status=202)
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
+def request_invoice_reprint(request):
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+    try:
+        payload = json.loads(request.body or '{}')
+        invoice = str(payload.get('invoice', '')).strip()
+        branch = str(payload.get('branch', '')).strip()
+    except json.JSONDecodeError:
+        return JsonResponse({'status': 'error', 'message': 'Invalid JSON'}, status=400)
+    if not invoice or not branch:
+        return JsonResponse({'status': 'error', 'message': 'Invoice number and branch are required.'}, status=400)
+    request_id = f"REPRINT_{branch}_{invoice}_{int(time.time() * 1000)}"
+    reprint = InvoiceReprintRequest.objects.create(
+        request_id=request_id,
+        branch=branch,
+        invoice=invoice,
+        requested_by=request.user.get_username(),
+    )
+    return JsonResponse({'status': 'accepted', 'message': f'Invoice {invoice} reprint queued for {branch}.', 'request_id': reprint.request_id}, status=202)
+
+
+@csrf_exempt
+def complete_invoice_reprint(request):
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+    try:
+        payload = json.loads(request.body or '{}')
+        request_id = str(payload.get('request_id', '')).strip()
+        success = bool(payload.get('success'))
+        error = str(payload.get('error', '')).strip()
+    except json.JSONDecodeError:
+        return JsonResponse({'status': 'error', 'message': 'Invalid JSON'}, status=400)
+    if not request_id:
+        return JsonResponse({'status': 'error', 'message': 'Reprint request ID is required.'}, status=400)
+    updated = InvoiceReprintRequest.objects.filter(request_id=request_id).update(
+        status='completed' if success else 'failed',
+        completed_at=timezone.now(),
+        error_message=error,
+    )
+    if not updated:
+        return JsonResponse({'status': 'error', 'message': 'Reprint request was not found.'}, status=404)
+    return JsonResponse({'status': 'ok', 'success': success})
 
 
 @login_required(login_url='/login/')
@@ -1276,6 +1322,16 @@ def branch_sync(request):
             branch__iexact=branch_name,
             pending_product_creation=True,
         ).values('branch', 'product_id', 'product_name', 'product_code', 'barcode', 'pending_stock_quantity', 'selling_price'))
+        with transaction.atomic():
+            reprint = InvoiceReprintRequest.objects.select_for_update().filter(
+                branch__iexact=branch_name,
+                status='pending',
+            ).order_by('requested_at').first()
+            reprints = []
+            if reprint:
+                reprint.status = 'processing'
+                reprint.save(update_fields=['status'])
+                reprints.append(reprint)
 
         return JsonResponse({
             'status': 'ok',
@@ -1305,6 +1361,10 @@ def branch_sync(request):
                     'selling_price': str(item['selling_price']),
                 }
                 for item in pending_product_creations
+            ],
+            'pending_invoice_reprints': [
+                {'request_id': item.request_id, 'branch': item.branch, 'invoice': item.invoice}
+                for item in reprints
             ],
             'message': f'Found {len(pending)} deletion(s) to process'
         })
