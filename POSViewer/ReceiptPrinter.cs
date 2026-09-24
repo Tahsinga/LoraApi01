@@ -55,14 +55,18 @@ public static class ReceiptPrinter
                 var cashierColumn = table.Columns.IndexOf("Cashier");
                 var paymentMethodColumn = table.Columns.IndexOf("PaymentMethod");
                 var currencyColumn = table.Columns.IndexOf("Currency");
+                var rateColumn = table.Columns.IndexOf("Rate");
                 var totalColumn = table.Columns.IndexOf("Total");
                 var taxTotalColumn = table.Columns.IndexOf("TaxTotal");
                 var receiptCountColumn = table.Columns.IndexOf("ReceiptCount");
                 var receiptCountsByCashier = new Dictionary<string, long>(StringComparer.Ordinal);
                 var totalsByPaymentMethod = new Dictionary<string, decimal>(StringComparer.Ordinal);
+                var usdTotalsByPaymentMethod = new Dictionary<string, decimal>(StringComparer.Ordinal);
                 var taxesByPaymentMethod = new Dictionary<string, decimal>(StringComparer.Ordinal);
+                var totalsByCashier = new Dictionary<string, Dictionary<string, (decimal Local, decimal Usd)>>(StringComparer.Ordinal);
                 var totalReceiptCount = 0L;
                 decimal totalSales = 0m;
+                decimal totalUsdSales = 0m;
                 decimal totalTax = 0m;
                 if (receiptCountColumn >= 0)
                 {
@@ -78,13 +82,26 @@ public static class ReceiptPrinter
                 }
                 foreach (DataRow tableRow in table.Rows)
                 {
+                    var rowCashier = cashierColumn >= 0 ? tableRow[cashierColumn]?.ToString() ?? "Unknown" : "Unknown";
                     var paymentMethod = paymentMethodColumn >= 0 ? tableRow[paymentMethodColumn]?.ToString() ?? "Unknown" : "Unknown";
                     var currency = currencyColumn >= 0 ? tableRow[currencyColumn]?.ToString() ?? "UNKNOWN" : "UNKNOWN";
                     var paymentKey = $"{paymentMethod} ({currency})";
+                    var rate = rateColumn >= 0 && decimal.TryParse(tableRow[rateColumn]?.ToString(), out var parsedRate) && parsedRate > 0 ? parsedRate : 1m;
                     if (totalColumn >= 0 && decimal.TryParse(tableRow[totalColumn]?.ToString(), out var rowTotal))
                     {
                         totalSales += rowTotal;
                         totalsByPaymentMethod[paymentKey] = totalsByPaymentMethod.GetValueOrDefault(paymentKey) + rowTotal;
+                        var usdTotal = rowTotal / rate;
+                        totalUsdSales += usdTotal;
+                        usdTotalsByPaymentMethod[paymentKey] = usdTotalsByPaymentMethod.GetValueOrDefault(paymentKey) + usdTotal;
+                        if (!totalsByCashier.TryGetValue(rowCashier, out var cashierTotals))
+                        {
+                            cashierTotals = new Dictionary<string, (decimal Local, decimal Usd)>(StringComparer.Ordinal);
+                            totalsByCashier[rowCashier] = cashierTotals;
+                        }
+
+                        var cashierPayment = cashierTotals.GetValueOrDefault(paymentKey);
+                        cashierTotals[paymentKey] = (cashierPayment.Local + rowTotal, cashierPayment.Usd + usdTotal);
                     }
 
                     if (taxTotalColumn >= 0 && decimal.TryParse(tableRow[taxTotalColumn]?.ToString(), out var rowTax))
@@ -97,32 +114,12 @@ public static class ReceiptPrinter
                 if (summaryPagePending)
                 {
                     eventArgs.Graphics.DrawString("REPORT SUMMARY", titleFont, Brushes.Black, bounds.Left, y);
-                    y += 30;
-                    eventArgs.Graphics.DrawString("ALL USERS TOTALS BY PAYMENT METHOD", boldFont, Brushes.Black, bounds.Left, y);
-                    y += 24;
-                    foreach (var paymentTotal in totalsByPaymentMethod.OrderBy(entry => entry.Key))
-                    {
-                        var paymentTax = taxesByPaymentMethod.GetValueOrDefault(paymentTotal.Key);
-                        eventArgs.Graphics.DrawString($"{paymentTotal.Key}: {paymentTotal.Value:0.00}", bodyFont, Brushes.Black, bounds.Left, y);
-                        y += 20;
-                        eventArgs.Graphics.DrawString($"  Tax: {paymentTax:0.00}", bodyFont, Brushes.Black, bounds.Left + 10, y);
-                        y += 20;
-                    }
-
-                    eventArgs.Graphics.DrawString($"All users total: {totalSales:0.00}", boldFont, Brushes.Black, bounds.Left, y);
-                    y += 22;
-                    eventArgs.Graphics.DrawString($"Total tax: {totalTax:0.00}", boldFont, Brushes.Black, bounds.Left, y);
-                    y += 22;
-                    eventArgs.Graphics.DrawString($"Total receipts: {totalReceiptCount}", boldFont, Brushes.Black, bounds.Left, y);
-                    y += 30;
+                    y += 26;
                     eventArgs.Graphics.DrawLine(Pens.Black, bounds.Left, y, bounds.Right, y);
-                    y += 12;
-
-                    foreach (var cashierTotal in receiptCountsByCashier.OrderBy(entry => entry.Key))
-                    {
-                        eventArgs.Graphics.DrawString($"{cashierTotal.Key}: {cashierTotal.Value} receipt(s)", bodyFont, Brushes.Black, bounds.Left, y);
-                        y += 20;
-                    }
+                    y += 14;
+                    eventArgs.Graphics.DrawString($"Total USD sales (all users): {totalUsdSales:0.00}", boldFont, Brushes.Black, bounds.Left, y);
+                    y += 22;
+                    eventArgs.Graphics.DrawLine(Pens.Black, bounds.Left, y, bounds.Right, y);
 
                     eventArgs.HasMorePages = false;
                     return;
@@ -151,22 +148,6 @@ public static class ReceiptPrinter
                         previousCashier = cashier;
                     }
 
-                    if (paymentMethodColumn >= 0 && currencyColumn >= 0 && totalColumn >= 0)
-                    {
-                        var paymentMethod = row[paymentMethodColumn]?.ToString() ?? string.Empty;
-                        var currency = row[currencyColumn]?.ToString() ?? string.Empty;
-                        var total = row[totalColumn] == DBNull.Value ? "0" : row[totalColumn]?.ToString() ?? "0";
-                        var summary = $"{paymentMethod} ({currency}): {total}";
-                        var summarySize = eventArgs.Graphics.MeasureString(summary, bodyFont, new SizeF(bounds.Width, bounds.Bottom - y));
-                        if (y + summarySize.Height > bounds.Bottom - 48)
-                        {
-                            break;
-                        }
-
-                        eventArgs.Graphics.DrawString(summary, bodyFont, Brushes.Black, bounds.Left + 10, y);
-                        y += Math.Max(12, (int)Math.Ceiling(summarySize.Height));
-                    }
-
                     rowIndex++;
                     y += 4;
                 }
@@ -175,6 +156,28 @@ public static class ReceiptPrinter
                 {
                     eventArgs.HasMorePages = true;
                     return;
+                }
+
+                eventArgs.Graphics.DrawLine(Pens.Black, bounds.Left, y, bounds.Right, y);
+                y += 10;
+                foreach (var cashierTotal in receiptCountsByCashier.OrderBy(entry => entry.Key))
+                {
+                    eventArgs.Graphics.DrawString($"{cashierTotal.Key} USD PAYMENT TOTALS", boldFont, Brushes.Black, bounds.Left, y);
+                    y += 18;
+                    var cashierUsdTotal = 0m;
+                    if (totalsByCashier.TryGetValue(cashierTotal.Key, out var cashierPayments))
+                    {
+                        foreach (var cashierPayment in cashierPayments.OrderBy(entry => entry.Key))
+                        {
+                            eventArgs.Graphics.DrawString($"{cashierPayment.Key}: {cashierPayment.Value.Local:0.00}", bodyFont, Brushes.Black, bounds.Left + 10, y);
+                            y += 16;
+                            eventArgs.Graphics.DrawString($"USD payment total: {cashierPayment.Value.Usd:0.00}", bodyFont, Brushes.Black, bounds.Left + 20, y);
+                            y += 16;
+                            cashierUsdTotal += cashierPayment.Value.Usd;
+                        }
+                    }
+                    eventArgs.Graphics.DrawString($"Total USD sales: {cashierUsdTotal:0.00}", boldFont, Brushes.Black, bounds.Left + 10, y);
+                    y += 22;
                 }
 
                 summaryPagePending = true;

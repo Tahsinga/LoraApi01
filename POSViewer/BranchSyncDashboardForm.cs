@@ -669,23 +669,35 @@ public sealed class BranchSyncDashboardForm : Form
 
             using var connection = new SqlConnection(_settings.BuildConnectionString());
             await connection.OpenAsync();
+            const string branchCompanySql = @"
+                SELECT TOP (1) Coid
+                FROM [dbo].[Branches]
+                WHERE UPPER(LTRIM(RTRIM(Branch))) = UPPER(LTRIM(RTRIM(@branch)));";
+            using var branchCompanyCommand = new SqlCommand(branchCompanySql, connection);
+            branchCompanyCommand.Parameters.AddWithValue("@branch", branchName);
+            var branchCompanyValue = await branchCompanyCommand.ExecuteScalarAsync();
+            if (branchCompanyValue is null || branchCompanyValue == DBNull.Value)
+            {
+                throw new InvalidOperationException($"Branch {branchName} was not found in dbo.Branches.");
+            }
+            var branchCoid = Convert.ToInt32(branchCompanyValue, CultureInfo.InvariantCulture);
                         const string updateSql = @"
                                 IF @isStockTake = 1
                                 BEGIN
                                     UPDATE [dbo].[ProductStockBalances]
-                                    SET StockBal = 0
+                                    SET StockBal = 0, coid = @coid
                                     WHERE UPPER(LTRIM(RTRIM(CAST(branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
                                         AND ProductID = @productId;
 
                                     UPDATE TOP (1) [dbo].[ProductStockBalances]
-                                    SET StockBal = @quantity
+                                    SET StockBal = @quantity, coid = @coid
                                     WHERE UPPER(LTRIM(RTRIM(CAST(branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
                                         AND ProductID = @productId;
                                 END
                                 ELSE
                                 BEGIN
                                     UPDATE [dbo].[ProductStockBalances]
-                                    SET StockBal = StockBal + @quantity
+                                    SET StockBal = StockBal + @quantity, coid = @coid
                                     WHERE UPPER(LTRIM(RTRIM(CAST(branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
                                         AND ProductID = @productId;
                                 END";
@@ -695,6 +707,7 @@ public sealed class BranchSyncDashboardForm : Form
             command.Parameters.AddWithValue("@isStockTake", isStockTake ? 1 : 0);
             command.Parameters.AddWithValue("@branch", branchName);
             command.Parameters.AddWithValue("@productId", transfer.product_id);
+            command.Parameters.AddWithValue("@coid", branchCoid);
             var affected = await command.ExecuteNonQueryAsync();
             _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK DB] Updated {affected} balance row(s) for product {transfer.product_id}.");
             if (affected == 0)
@@ -706,7 +719,7 @@ public sealed class BranchSyncDashboardForm : Form
                         @productId,
                         @quantity,
                         ISNULL(MAX(MvtEntryNo), 0) + 1,
-                        ISNULL(MAX(coid), 0),
+                        @coid,
                         @branch,
                         MAX(batchnumber),
                         MAX(expirydate)
@@ -716,6 +729,7 @@ public sealed class BranchSyncDashboardForm : Form
                 createBranchRowCommand.Parameters.AddWithValue("@quantity", quantity);
                 createBranchRowCommand.Parameters.AddWithValue("@branch", branchName);
                 createBranchRowCommand.Parameters.AddWithValue("@productId", transfer.product_id);
+                createBranchRowCommand.Parameters.AddWithValue("@coid", branchCoid);
                 affected = await createBranchRowCommand.ExecuteNonQueryAsync();
             }
             if (affected == 0)
@@ -810,11 +824,38 @@ public sealed class BranchSyncDashboardForm : Form
                 throw new InvalidOperationException($"Invalid selling price: {productCreation.selling_price}");
             }
 
+            if (!decimal.TryParse(productCreation.initial_quantity, NumberStyles.Number, CultureInfo.InvariantCulture, out var initialQuantity) || initialQuantity < 0)
+            {
+                throw new InvalidOperationException($"Invalid opening quantity: {productCreation.initial_quantity}");
+            }
+
             using var connection = new SqlConnection(_settings.BuildConnectionString());
             await connection.OpenAsync();
             using var transaction = connection.BeginTransaction();
             try
             {
+            if (actualProductId < 12100000)
+            {
+                const string nextProductIdSql = @"
+                    SELECT CASE
+                        WHEN ISNULL(MAX(ProductID), 0) < 12100000 THEN 12100000
+                        ELSE MAX(ProductID) + 1
+                    END
+                    FROM [dbo].[Products] WITH (UPDLOCK, HOLDLOCK);";
+                using var nextProductIdCommand = new SqlCommand(nextProductIdSql, connection, transaction);
+                actualProductId = Convert.ToInt32(await nextProductIdCommand.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
+            }
+
+            const string productIdExistsSql = "SELECT COUNT(1) FROM [dbo].[Products] WHERE ProductID = @productId;";
+            using (var productIdExistsCommand = new SqlCommand(productIdExistsSql, connection, transaction))
+            {
+                productIdExistsCommand.Parameters.AddWithValue("@productId", actualProductId);
+                if (Convert.ToInt32(await productIdExistsCommand.ExecuteScalarAsync(), CultureInfo.InvariantCulture) > 0)
+                {
+                    throw new InvalidOperationException($"Product ID {actualProductId} already exists in dbo.Products.");
+                }
+            }
+
             const string branchCompanySql = @"
                 SELECT TOP (1) Coid
                 FROM [dbo].[Branches]
@@ -852,7 +893,7 @@ public sealed class BranchSyncDashboardForm : Form
             {
                 productCommand.Parameters.AddWithValue("@productId", productCreation.product_id);
                 productCommand.Parameters.AddWithValue("@productName", productCreation.product_name.Trim());
-                productCommand.Parameters.AddWithValue("@productCode", productCreation.product_code?.Trim() ?? string.Empty);
+                productCommand.Parameters.AddWithValue("@productCode", (actualProductId + 1).ToString(CultureInfo.InvariantCulture));
                 productCommand.Parameters.AddWithValue("@barcode", productCreation.barcode?.Trim() ?? string.Empty);
                 productCommand.Parameters.AddWithValue("@sellingPrice", sellingPrice);
                 productCommand.Parameters.AddWithValue("@doneBy", Environment.UserName);
@@ -866,10 +907,20 @@ public sealed class BranchSyncDashboardForm : Form
             }
 
             const string insertBalanceSql = @"
-                INSERT INTO [dbo].[ProductStockBalances](ProductID, StockBal, coid, branch)
-                VALUES (@productId, 0, 0, @branch);";
+                INSERT INTO [dbo].[ProductStockBalances]
+                    (ProductID, StockBal, MvtEntryNo, coid, branch, batchnumber, expirydate)
+                VALUES (
+                    @productId,
+                    @initialQuantity,
+                    ISNULL((SELECT MAX(MvtEntryNo) FROM [dbo].[ProductStockBalances] WHERE ProductID = @productId), 0) + 1,
+                    @coid,
+                    @branch,
+                    NULL,
+                    NULL);";
             using var balanceCommand = new SqlCommand(insertBalanceSql, connection, transaction);
             balanceCommand.Parameters.AddWithValue("@productId", actualProductId);
+            balanceCommand.Parameters.AddWithValue("@initialQuantity", initialQuantity);
+            balanceCommand.Parameters.AddWithValue("@coid", Convert.ToInt32(companyIdValue, CultureInfo.InvariantCulture));
             balanceCommand.Parameters.AddWithValue("@branch", branchName);
             await balanceCommand.ExecuteNonQueryAsync();
             transaction.Commit();
@@ -1062,9 +1113,10 @@ public sealed class BranchSyncDashboardForm : Form
                                             - COALESCE(m.DiscountAmt, 0)
                                             - COALESCE(m.InvDiscount, 0)
                                             + COALESCE(m.TaxAmt, 0)
-                                        ) * COALESCE(m.ReceiptDisplayRate, 1)
+                                        )
                                     ) AS decimal(28, 6)) AS SaleTotal
-                                    ,CAST((COALESCE(m.TaxAmt, 0) * COALESCE(m.ReceiptDisplayRate, 1)) AS decimal(28, 6)) AS TaxTotal
+                                    ,CAST(COALESCE(m.TaxAmt, 0) AS decimal(28, 6)) AS TaxTotal
+                                    ,CAST(CASE WHEN COALESCE(m.ReceiptDisplayRate, 0) = 0 THEN 1 ELSE m.ReceiptDisplayRate END AS decimal(28, 6)) AS Rate
                                 FROM [dbo].[Movement] AS m
                                 OUTER APPLY (
                                     SELECT TOP 1 PaymentMethodDesc, Currency
@@ -1081,12 +1133,13 @@ public sealed class BranchSyncDashboardForm : Form
                                 Cashier,
                                 PaymentMethod,
                                 Currency,
+                                Rate,
                                 CAST(SUM(SaleTotal) AS decimal(28, 2)) AS Total,
                                 CAST(SUM(TaxTotal) AS decimal(28, 2)) AS TaxTotal,
                                 COUNT_BIG(*) AS ReceiptCount
                                 FROM Sales
-                                        GROUP BY Cashier, PaymentMethod, Currency
-                                        ORDER BY Cashier, PaymentMethod, Currency;";
+                                        GROUP BY Cashier, PaymentMethod, Currency, Rate
+                                        ORDER BY Cashier, PaymentMethod, Currency, Rate;";
 
             using var command = new SqlCommand(query, connection);
             command.Parameters.Add("@reportDate", SqlDbType.Int).Value = int.Parse(reportDate.ToString("yyyyMMdd"));
@@ -1190,6 +1243,7 @@ public sealed class BranchSyncDashboardForm : Form
         public string? product_name { get; set; }
         public string? product_code { get; set; }
         public string? barcode { get; set; }
+        public string? initial_quantity { get; set; }
         public string? selling_price { get; set; }
     }
 }

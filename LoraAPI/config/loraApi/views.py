@@ -755,27 +755,38 @@ def create_branch_product(request):
     try:
         payload = json.loads(request.body or '{}')
         branch = str(payload.get('branch', '')).strip()
+        requested_product_id = int(payload.get('product_id') or 0)
         product_name = str(payload.get('product_name', '')).strip()
         product_code = str(payload.get('product_code', '')).strip()
         barcode = str(payload.get('barcode', '')).strip()
+        initial_quantity = Decimal(str(payload.get('initial_quantity', 0) or 0))
         selling_price = Decimal(str(payload.get('selling_price', 0) or 0))
     except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
         return JsonResponse({'status': 'error', 'message': 'Branch, product name, and a valid price are required.'}, status=400)
 
+    if requested_product_id and requested_product_id < 12_100_000:
+        return JsonResponse({'status': 'error', 'message': 'Product ID must be at least 12100000.'}, status=400)
     if not branch or branch.casefold() == 'main' or not product_name or len(product_name) > 250:
         return JsonResponse({'status': 'error', 'message': 'A branch and product name are required.'}, status=400)
-    if len(product_code) > 50 or len(barcode) > 100 or selling_price < 0:
-        return JsonResponse({'status': 'error', 'message': 'Product code, barcode, and price are invalid.'}, status=400)
+    if len(product_code) > 50 or len(barcode) > 100 or initial_quantity < 0 or initial_quantity != whole_quantity(initial_quantity) or selling_price < 0:
+        return JsonResponse({'status': 'error', 'message': 'Product code, barcode, quantity, and price are invalid.'}, status=400)
 
     with transaction.atomic():
-        maximum_id = ProductCatalog.objects.select_for_update().filter(product_id__gte=1_000_000).aggregate(max_id=Max('product_id'))['max_id']
-        product_id = (maximum_id or 999_999) + 1
+        if requested_product_id:
+            product_id = requested_product_id
+        else:
+            maximum_id = ProductCatalog.objects.select_for_update().filter(product_id__gte=12_100_000).aggregate(max_id=Max('product_id'))['max_id']
+            product_id = (maximum_id or 12_099_999) + 1
+        if ProductCatalog.objects.filter(product_id=product_id).exists():
+            return JsonResponse({'status': 'error', 'message': f'Product ID {product_id} is already queued. Enter another unique Product ID.'}, status=409)
+        product_code = str(product_id + 1)
         product = ProductCatalog.objects.create(
             branch=branch,
             product_id=product_id,
             product_name=product_name,
             product_code=product_code,
             barcode=barcode,
+            pending_stock_quantity=initial_quantity,
             selling_price=selling_price,
             branch_confirmed=False,
             pending_product_creation=True,
@@ -788,6 +799,7 @@ def create_branch_product(request):
         'product_name': product.product_name,
         'product_code': product.product_code,
         'barcode': product.barcode,
+        'initial_quantity': str(product.pending_stock_quantity),
         'selling_price': str(product.selling_price),
     }, status=202)
 
@@ -812,10 +824,28 @@ def complete_branch_product_creation(request):
         return JsonResponse({'status': 'error', 'message': 'The pending product was not found.'}, status=404)
 
     if success:
-        product.product_id = actual_product_id
-        product.branch_confirmed = True
-        product.pending_product_creation = False
-        product.save(update_fields=['product_id', 'branch_confirmed', 'pending_product_creation', 'updated_at'])
+        with transaction.atomic():
+            product.product_id = actual_product_id
+            product.product_code = str(actual_product_id)
+            product.branch_confirmed = True
+            product.pending_product_creation = False
+            product.save(update_fields=['product_id', 'product_code', 'branch_confirmed', 'pending_product_creation', 'updated_at'])
+            ProductCatalog.objects.update_or_create(
+                branch='MAIN',
+                product_id=actual_product_id,
+                defaults={
+                    'product_name': product.product_name,
+                    'product_code': product.product_code,
+                    'barcode': product.barcode,
+                    'selling_price': product.selling_price,
+                    'branch_confirmed': True,
+                    'pending_product_creation': False,
+                },
+            )
+            MainStockBalance.objects.get_or_create(
+                product_id=actual_product_id,
+                defaults={'product_name': product.product_name, 'quantity': 0},
+            )
     return JsonResponse({'status': 'ok', 'branch': product.branch, 'product_id': product.product_id, 'success': success})
 
 
@@ -1245,7 +1275,7 @@ def branch_sync(request):
         pending_product_creations = list(ProductCatalog.objects.filter(
             branch__iexact=branch_name,
             pending_product_creation=True,
-        ).values('branch', 'product_id', 'product_name', 'product_code', 'barcode', 'selling_price'))
+        ).values('branch', 'product_id', 'product_name', 'product_code', 'barcode', 'pending_stock_quantity', 'selling_price'))
 
         return JsonResponse({
             'status': 'ok',
@@ -1271,6 +1301,7 @@ def branch_sync(request):
                     'product_name': item['product_name'],
                     'product_code': item['product_code'],
                     'barcode': item['barcode'],
+                    'initial_quantity': str(item['pending_stock_quantity'] or 0),
                     'selling_price': str(item['selling_price']),
                 }
                 for item in pending_product_creations
