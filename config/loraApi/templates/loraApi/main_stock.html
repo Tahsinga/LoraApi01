@@ -219,6 +219,8 @@
   let stockMovementsLoading = false;
   let stockTransfersLoading = false;
   let refreshAllLoading = false;
+  const transferQueue = [];
+  let transferQueueProcessing = false;
   const productSearches = [
     { source: 'branch', input: document.querySelector('#main-stock-search'), list: document.querySelector('#main-stock-products'), id: document.querySelector('#main-stock-product'), name: document.querySelector('#main-stock-name') },
     { source: 'main', input: document.querySelector('#transfer-search'), list: document.querySelector('#transfer-products'), id: document.querySelector('#transfer-product'), name: document.querySelector('#transfer-name') },
@@ -484,8 +486,8 @@
     } catch (error) { mainStockNotice.className = 'notice error'; mainStockNotice.textContent = error.message; }
     finally { mainStockSubmit.disabled = false; }
   });
-  transferForm.addEventListener('submit', async event => {
-    event.preventDefault(); transferSubmit.disabled = true; transferNotice.className = 'notice'; transferNotice.textContent = '';
+  transferForm.addEventListener('submit', event => {
+    event.preventDefault(); transferNotice.className = 'notice'; transferNotice.textContent = '';
     try {
       const transferSearch = document.querySelector('#transfer-search');
       const transferProduct = document.querySelector('#transfer-product');
@@ -499,13 +501,34 @@
       if (!selectedBranch.value) throw new Error('Select a connected branch first.');
       if (!transferProduct.value || !transferName.value) throw new Error('Select a product from the Main POS product list first.');
       if (!Number.isFinite(Number(transferQuantity)) || Number(transferQuantity) <= 0) throw new Error('Enter a positive transfer quantity.');
-      const response = await fetch('/api/stock/transfers/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ product_id:document.querySelector('#transfer-product').value, product_name:document.querySelector('#transfer-name').value, quantity:document.querySelector('#transfer-quantity').value, branch:selectedBranch.value }) });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || 'Stock transfer could not be queued.');
-      transferNotice.className = 'notice ok'; transferNotice.textContent = `${data.transfer.product_name} transfer queued for ${data.transfer.branch}. The branch app will apply it on its next sync.`; transferForm.reset(); await loadBranchProducts(); await loadStockMovements(); await loadStockTransfers();
+      transferQueue.push({ product_id: transferProduct.value, product_name: transferName.value, quantity: transferQuantity, branch: selectedBranch.value });
+      transferForm.reset(); transferSearch.focus();
+      transferNotice.className = 'notice ok';
+      transferNotice.textContent = `${transferQueue.length} transfer${transferQueue.length === 1 ? '' : 's'} queued for sending.`;
+      void processTransferQueue();
     } catch (error) { transferNotice.className = 'notice error'; transferNotice.textContent = error.message; }
-    finally { transferSubmit.disabled = false; }
   });
+  async function processTransferQueue() {
+    if (transferQueueProcessing) return;
+    transferQueueProcessing = true;
+    while (transferQueue.length) {
+      const transfer = transferQueue.shift();
+      try {
+        transferNotice.className = 'notice';
+        transferNotice.textContent = `Sending ${transfer.product_name}... ${transferQueue.length ? `${transferQueue.length} more queued.` : ''}`;
+        const response = await fetch('/api/stock/transfers/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(transfer) });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.message || 'Stock transfer could not be queued.');
+        transferNotice.className = 'notice ok';
+        transferNotice.textContent = `${data.transfer.product_name} transfer queued for ${data.transfer.branch}.${transferQueue.length ? ` ${transferQueue.length} more queued.` : ''}`;
+        await loadStockTransfers();
+      } catch (error) {
+        transferNotice.className = 'notice error';
+        transferNotice.textContent = `${transfer.product_name} failed: ${error.message}`;
+      }
+    }
+    transferQueueProcessing = false;
+  }
   function setBranchProductFormState(enabled) {
     branchProductFormWrap.classList.toggle('is-open', enabled);
     branchProductToggle.classList.toggle('is-on', enabled);
