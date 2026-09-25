@@ -139,6 +139,7 @@
           <button id="main-stock-submit" type="submit">Update main stock</button>
         </form>
         <div id="main-stock-notice" class="notice" role="status"></div>
+        <div id="main-stock-queue" class="transfer-queue" aria-live="polite" aria-label="Stock takes waiting to be updated"></div>
       </div>
       <div class="panel transfer-panel branch-data-card" data-branch-loading-card>
         <div class="branch-load-row">
@@ -218,6 +219,7 @@
   const mainStockProductOptions = document.querySelector('#main-stock-product-options');
   const mainStockNotice = document.querySelector('#main-stock-notice');
   const mainStockSubmit = document.querySelector('#main-stock-submit');
+  const mainStockQueueList = document.querySelector('#main-stock-queue');
   const transferForm = document.querySelector('#transfer-form');
   const transferProductOptions = document.querySelector('#transfer-product-options');
   const transferNotice = document.querySelector('#transfer-notice');
@@ -250,6 +252,9 @@
   const transferQueue = [];
   let transferQueueProcessing = false;
   let activeTransfer = null;
+  const mainStockQueue = [];
+  let mainStockQueueProcessing = false;
+  let activeMainStockTake = null;
   const productSearches = [
     { source: 'branch', input: document.querySelector('#main-stock-search'), list: document.querySelector('#main-stock-products'), id: document.querySelector('#main-stock-product'), name: document.querySelector('#main-stock-name') },
     { source: 'branch', input: document.querySelector('#transfer-search'), list: document.querySelector('#transfer-products'), id: document.querySelector('#transfer-product'), name: document.querySelector('#transfer-name') },
@@ -257,6 +262,11 @@
   ];
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
   const productOptions = products => products.map(product => `<option value="${escapeHtml(product.product_name)}" label="ID ${escapeHtml(product.product_id)}${product.product_code ? ` · ${escapeHtml(product.product_code)}` : ''}"></option>`).join('');
+  function renderMainStockQueue() {
+    const waiting = mainStockQueue.map((stockTake, index) => `<div class="transfer-queue-item"><div><div class="transfer-queue-product">${escapeHtml(stockTake.product_name)}</div><div class="transfer-queue-detail">${escapeHtml(stockTake.quantity)} for ${escapeHtml(stockTake.branch)} · #${index + 1} waiting</div></div><span class="transfer-queue-state">Waiting</span></div>`).join('');
+    const updating = activeMainStockTake ? `<div class="transfer-queue-item"><div><div class="transfer-queue-product">${escapeHtml(activeMainStockTake.product_name)}</div><div class="transfer-queue-detail">${escapeHtml(activeMainStockTake.quantity)} for ${escapeHtml(activeMainStockTake.branch)}</div></div><span class="transfer-queue-state sending">Updating</span></div>` : '';
+    mainStockQueueList.innerHTML = updating + waiting;
+  }
   function renderTransferProductOptions() {
     const query = document.querySelector('#transfer-search').value.trim().toLowerCase();
     const products = branchCatalogProducts.filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
@@ -558,18 +568,49 @@
       refreshAllLoading = false;
     }
   }
-  mainStockForm.addEventListener('submit', async event => {
-    event.preventDefault(); mainStockSubmit.disabled = true; mainStockNotice.className = 'notice'; mainStockNotice.textContent = '';
+  mainStockForm.addEventListener('submit', event => {
+    event.preventDefault(); mainStockNotice.className = 'notice'; mainStockNotice.textContent = '';
     try {
       if (!selectedBranch.value) throw new Error('Select a connected branch first.');
-      if (!document.querySelector('#main-stock-product').value || !document.querySelector('#main-stock-name').value) throw new Error('Select a product from the branch stock list first.');
-      const response = await fetch('/api/stock/main/adjust/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ product_id:document.querySelector('#main-stock-product').value, product_name:document.querySelector('#main-stock-name').value, quantity:document.querySelector('#main-stock-quantity').value, branch:selectedBranch.value }) });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || 'Main stock could not be updated.');
-      mainStockNotice.className = 'notice ok'; mainStockNotice.textContent = `${document.querySelector('#main-stock-name').value} main and ${data.branch} stock: ${data.quantity}`; mainStockForm.reset(); await loadBranchProducts(); await loadStockMovements();
+      const productId = document.querySelector('#main-stock-product').value;
+      const productName = document.querySelector('#main-stock-name').value;
+      const quantity = document.querySelector('#main-stock-quantity').value;
+      if (!productId || !productName) throw new Error('Select a product from the branch stock list first.');
+      if (!Number.isFinite(Number(quantity)) || Number(quantity) < 0 || !Number.isInteger(Number(quantity))) throw new Error('Enter a non-negative whole-number stock value.');
+      mainStockQueue.push({ product_id: productId, product_name: productName, quantity, branch: selectedBranch.value });
+      mainStockForm.reset();
+      renderMainStockQueue();
+      mainStockNotice.className = 'notice ok';
+      mainStockNotice.textContent = `${mainStockQueue.length} stock take${mainStockQueue.length === 1 ? '' : 's'} queued.`;
+      void processMainStockQueue();
     } catch (error) { mainStockNotice.className = 'notice error'; mainStockNotice.textContent = error.message; }
-    finally { mainStockSubmit.disabled = false; }
   });
+  async function processMainStockQueue() {
+    if (mainStockQueueProcessing) return;
+    mainStockQueueProcessing = true;
+    while (mainStockQueue.length) {
+      const stockTake = mainStockQueue.shift();
+      activeMainStockTake = stockTake;
+      renderMainStockQueue();
+      try {
+        mainStockNotice.className = 'notice';
+        mainStockNotice.textContent = `Updating ${stockTake.product_name}... ${mainStockQueue.length ? `${mainStockQueue.length} more queued.` : ''}`;
+        const response = await fetch('/api/stock/main/adjust/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(stockTake) });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.message || 'Main stock could not be updated.');
+        mainStockNotice.className = 'notice ok';
+        mainStockNotice.textContent = `${stockTake.product_name} main and ${data.branch} stock: ${data.quantity}.${mainStockQueue.length ? ` ${mainStockQueue.length} more queued.` : ''}`;
+        await loadBranchProducts(false);
+        await loadStockMovements();
+      } catch (error) {
+        mainStockNotice.className = 'notice error';
+        mainStockNotice.textContent = `${stockTake.product_name} failed: ${error.message}`;
+      }
+      activeMainStockTake = null;
+      renderMainStockQueue();
+    }
+    mainStockQueueProcessing = false;
+  }
   transferForm.addEventListener('submit', event => {
     event.preventDefault(); transferNotice.className = 'notice'; transferNotice.textContent = '';
     try {
