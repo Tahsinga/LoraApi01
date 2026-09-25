@@ -481,7 +481,7 @@
         try {
           const response = await fetch(`/api/products/?q=${encodeURIComponent(searchQuery)}&branch=${encodeURIComponent(sourceBranch)}&_=${Date.now()}`, { cache: 'no-store' });
           const data = await response.json();
-          products = data.products || filterProducts(searchQuery.toLowerCase());
+          products = (data.products || filterProducts(searchQuery.toLowerCase())).filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(searchQuery.toLowerCase()))).slice(0, 100);
           control.list.innerHTML = productOptions(products);
           renderPickerOptions(control.options, products);
         } catch (error) { control.list.innerHTML = ''; }
