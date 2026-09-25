@@ -193,7 +193,7 @@
         <div class="browser-heading"><div><h2>Stock activity</h2><p class="sub">The newest stock movements for the selected branch.</p></div><div class="browser-actions"><label class="activity-branch-label">Branch<select id="activity-branch"><option value="">Select branch</option></select></label><span id="movement-status" class="catalog-status">Select a branch.</span></div></div>
         <div id="stock-movements" class="stock-table-wrap"><p class="empty">Loading stock activity...</p></div>
       </div>
-      <div class="panel panel-wide branch-data-card" data-branch-loading-card>
+      <div class="panel panel-wide">
         <div class="browser-heading"><div><h2>Stock transfer log</h2><p class="sub">Every transfer sent from main stock to a branch.</p></div><span id="transfer-status" class="catalog-status">Loading transfers...</span></div>
         <div id="stock-transfers" class="stock-table-wrap"><p class="empty">Loading transfer log...</p></div>
       </div>
@@ -413,7 +413,7 @@
     loadStockButton.textContent = 'Loading products...';
     loadStockButton.setAttribute('aria-busy', 'true');
     productCatalogStatus.textContent = 'Loading products...';
-    loadBranchProducts(true);
+    return loadBranchProducts(true);
   }
   async function loadStockMovements() {
     if (stockMovementsLoading) return;
@@ -489,14 +489,6 @@
       card.setAttribute('aria-busy', String(isLoading));
     });
   }
-  async function refreshBranchesWithLoading() {
-    setBranchCardsLoading(true);
-    try {
-      await refreshBranches();
-    } finally {
-      setBranchCardsLoading(false);
-    }
-  }
   function setupProductSearch(control) {
     let products = [];
     let timer;
@@ -548,7 +540,8 @@
   }, { threshold: 0.35 });
   sectionObserver.observe(productsPanel);
   sectionObserver.observe(stockActivityPanel);
-  selectedBranch.addEventListener('change', () => {
+  selectedBranch.addEventListener('change', async () => {
+    setBranchCardsLoading(true);
     localStorage.setItem(selectedBranchKey, selectedBranch.value);
     productSearches.forEach(control => {
       control.input.value = ''; control.id.value = ''; control.name.value = ''; control.list.innerHTML = '';
@@ -558,8 +551,13 @@
     branchPriceInput.placeholder = 'Current price appears after selecting a product';
     branchProductSearch.value = '';
     activityBranch.value = selectedBranch.value;
-    requestBranchLoad();
-    loadStockMovements();
+    branchProducts.innerHTML = '<p class="empty">Loading branch products...</p>';
+    stockMovements.innerHTML = '<p class="empty">Loading stock activity...</p>';
+    try {
+      await Promise.all([requestBranchLoad(), loadStockMovements()]);
+    } finally {
+      setBranchCardsLoading(false);
+    }
   });
   activityBranch.addEventListener('change', loadStockMovements);
   loadStockButton.addEventListener('click', requestBranchLoad);
@@ -737,7 +735,7 @@
   });
   productSearches.forEach(setupProductSearch);
   refreshAll();
-  setInterval(refreshBranchesWithLoading, 5000);
+  setInterval(refreshBranches, 5000);
   setInterval(() => {
     loadBranchProducts(false);
     loadStockMovements();
