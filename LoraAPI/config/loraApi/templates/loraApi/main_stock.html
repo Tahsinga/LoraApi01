@@ -242,7 +242,6 @@
   const branchPriceSubmit = document.querySelector('#branch-price-submit');
   const branchPriceNotice = document.querySelector('#branch-price-notice');
   let branchCatalogProducts = [];
-  let mainCatalogProducts = [];
   let branchProductsLoading = false;
   let branchProductsRequestId = 0;
   let stockMovementsLoading = false;
@@ -253,14 +252,14 @@
   let activeTransfer = null;
   const productSearches = [
     { source: 'branch', input: document.querySelector('#main-stock-search'), list: document.querySelector('#main-stock-products'), id: document.querySelector('#main-stock-product'), name: document.querySelector('#main-stock-name') },
-    { source: 'main', input: document.querySelector('#transfer-search'), list: document.querySelector('#transfer-products'), id: document.querySelector('#transfer-product'), name: document.querySelector('#transfer-name') },
+    { source: 'branch', input: document.querySelector('#transfer-search'), list: document.querySelector('#transfer-products'), id: document.querySelector('#transfer-product'), name: document.querySelector('#transfer-name') },
     { source: 'branch', input: branchPriceSearch, list: branchPriceProducts, id: branchPriceProduct, name: branchPriceName },
   ];
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
   const productOptions = products => products.map(product => `<option value="${escapeHtml(product.product_name)}" label="ID ${escapeHtml(product.product_id)}${product.product_code ? ` · ${escapeHtml(product.product_code)}` : ''}"></option>`).join('');
   function renderTransferProductOptions() {
     const query = document.querySelector('#transfer-search').value.trim().toLowerCase();
-    const products = mainCatalogProducts.filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
+    const products = branchCatalogProducts.filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
     transferProductOptions.innerHTML = products.length
       ? products.map(product => `<button type="button" class="product-picker-option" role="option" data-product-id="${escapeHtml(product.product_id)}"><strong>${escapeHtml(product.product_name)}</strong><small>ID ${escapeHtml(product.product_id)}${product.product_code ? ` · ${escapeHtml(product.product_code)}` : ''}</small></button>`).join('')
       : '<span class="empty">No matching products.</span>';
@@ -372,8 +371,10 @@
       branchCatalogProducts = data.products || [];
       document.querySelector('#main-stock-products').innerHTML = productOptions(branchCatalogProducts);
       branchPriceProducts.innerHTML = productOptions(branchCatalogProducts);
+      document.querySelector('#transfer-products').innerHTML = productOptions(branchCatalogProducts);
       productCatalogStatus.textContent = `${branchCatalogProducts.length} products updated for ${branch}.`;
       renderBranchProducts();
+      if (transferProductOptions.classList.contains('is-open')) renderTransferProductOptions();
       if (mainStockProductOptions.classList.contains('is-open')) renderMainStockProductOptions();
       if (branchPriceProductOptions.classList.contains('is-open')) renderBranchPriceProductOptions();
     } catch (error) {
@@ -388,17 +389,6 @@
       loadStockButton.textContent = 'Load stock';
       loadStockButton.setAttribute('aria-busy', 'false');
       if (showLoading) setBranchCardsLoading(false);
-    }
-  }
-  async function loadMainCatalogProducts() {
-    try {
-      const response = await fetch(`/api/products/?branch=MAIN&_=${Date.now()}`, { cache: 'no-store', signal: AbortSignal.timeout(30000) });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || 'Main products could not be loaded.');
-      mainCatalogProducts = data.products || [];
-      document.querySelector('#transfer-products').innerHTML = productOptions(mainCatalogProducts);
-    } catch (error) {
-      if (!mainCatalogProducts.length) document.querySelector('#transfer-products').innerHTML = '';
     }
   }
   refreshStockButton.addEventListener('click', () => loadBranchProducts(true));
@@ -488,7 +478,7 @@
     let products = [];
     let timer;
     const applySelectedProduct = () => {
-      const selected = [...products, ...(control.source === 'main' ? mainCatalogProducts : branchCatalogProducts)].find(product => product.product_name === control.input.value);
+      const selected = [...products, ...branchCatalogProducts].find(product => product.product_name === control.input.value);
       if (!selected) return;
       control.id.value = selected.product_id;
       control.name.value = selected.product_name;
@@ -562,7 +552,7 @@
     setBranchCardsLoading(true);
     try {
       await refreshBranches();
-      await Promise.all([loadMainCatalogProducts(), loadBranchProducts(false), loadStockMovements(), loadStockTransfers()]);
+      await Promise.all([loadBranchProducts(false), loadStockMovements(), loadStockTransfers()]);
     } finally {
       setBranchCardsLoading(false);
       refreshAllLoading = false;
@@ -587,7 +577,7 @@
       const transferProduct = document.querySelector('#transfer-product');
       const transferName = document.querySelector('#transfer-name');
       const transferQuantity = document.querySelector('#transfer-quantity').value;
-      const typedProduct = mainCatalogProducts.find(product => product.product_name.trim().toLowerCase() === transferSearch.value.trim().toLowerCase());
+      const typedProduct = branchCatalogProducts.find(product => product.product_name.trim().toLowerCase() === transferSearch.value.trim().toLowerCase());
       if (typedProduct) {
         transferProduct.value = typedProduct.product_id;
         transferName.value = typedProduct.product_name;
@@ -609,7 +599,7 @@
   transferProductOptions.addEventListener('click', event => {
     const option = event.target.closest('[data-product-id]');
     if (!option) return;
-    const product = mainCatalogProducts.find(item => String(item.product_id) === option.dataset.productId);
+    const product = branchCatalogProducts.find(item => String(item.product_id) === option.dataset.productId);
     if (!product) return;
     document.querySelector('#transfer-search').value = product.product_name;
     document.querySelector('#transfer-product').value = product.product_id;

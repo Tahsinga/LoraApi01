@@ -247,7 +247,6 @@
   const branchPriceSubmit = document.querySelector('#branch-price-submit');
   const branchPriceNotice = document.querySelector('#branch-price-notice');
   let branchCatalogProducts = [];
-  let mainCatalogProducts = [];
   let branchProductsLoading = false;
   let branchProductsRequestId = 0;
   let stockMovementsLoading = false;
@@ -258,7 +257,7 @@
   let activeTransfer = null;
   const productSearches = [
     { source: 'branch', input: document.querySelector('#main-stock-search'), list: document.querySelector('#main-stock-products'), options: document.querySelector('#main-stock-product-options'), id: document.querySelector('#main-stock-product'), name: document.querySelector('#main-stock-name') },
-    { source: 'main', input: document.querySelector('#transfer-search'), list: document.querySelector('#transfer-products'), options: document.querySelector('#transfer-product-options'), id: document.querySelector('#transfer-product'), name: document.querySelector('#transfer-name') },
+    { source: 'branch', input: document.querySelector('#transfer-search'), list: document.querySelector('#transfer-products'), options: document.querySelector('#transfer-product-options'), id: document.querySelector('#transfer-product'), name: document.querySelector('#transfer-name') },
     { source: 'branch', input: branchPriceSearch, list: branchPriceProducts, options: branchPriceProductOptions, id: branchPriceProduct, name: branchPriceName },
   ];
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
@@ -348,8 +347,12 @@
       branchCatalogProducts = data.products || [];
       document.querySelector('#main-stock-products').innerHTML = productOptions(branchCatalogProducts);
       branchPriceProducts.innerHTML = productOptions(branchCatalogProducts);
+      document.querySelector('#transfer-products').innerHTML = productOptions(branchCatalogProducts);
       productCatalogStatus.textContent = `${branchCatalogProducts.length} products updated for ${branch}.`;
       renderBranchProducts();
+      if (document.querySelector('#transfer-product-options').classList.contains('is-open')) {
+        document.querySelector('#transfer-product-options').classList.remove('is-open');
+      }
     } catch (error) {
       if (requestId !== branchProductsRequestId) return;
       productCatalogStatus.textContent = branchCatalogProducts.length
@@ -362,18 +365,6 @@
       loadStockButton.textContent = 'Load stock';
       loadStockButton.setAttribute('aria-busy', 'false');
       if (showLoading) setBranchCardsLoading(false);
-    }
-  }
-  async function loadMainCatalogProducts() {
-    try {
-      const response = await fetch(`/api/products/?branch=MAIN&_=${Date.now()}`, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || 'Main products could not be loaded.');
-      mainCatalogProducts = data.products || [];
-      document.querySelector('#transfer-products').innerHTML = productOptions(mainCatalogProducts);
-    } catch (error) {
-      mainCatalogProducts = [];
-      document.querySelector('#transfer-products').innerHTML = '';
     }
   }
   refreshStockButton.addEventListener('click', () => loadBranchProducts(true));
@@ -464,10 +455,10 @@
     let products = [];
     let timer;
     const openOptions = () => control.options?.classList.add('is-open');
-    const catalogProducts = () => control.source === 'main' ? mainCatalogProducts : branchCatalogProducts;
+    const catalogProducts = () => branchCatalogProducts;
     const filterProducts = query => catalogProducts().filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
     const applySelectedProduct = () => {
-      const selected = [...products, ...(control.source === 'main' ? mainCatalogProducts : branchCatalogProducts)].find(product => product.product_name === control.input.value);
+      const selected = [...products, ...branchCatalogProducts].find(product => product.product_name === control.input.value);
       if (!selected) return;
       control.id.value = selected.product_id;
       control.name.value = selected.product_name;
@@ -484,7 +475,7 @@
       clearTimeout(timer);
       timer = setTimeout(async () => {
         const searchQuery = control.input.value.trim();
-        const sourceBranch = control.source === 'main' ? 'MAIN' : selectedBranch.value;
+        const sourceBranch = selectedBranch.value;
         if (!sourceBranch) { control.list.innerHTML = ''; return; }
         if (searchQuery.length < 2) { control.list.innerHTML = ''; return; }
         try {
@@ -507,7 +498,7 @@
       const option = event.target.closest('[data-product-id]');
       if (!option) return;
       const product = products.find(item => String(item.product_id) === option.dataset.productId)
-        || (control.source === 'main' ? mainCatalogProducts : branchCatalogProducts).find(item => String(item.product_id) === option.dataset.productId);
+        || branchCatalogProducts.find(item => String(item.product_id) === option.dataset.productId);
       if (!product) return;
       control.input.value = product.product_name;
       control.id.value = product.product_id;
@@ -564,7 +555,7 @@
     setBranchCardsLoading(true);
     try {
       await refreshBranches();
-      await Promise.all([loadMainCatalogProducts(), loadBranchProducts(false), loadStockMovements(), loadStockTransfers()]);
+      await Promise.all([loadBranchProducts(false), loadStockMovements(), loadStockTransfers()]);
     } finally {
       setBranchCardsLoading(false);
       refreshAllLoading = false;
@@ -589,13 +580,13 @@
       const transferProduct = document.querySelector('#transfer-product');
       const transferName = document.querySelector('#transfer-name');
       const transferQuantity = document.querySelector('#transfer-quantity').value;
-      const typedProduct = mainCatalogProducts.find(product => product.product_name.trim().toLowerCase() === transferSearch.value.trim().toLowerCase());
+      const typedProduct = branchCatalogProducts.find(product => product.product_name.trim().toLowerCase() === transferSearch.value.trim().toLowerCase());
       if (typedProduct) {
         transferProduct.value = typedProduct.product_id;
         transferName.value = typedProduct.product_name;
       }
       if (!selectedBranch.value) throw new Error('Select a connected branch first.');
-      if (!transferProduct.value || !transferName.value) throw new Error('Select a product from the Main POS product list first.');
+      if (!transferProduct.value || !transferName.value) throw new Error('Select a product from the selected branch product list first.');
       if (!Number.isFinite(Number(transferQuantity)) || Number(transferQuantity) <= 0) throw new Error('Enter a positive transfer quantity.');
       transferQueue.push({ product_id: transferProduct.value, product_name: transferName.value, quantity: transferQuantity, branch: selectedBranch.value });
       transferForm.reset(); transferSearch.focus();
