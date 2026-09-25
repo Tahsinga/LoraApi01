@@ -452,6 +452,19 @@ class StockTransferTests(TestCase):
 		self.assertEqual(response.status_code, 400)
 		self.assertEqual(response.json()['message'], 'Timezone offset is out of range.')
 
+	def test_stock_movements_returns_only_fifty_newest_rows(self):
+		for product_id in range(1, 56):
+			StockMovement.objects.create(
+				branch='BranchA', product_id=product_id, product_name=f'Product {product_id}',
+				movement_type='received', quantity=1, source='sync',
+			)
+
+		response = self.client.get('/api/stock/movements/?branch=BranchA')
+
+		self.assertEqual(response.status_code, 200)
+		movements = response.json()['movements']
+		self.assertEqual(len(movements), 50)
+
 	def test_catalog_sync_records_reduction_as_sold(self):
 		ProductCatalog.objects.create(
 			branch='BranchA', product_id=999, product_name='Test Product', available_quantity=10,
