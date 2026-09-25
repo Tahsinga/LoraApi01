@@ -413,6 +413,29 @@ class StockTransferTests(TestCase):
 		self.assertEqual(product['received_quantity'], '5')
 		self.assertEqual(product['sold_quantity'], '3')
 
+	def test_stock_movements_are_newest_first_with_current_timestamps(self):
+		from django.utils import timezone
+		from datetime import timedelta
+
+		older = StockMovement.objects.create(
+			branch='BranchA', product_id=1001, product_name='Older Product',
+			movement_type='received', quantity=1, source='sync',
+		)
+		newer = StockMovement.objects.create(
+			branch='BranchA', product_id=1002, product_name='Newer Product',
+			movement_type='received', quantity=2, source='sync',
+		)
+		StockMovement.objects.filter(pk=older.pk).update(
+			created_at=timezone.now() - timedelta(minutes=5),
+		)
+
+		response = self.client.get('/api/stock/movements/?branch=BranchA')
+
+		self.assertEqual(response.status_code, 200)
+		movements = response.json()['movements']
+		self.assertEqual([movement['product_id'] for movement in movements], [newer.product_id, older.product_id])
+		self.assertTrue(movements[0]['created_at'])
+
 	def test_catalog_sync_records_reduction_as_sold(self):
 		ProductCatalog.objects.create(
 			branch='BranchA', product_id=999, product_name='Test Product', available_quantity=10,

@@ -250,6 +250,8 @@
   let branchProductsLoading = false;
   let branchProductsRequestId = 0;
   let stockMovementsLoading = false;
+  let stockMovementsRequestId = 0;
+  let stockMovementsController = null;
   let stockTransfersLoading = false;
   let refreshAllLoading = false;
   const transferQueue = [];
@@ -413,28 +415,36 @@
     return loadBranchProducts(true);
   }
   async function loadStockMovements() {
-    if (stockMovementsLoading) return;
+    const requestId = ++stockMovementsRequestId;
+    stockMovementsController?.abort();
     if (!activityBranch.value) {
       movementStatus.textContent = 'Select a branch.';
       stockMovements.innerHTML = '<p class="empty">Select a branch to view stock activity.</p>';
       return;
     }
     const branch = activityBranch.value;
+    const controller = new AbortController();
+    stockMovementsController = controller;
     stockMovementsLoading = true;
     try {
-      const response = await fetch(`/api/stock/movements/?branch=${encodeURIComponent(branch)}&_=${Date.now()}`, { cache: 'no-store' });
+      const response = await fetch(`/api/stock/movements/?branch=${encodeURIComponent(branch)}&_=${Date.now()}`, { cache: 'no-store', signal: controller.signal });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Stock activity unavailable.');
-      const movements = data.movements || [];
+      if (requestId !== stockMovementsRequestId || activityBranch.value !== branch) return;
+      const movements = (data.movements || []).sort((left, right) => new Date(right.created_at) - new Date(left.created_at));
       movementStatus.textContent = `${movements.length} movement${movements.length === 1 ? '' : 's'}`;
       stockMovements.innerHTML = movements.length
-        ? `<table class="movement-table"><thead><tr><th>Product</th><th>Type</th><th>Quantity</th><th>Source</th><th>Date</th></tr></thead><tbody>${movements.map(movement => `<tr><td>${escapeHtml(movement.product_name)}<small>ID ${escapeHtml(movement.product_id)}</small></td><td class="${escapeHtml(movement.movement_type)}">${escapeHtml(movement.movement_type)}</td><td>${escapeHtml(movement.quantity)}</td><td>${escapeHtml(movement.source)}</td><td>${escapeHtml(new Intl.DateTimeFormat(undefined, {dateStyle:'medium', timeStyle:'short'}).format(new Date(movement.created_at)))}</td></tr>`).join('')}</tbody></table>`
+        ? `<table class="movement-table"><thead><tr><th>Product</th><th>Type</th><th>Quantity</th><th>Source</th><th>Date</th></tr></thead><tbody>${movements.map(movement => { const createdAt = new Date(movement.created_at); return `<tr><td>${escapeHtml(movement.product_name)}<small>ID ${escapeHtml(movement.product_id)}</small></td><td class="${escapeHtml(movement.movement_type)}">${escapeHtml(movement.movement_type)}</td><td>${escapeHtml(movement.quantity)}</td><td>${escapeHtml(movement.source)}</td><td><time datetime="${escapeHtml(movement.created_at)}">${escapeHtml(new Intl.DateTimeFormat(undefined, {dateStyle:'medium', timeStyle:'short'}).format(createdAt))}</time></td></tr>`; }).join('')}</tbody></table>`
         : '<p class="empty">No stock movements recorded yet.</p>';
     } catch (error) {
+      if (error.name === 'AbortError' || requestId !== stockMovementsRequestId) return;
       movementStatus.textContent = 'Activity unavailable.';
       stockMovements.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
     } finally {
-      stockMovementsLoading = false;
+      if (requestId === stockMovementsRequestId) {
+        stockMovementsLoading = false;
+        stockMovementsController = null;
+      }
     }
   }
   async function loadStockTransfers() {
