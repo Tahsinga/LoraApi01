@@ -345,14 +345,13 @@
   }
   async function loadMainCatalogProducts() {
     try {
-      const response = await fetch(`/api/products/?branch=MAIN&_=${Date.now()}`, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+      const response = await fetch(`/api/products/?branch=MAIN&_=${Date.now()}`, { cache: 'no-store', signal: AbortSignal.timeout(30000) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || 'Main products could not be loaded.');
       mainCatalogProducts = data.products || [];
       document.querySelector('#transfer-products').innerHTML = productOptions(mainCatalogProducts);
     } catch (error) {
-      mainCatalogProducts = [];
-      document.querySelector('#transfer-products').innerHTML = '';
+      if (!mainCatalogProducts.length) document.querySelector('#transfer-products').innerHTML = '';
     }
   }
   refreshStockButton.addEventListener('click', () => loadBranchProducts(true));
