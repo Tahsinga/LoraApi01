@@ -85,6 +85,8 @@
     .product-row small { display:block; margin-top:4px; color:var(--muted); font:12px Arial,sans-serif; }
     .product-row span { color:var(--teal-dark); font:700 11px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; }
     .stock-table-wrap { overflow-x:auto; margin-top:16px; border:1px solid var(--line); }
+    .loading-state { display:flex; align-items:center; justify-content:center; gap:10px; min-height:120px; }
+    .loading-spinner { display:inline-block; width:22px; height:22px; border:3px solid #c9ddd5; border-top-color:var(--teal); border-radius:50%; animation:branch-card-spin .8s linear infinite; }
     .stock-table { width:100%; min-width:680px; border-collapse:collapse; }
     .stock-table th { padding:11px 13px; color:var(--muted); border-bottom:1px solid var(--line); text-align:left; font:700 10px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; }
     .stock-table td { padding:13px; border-bottom:1px solid var(--line); font:14px Arial,sans-serif; }
@@ -347,6 +349,10 @@
       : '<p class="empty">No products match your search.</p>';
   }
   async function loadBranchProducts(showLoading = true) {
+    if (showLoading) {
+      branchProducts.innerHTML = '<p class="empty loading-state"><span class="loading-spinner" aria-hidden="true"></span>Loading products...</p>';
+      setBranchCardsLoading(true);
+    }
     if (branchProductsLoading) {
       if (showLoading) branchProductsRefreshQueued = true;
       return;
@@ -390,6 +396,7 @@
       loadStockButton.disabled = false;
       loadStockButton.textContent = 'Load stock';
       loadStockButton.setAttribute('aria-busy', 'false');
+      if (!branchProductsRefreshQueued) setBranchCardsLoading(false);
       if (branchProductsRefreshQueued) {
         branchProductsRefreshQueued = false;
         loadBranchProducts(true);
@@ -551,8 +558,8 @@
     branchPriceInput.placeholder = 'Current price appears after selecting a product';
     branchProductSearch.value = '';
     activityBranch.value = selectedBranch.value;
-    branchProducts.innerHTML = '<p class="empty">Loading branch products...</p>';
-    stockMovements.innerHTML = '<p class="empty">Loading stock activity...</p>';
+    branchProducts.innerHTML = '<p class="empty loading-state"><span class="loading-spinner" aria-hidden="true"></span>Loading products...</p>';
+    stockMovements.innerHTML = '<p class="empty loading-state"><span class="loading-spinner" aria-hidden="true"></span>Loading stock activity...</p>';
     try {
       await Promise.all([requestBranchLoad(), loadStockMovements()]);
     } finally {
