@@ -22,6 +22,10 @@ class DeletionRecord(models.Model):
 
 	class Meta:
 		ordering = ['timestamp']
+		indexes = [
+			models.Index(fields=['status', 'timestamp']),
+			models.Index(fields=['status', 'confirmation_timestamp']),
+		]
 
 
 class SalesReportRequest(models.Model):
@@ -79,6 +83,10 @@ class StockTransfer(models.Model):
 
 	class Meta:
 		ordering = ['created_at']
+		indexes = [
+			models.Index(fields=['branch', 'created_at']),
+			models.Index(fields=['branch', 'product_id', 'created_at']),
+		]
 
 
 class StockMovement(models.Model):
@@ -93,6 +101,10 @@ class StockMovement(models.Model):
 
 	class Meta:
 		ordering = ['created_at']
+		indexes = [
+			models.Index(fields=['created_at']),
+			models.Index(fields=['branch', 'created_at']),
+		]
 
 
 class ProductCatalog(models.Model):
@@ -115,6 +127,10 @@ class ProductCatalog(models.Model):
 
 	class Meta:
 		ordering = ['product_name', 'product_id']
+		indexes = [
+			models.Index(fields=['branch', 'branch_confirmed']),
+			models.Index(fields=['branch', 'product_name']),
+		]
 		constraints = [
 			models.UniqueConstraint(fields=['branch', 'product_id'], name='unique_branch_product'),
 		]
