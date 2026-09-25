@@ -406,7 +406,12 @@
       const data = await response.json();
       const branches = data.branches || [];
       const availableBranches = branches.filter(branch => branch.online === true);
-      const branchOptions = availableBranches.length ? '<option value="">Select branch</option>' + availableBranches.map(branch => `<option value="${escapeHtml(branch.name)}">${escapeHtml(branch.name)}</option>`).join('') : '<option value="">No online branches</option>';
+      const currentBranchOption = currentBranch && !availableBranches.some(branch => branch.name === currentBranch)
+        ? `<option value="${escapeHtml(currentBranch)}">${escapeHtml(currentBranch)} (reconnecting...)</option>`
+        : '';
+      const branchOptions = availableBranches.length || currentBranchOption
+        ? '<option value="">Select branch</option>' + availableBranches.map(branch => `<option value="${escapeHtml(branch.name)}">${escapeHtml(branch.name)}</option>`).join('') + currentBranchOption
+        : '<option value="">No online branches</option>';
       selectedBranch.innerHTML = branchOptions;
       activityBranch.innerHTML = branchOptions;
       if (currentBranch && [...selectedBranch.options].some(option => option.value === currentBranch)) selectedBranch.value = currentBranch;
