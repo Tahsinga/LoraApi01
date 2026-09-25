@@ -1,3 +1,4 @@
+import hashlib
 import json
 import time
 from datetime import timedelta
@@ -8,6 +9,7 @@ from threading import Lock
 from django.contrib.auth import get_user_model, update_session_auth_hash
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.forms import SetPasswordForm, UserCreationForm
+from django.core.cache import cache
 from django.db import OperationalError, close_old_connections, transaction
 from django.db.models import IntegerField, Max, Q, Sum
 from django.db.models.functions import Cast
@@ -50,6 +52,13 @@ This ensures the SAME invoice number that was cancelled is deleted with 100% acc
 CONNECTED_BRANCHES = {}
 BRANCH_ONLINE_SECONDS = 120
 PRODUCT_SYNC_QUEUE = Lock()
+PRODUCT_CACHE_VERSION_KEY = 'lora:product-cache-version'
+PRODUCT_CACHE_SECONDS = 15
+
+
+def invalidate_product_catalog_cache():
+    version = cache.get(PRODUCT_CACHE_VERSION_KEY, 0)
+    cache.set(PRODUCT_CACHE_VERSION_KEY, int(version) + 1, None)
 
 
 def retry_on_database_lock(view_func):
@@ -834,6 +843,7 @@ def request_branch_price_update(request):
     catalog.pending_selling_price = selling_price
     catalog.pending_price_update = True
     catalog.save(update_fields=['product_name', 'pending_selling_price', 'pending_price_update', 'updated_at'])
+    invalidate_product_catalog_cache()
     return JsonResponse({
         'status': 'accepted',
         'branch': catalog.branch,
@@ -889,6 +899,7 @@ def create_branch_product(request):
             branch_confirmed=False,
             pending_product_creation=True,
         )
+    invalidate_product_catalog_cache()
 
     return JsonResponse({
         'status': 'accepted',
@@ -945,6 +956,7 @@ def complete_branch_product_creation(request):
                 product_id=actual_product_id,
                 defaults={'product_name': product.product_name, 'quantity': 0},
             )
+        invalidate_product_catalog_cache()
     return JsonResponse({'status': 'ok', 'branch': product.branch, 'product_id': product.product_id, 'success': success})
 
 
@@ -986,6 +998,13 @@ def product_catalog(request):
 
     query = str(request.GET.get('q', '')).strip()
     branch = str(request.GET.get('branch', '')).strip()
+    cache_version = cache.get(PRODUCT_CACHE_VERSION_KEY, 0)
+    request_key = hashlib.sha256(f'{branch.casefold()}:{query.casefold()}'.encode()).hexdigest()
+    cache_key = f'lora:products:{cache_version}:{request_key}'
+    cached_products = cache.get(cache_key)
+    if cached_products is not None:
+        return JsonResponse({'status': 'ok', 'products': cached_products})
+
     products = ProductCatalog.objects.filter(branch__iexact=branch or 'MAIN')
     if branch and branch.casefold() != 'main':
         products = products.filter(branch_confirmed=True)
@@ -998,7 +1017,9 @@ def product_catalog(request):
         )[:30]
     else:
         products = products[:3000]
-    return JsonResponse({'status': 'ok', 'products': [product_payload(product) for product in products]})
+    product_rows = [product_payload(product) for product in products]
+    cache.set(cache_key, product_rows, PRODUCT_CACHE_SECONDS)
+    return JsonResponse({'status': 'ok', 'products': product_rows})
 
 
 @csrf_exempt
@@ -1113,6 +1134,7 @@ def sync_product_catalog(request):
             catalog.save()
             updated += 1
 
+    invalidate_product_catalog_cache()
     return JsonResponse({'status': 'ok', 'updated': updated})
 
 
