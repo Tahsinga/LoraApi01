@@ -47,7 +47,8 @@
     .refresh-stock-button { width:auto; margin:0; padding:9px 12px; background:var(--teal); }
     .refresh-stock-button:hover { background:var(--teal-dark); }
     .branch-load-row { display:block; margin-bottom:20px; }
-    .selected-branch { display:block; margin-bottom:8px; color:#435153; font:700 11px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; }
+    .selected-branch { display:flex; flex-direction:row; align-items:center; justify-content:space-between; gap:14px; margin-bottom:8px; color:#435153; font:700 11px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; }
+    .selected-branch select { width:auto; min-width:180px; }
     .branch-load-actions { display:flex; gap:10px; align-items:center; }
     .load-stock-button { flex:0 0 auto; width:auto; margin:0; padding:14px 16px; background:var(--teal); }
     .load-stock-button:hover { background:var(--teal-dark); }
@@ -145,7 +146,7 @@
       </div>
       <div class="panel transfer-panel branch-data-card" data-branch-loading-card>
         <div class="branch-load-row">
-          <label class="selected-branch">Selected branch<select id="selected-branch" required><option value="">Loading branches...</option></select></label>
+          <label class="selected-branch"><span>Selected branch</span><select id="selected-branch" required><option value="">Loading branches...</option></select></label>
           <div class="branch-load-actions"><button id="load-stock-button" class="load-stock-button" type="button">Load stock</button>
           <button id="refresh-stock-button" class="refresh-stock-button" type="button">Refresh figures</button></div>
         </div>
