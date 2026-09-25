@@ -602,6 +602,10 @@ class DeletionQueueTests(TestCase):
 		self.assertEqual(response.status_code, 202)
 		self.assertEqual(self.client.get('/api/main-sync/').json()['pending_count'], 1)
 
+	def test_dashboard_and_queue_are_not_cached(self):
+		self.assertEqual(self.client.get('/').headers['Cache-Control'], 'no-store, no-cache, must-revalidate, max-age=0')
+		self.assertEqual(self.client.get('/api/main-sync/').headers['Cache-Control'], 'no-store, no-cache, must-revalidate, max-age=0')
+
 	def test_confirmation_moves_record_to_processed_count(self):
 		response = self.client.post(
 			'/api/cancel-sale/',

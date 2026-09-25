@@ -201,10 +201,13 @@ def stock_summary_payload(product, branch):
 def index(request):
     """Browser dashboard for managing branch sale cancellations."""
     cleanup_queues()
-    return render(request, 'loraApi/dashboard.html', {
+    response = render(request, 'loraApi/dashboard.html', {
         'pending_count': DeletionRecord.objects.filter(status__in=['pending', 'processing']).count(),
         'processed_count': DeletionRecord.objects.filter(status='processed').count(),
     })
+    response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response['Pragma'] = 'no-cache'
+    return response
 
 
 @login_required(login_url='/login/')
@@ -1587,7 +1590,7 @@ def main_sync(request):
         ]
         queue.sort(key=lambda item: item['timestamp'], reverse=True)
 
-        return JsonResponse({
+        response = JsonResponse({
             'status': 'ok',
             'service': 'main_sync_trigger',
             'pending_deletions': pending,
@@ -1596,6 +1599,8 @@ def main_sync(request):
             'processed_count': DeletionRecord.objects.filter(status='processed').count(),
             'queue': queue[:40],
         })
+        response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        return response
 
     try:
         payload = json.loads(request.body or '{}')

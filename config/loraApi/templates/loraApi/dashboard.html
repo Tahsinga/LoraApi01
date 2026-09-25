@@ -150,11 +150,15 @@
   }
   async function refreshQueue() {
     try {
-      const response = await fetch('/api/main-sync/');
+      const response = await fetch(`/api/main-sync/?_=${Date.now()}`, { cache: 'no-store' });
       const data = await response.json();
       document.querySelector('#pending').textContent = data.pending_count ?? 0;
       document.querySelector('#processed').textContent = data.processed_count ?? 0;
-      const items = data.queue ?? [];
+      const items = data.queue ?? (data.pending_deletions ?? []).map(item => ({
+        type: 'cancellation', id: item.id, branch: item.branch,
+        label: `Cancellation ${item.invoice}`, detail: 'Whole invoice', status: item.status,
+        timestamp: item.timestamp, completed_at: item.confirmation_timestamp,
+      }));
       const statusLabels = { pending: 'Queued', processing: 'Sent', printed: 'Printed', processed: 'Completed', failed: 'Failed' };
       rows.innerHTML = items.length ? items.map(item => `<div class="row"><div><b>${escapeHtml(item.label)}</b><small>${escapeHtml(item.branch)} · ${escapeHtml(item.detail)}</small></div><span class="badge ${escapeHtml(item.status)}">${escapeHtml(statusLabels[item.status] || item.status)}</span></div>`).join('') : '<div class="empty">No commands are waiting or recently completed.</div>';
     } catch (error) { rows.innerHTML = '<div class="empty">Queue unavailable. Try again.</div>'; }
