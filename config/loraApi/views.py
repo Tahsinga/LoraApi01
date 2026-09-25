@@ -19,7 +19,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.views.decorators.csrf import csrf_exempt
 
-from .models import DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, SalesReportRequest, StockMovement, StockTransfer
+from .models import BranchHeartbeat, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, SalesReportRequest, StockMovement, StockTransfer
 from .state_store import sync_users_to_state
 
 """
@@ -49,7 +49,6 @@ This ensures the SAME invoice number that was cancelled is deleted with 100% acc
 ================================================================================
 """
 
-CONNECTED_BRANCHES = {}
 BRANCH_ONLINE_SECONDS = 120
 PRODUCT_SYNC_QUEUE = Lock()
 PRODUCT_CACHE_VERSION_KEY = 'lora:product-cache-version'
@@ -1313,21 +1312,28 @@ def branch_status(request):
         if not branch or device_role.casefold() != 'branch pc':
             return JsonResponse({'status': 'error', 'message': 'A saved branch name and Branch PC device role are required.'}, status=400)
 
-        CONNECTED_BRANCHES[branch.lower()] = {
-            'name': branch,
-            'last_seen': now,
-            'device_role': 'Branch PC',
-        }
+        BranchHeartbeat.objects.update_or_create(
+            branch__iexact=branch,
+            defaults={
+                'branch': branch,
+                'last_seen': timezone.now(),
+                'device_role': 'Branch PC',
+            },
+        )
         return JsonResponse({'status': 'online', 'branch': branch})
 
     if request.method == 'GET':
-        online = [
-            branch for branch in CONNECTED_BRANCHES.values()
-            if now - branch['last_seen'] <= BRANCH_ONLINE_SECONDS
+        stale_before = timezone.now() - timedelta(seconds=BRANCH_ONLINE_SECONDS)
+        branches = [
+            {
+                'name': branch.branch,
+                'last_seen': branch.last_seen.timestamp(),
+                'device_role': branch.device_role,
+                'online': True,
+            }
+            for branch in BranchHeartbeat.objects.filter(last_seen__gt=stale_before)
         ]
-        branches_by_name = {branch['name'].lower(): {**branch, 'online': True} for branch in online}
-        branches = sorted(branches_by_name.values(), key=lambda branch: branch['name'].lower())
-        return JsonResponse({'status': 'ok', 'branches': branches, 'count': len(branches), 'online_count': len(online)})
+        return JsonResponse({'status': 'ok', 'branches': branches, 'count': len(branches), 'online_count': len(branches)})
 
     return JsonResponse({'status': 'error', 'message': 'Use GET or POST method'}, status=405)
 
