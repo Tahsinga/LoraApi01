@@ -249,7 +249,7 @@
   let branchCatalogProducts = [];
   let mainCatalogProducts = [];
   let branchProductsLoading = false;
-  let branchProductsRefreshQueued = false;
+  let branchProductsRequestId = 0;
   let stockMovementsLoading = false;
   let stockTransfersLoading = false;
   let refreshAllLoading = false;
@@ -349,15 +349,12 @@
       : '<p class="empty">No products match your search.</p>';
   }
   async function loadBranchProducts(showLoading = true) {
+    const requestId = ++branchProductsRequestId;
+    const branch = selectedBranch.value;
     if (showLoading) {
       branchProducts.innerHTML = '<p class="empty loading-state"><span class="loading-spinner" aria-hidden="true"></span>Loading products...</p>';
       setBranchCardsLoading(true);
     }
-    if (branchProductsLoading) {
-      if (showLoading) branchProductsRefreshQueued = true;
-      return;
-    }
-    const branch = selectedBranch.value;
     branchProductsLoading = true;
     if (showLoading) {
       loadStockButton.disabled = true;
@@ -365,6 +362,7 @@
       loadStockButton.setAttribute('aria-busy', 'true');
     }
     if (!branch) {
+      if (requestId !== branchProductsRequestId) return;
       branchCatalogProducts = [];
       branchPriceProducts.innerHTML = '';
       branchProducts.innerHTML = '<p class="empty">Select a branch to see its products.</p>';
@@ -380,6 +378,7 @@
       const response = await fetch(`/api/stock/summary/?branch=${encodeURIComponent(branch)}&_=${Date.now()}`, { cache: 'no-store', signal: AbortSignal.timeout(30000) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || 'Products could not be loaded.');
+      if (requestId !== branchProductsRequestId) return;
       branchCatalogProducts = data.products || [];
       document.querySelector('#main-stock-products').innerHTML = productOptions(branchCatalogProducts);
       branchPriceProducts.innerHTML = productOptions(branchCatalogProducts);
@@ -388,19 +387,17 @@
       if (mainStockProductOptions.classList.contains('is-open')) renderMainStockProductOptions();
       if (branchPriceProductOptions.classList.contains('is-open')) renderBranchPriceProductOptions();
     } catch (error) {
+      if (requestId !== branchProductsRequestId) return;
       productCatalogStatus.textContent = branchCatalogProducts.length
         ? `Refresh failed; showing the last ${branchCatalogProducts.length} products.`
         : 'Products unavailable.';
     } finally {
+      if (requestId !== branchProductsRequestId) return;
       branchProductsLoading = false;
       loadStockButton.disabled = false;
       loadStockButton.textContent = 'Load stock';
       loadStockButton.setAttribute('aria-busy', 'false');
-      if (!branchProductsRefreshQueued) setBranchCardsLoading(false);
-      if (branchProductsRefreshQueued) {
-        branchProductsRefreshQueued = false;
-        loadBranchProducts(true);
-      }
+      if (showLoading) setBranchCardsLoading(false);
     }
   }
   async function loadMainCatalogProducts() {
