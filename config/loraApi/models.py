@@ -134,3 +134,15 @@ class ProductCatalog(models.Model):
 		constraints = [
 			models.UniqueConstraint(fields=['branch', 'product_id'], name='unique_branch_product'),
 		]
+
+
+class BranchHeartbeat(models.Model):
+	branch = models.CharField(max_length=255, unique=True)
+	device_role = models.CharField(max_length=50, default='Branch PC')
+	last_seen = models.DateTimeField()
+
+	class Meta:
+		ordering = ['branch']
+		indexes = [
+			models.Index(fields=['last_seen']),
+		]
