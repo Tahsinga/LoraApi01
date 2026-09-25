@@ -7,11 +7,10 @@ services:
       pip install --upgrade pip
       pip install -r requirements.txt
       python config/manage.py migrate --noinput
+      python config/manage.py restore_seed_state
       python config/manage.py collectstatic --noinput
     startCommand: |
-      python config/manage.py migrate --noinput &&
-      python config/manage.py restore_seed_state &&
-      gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 300 --graceful-timeout 30
+      gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 4 --worker-class gthread --preload --timeout 60 --graceful-timeout 30
     envVars:
       - key: PYTHON_VERSION
         value: 3.13
