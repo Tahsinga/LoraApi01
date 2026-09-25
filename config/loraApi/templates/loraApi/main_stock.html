@@ -47,6 +47,7 @@
     .refresh-stock-button { width:auto; margin:0; padding:9px 12px; background:var(--teal); }
     .refresh-stock-button:hover { background:var(--teal-dark); }
     .selected-branch { margin:0 0 20px; padding:14px 16px; background:#e7f2ee; border:1px solid #c9ddd5; border-left:4px solid var(--teal); }
+    .selected-branch-name { display:block; margin-top:7px; color:var(--ink); font:600 18px Georgia,serif; letter-spacing:0; text-transform:none; }
     .selected-branch select { height:50px; font-size:18px; font-weight:600; }
     .branch-load-row { display:flex; gap:10px; align-items:end; margin-bottom:20px; }
     .branch-load-row .selected-branch { flex:1; margin:0; }
@@ -147,13 +148,13 @@
       </div>
       <div class="panel transfer-panel branch-data-card" data-branch-loading-card>
         <div class="branch-load-row">
-          <label class="selected-branch">Selected branch<select id="selected-branch" required><option value="">Loading branches...</option></select></label>
+          <div class="selected-branch"><span>Selected branch</span><span id="selected-branch-name" class="selected-branch-name">Loading branches...</span><select id="selected-branch" hidden required><option value="">Loading branches...</option></select></div>
           <button id="load-stock-button" class="load-stock-button" type="button">Load stock</button>
           <button id="refresh-stock-button" class="refresh-stock-button" type="button">Refresh figures</button>
         </div>
         <p class="sub">Filter and select a Main POS product, then enter the quantity to send.</p>
         <form id="transfer-form" class="transfer-form">
-          <label class="product-picker">Product<input id="transfer-search" type="search" list="transfer-products" autocomplete="off" required placeholder="Type to filter products"><datalist id="transfer-products"></datalist><div id="transfer-product-options" class="product-picker-options" role="listbox"></div></label>
+          <label class="product-picker">Product<input id="transfer-search" type="search" list="transfer-products" autocomplete="off" required placeholder="Type to filter products"><datalist id="transfer-products"></datalist></label>
           <input id="transfer-product" type="hidden"><input id="transfer-name" type="hidden">
           <label>Quantity<input id="transfer-quantity" type="number" min="1" step="1" required></label>
           <button id="transfer-submit" type="submit">Send stock to branch</button>
@@ -216,6 +217,7 @@
   const stockActivityPanel = document.querySelector('#stock-activity-panel');
   const sectionJumpButton = document.querySelector('#section-jump-button');
   const activityBranch = document.querySelector('#activity-branch');
+  const selectedBranchName = document.querySelector('#selected-branch-name');
   const movementStatus = document.querySelector('#movement-status');
   const stockTransfers = document.querySelector('#stock-transfers');
   const branchLoadingCards = [...document.querySelectorAll('[data-branch-loading-card]')];
@@ -256,7 +258,7 @@
   let activeTransfer = null;
   const productSearches = [
     { source: 'branch', input: document.querySelector('#main-stock-search'), list: document.querySelector('#main-stock-products'), options: document.querySelector('#main-stock-product-options'), id: document.querySelector('#main-stock-product'), name: document.querySelector('#main-stock-name') },
-    { source: 'main', input: document.querySelector('#transfer-search'), list: document.querySelector('#transfer-products'), options: document.querySelector('#transfer-product-options'), id: document.querySelector('#transfer-product'), name: document.querySelector('#transfer-name') },
+    { source: 'main', input: document.querySelector('#transfer-search'), list: document.querySelector('#transfer-products'), id: document.querySelector('#transfer-product'), name: document.querySelector('#transfer-name') },
     { source: 'branch', input: branchPriceSearch, list: branchPriceProducts, options: branchPriceProductOptions, id: branchPriceProduct, name: branchPriceName },
   ];
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
@@ -267,7 +269,7 @@
       : '<span class="empty">No matching products.</span>';
     options.classList.add('is-open');
   };
-  const closePickerOptions = options => options.classList.remove('is-open');
+  const closePickerOptions = options => options?.classList.remove('is-open');
   function renderTransferQueue() {
     const waiting = transferQueue.map((transfer, index) => `<div class="transfer-queue-item"><div><div class="transfer-queue-product">${escapeHtml(transfer.product_name)}</div><div class="transfer-queue-detail">${escapeHtml(transfer.quantity)} to ${escapeHtml(transfer.branch)} · #${index + 1} waiting</div></div><span class="transfer-queue-state">Waiting</span></div>`).join('');
     const sending = activeTransfer ? `<div class="transfer-queue-item"><div><div class="transfer-queue-product">${escapeHtml(activeTransfer.product_name)}</div><div class="transfer-queue-detail">${escapeHtml(activeTransfer.quantity)} to ${escapeHtml(activeTransfer.branch)}</div></div><span class="transfer-queue-state sending">Sending</span></div>` : '';
@@ -299,14 +301,9 @@
     }
   }
   function selectProduct(product) {
-    productSearches.forEach(control => {
-      const selected = control.source === 'main'
-        ? mainCatalogProducts.find(item => String(item.product_id) === String(product.product_id)) || product
-        : product;
-      control.input.value = selected.product_name;
-      control.id.value = selected.product_id;
-      control.name.value = selected.product_name;
-    });
+    document.querySelector('#main-stock-search').value = product.product_name;
+    document.querySelector('#main-stock-product').value = product.product_id;
+    document.querySelector('#main-stock-name').value = product.product_name;
     void loadSelectedBranchPrice(product.product_id, product.product_name);
     document.querySelector('#transfer-quantity').focus();
   }
@@ -447,8 +444,10 @@
         : '<option value="">No online branches</option>';
       selectedBranch.innerHTML = branchOptions;
       activityBranch.innerHTML = branchOptions;
+      if (!currentBranch && availableBranches.length) selectedBranch.value = availableBranches[0].name;
       if (currentBranch && [...selectedBranch.options].some(option => option.value === currentBranch)) selectedBranch.value = currentBranch;
       if (currentBranch && [...activityBranch.options].some(option => option.value === currentBranch)) activityBranch.value = currentBranch;
+      selectedBranchName.textContent = selectedBranch.value || 'No online branch';
       if (selectedBranch.value && selectedBranch.value !== previousBranch) selectedBranch.dispatchEvent(new Event('change'));
     } catch (error) {
       if (!selectedBranch.options.length) selectedBranch.innerHTML = '<option value="">Branches unavailable</option>';
@@ -464,7 +463,7 @@
   function setupProductSearch(control) {
     let products = [];
     let timer;
-    const openOptions = () => control.options.classList.add('is-open');
+    const openOptions = () => control.options?.classList.add('is-open');
     const catalogProducts = () => control.source === 'main' ? mainCatalogProducts : branchCatalogProducts;
     const filterProducts = query => catalogProducts().filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query))).slice(0, 100);
     const applySelectedProduct = () => {
@@ -481,7 +480,7 @@
       openOptions();
       const query = control.input.value.trim().toLowerCase();
       products = filterProducts(query);
-      renderPickerOptions(control.options, products);
+      if (control.options) renderPickerOptions(control.options, products);
       clearTimeout(timer);
       timer = setTimeout(async () => {
         const searchQuery = control.input.value.trim();
@@ -493,17 +492,18 @@
           const data = await response.json();
           products = (data.products || filterProducts(searchQuery.toLowerCase())).filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(searchQuery.toLowerCase()))).slice(0, 100);
           control.list.innerHTML = productOptions(products);
-          renderPickerOptions(control.options, products);
+          if (control.options) renderPickerOptions(control.options, products);
         } catch (error) { control.list.innerHTML = ''; }
       }, 180);
     });
     control.input.addEventListener('change', applySelectedProduct);
     control.input.addEventListener('focus', () => {
+      if (!control.options) return;
       products = filterProducts(control.input.value.trim().toLowerCase());
       renderPickerOptions(control.options, products);
     });
-    control.options.addEventListener('mousedown', event => event.preventDefault());
-    control.options.addEventListener('click', event => {
+    control.options?.addEventListener('mousedown', event => event.preventDefault());
+    control.options?.addEventListener('click', event => {
       const option = event.target.closest('[data-product-id]');
       if (!option) return;
       const product = products.find(item => String(item.product_id) === option.dataset.productId)
