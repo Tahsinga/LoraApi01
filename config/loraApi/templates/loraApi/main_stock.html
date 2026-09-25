@@ -455,6 +455,8 @@
     let products = [];
     let timer;
     const openOptions = () => control.options.classList.add('is-open');
+    const catalogProducts = () => control.source === 'main' ? mainCatalogProducts : branchCatalogProducts;
+    const filterProducts = query => catalogProducts().filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query))).slice(0, 100);
     const applySelectedProduct = () => {
       const selected = [...products, ...(control.source === 'main' ? mainCatalogProducts : branchCatalogProducts)].find(product => product.product_name === control.input.value);
       if (!selected) return;
@@ -467,23 +469,29 @@
       control.id.value = ''; control.name.value = '';
       applySelectedProduct();
       openOptions();
+      const query = control.input.value.trim().toLowerCase();
+      products = filterProducts(query);
+      renderPickerOptions(control.options, products);
       clearTimeout(timer);
       timer = setTimeout(async () => {
-        const query = control.input.value.trim();
+        const searchQuery = control.input.value.trim();
         const sourceBranch = control.source === 'main' ? 'MAIN' : selectedBranch.value;
         if (!sourceBranch) { control.list.innerHTML = ''; return; }
-        if (query.length < 2) { control.list.innerHTML = ''; return; }
+        if (searchQuery.length < 2) { control.list.innerHTML = ''; return; }
         try {
-          const response = await fetch(`/api/products/?q=${encodeURIComponent(query)}&branch=${encodeURIComponent(sourceBranch)}&_=${Date.now()}`, { cache: 'no-store' });
+          const response = await fetch(`/api/products/?q=${encodeURIComponent(searchQuery)}&branch=${encodeURIComponent(sourceBranch)}&_=${Date.now()}`, { cache: 'no-store' });
           const data = await response.json();
-          products = data.products || [];
+          products = data.products || filterProducts(searchQuery.toLowerCase());
           control.list.innerHTML = productOptions(products);
           renderPickerOptions(control.options, products);
         } catch (error) { control.list.innerHTML = ''; }
       }, 180);
     });
     control.input.addEventListener('change', applySelectedProduct);
-    control.input.addEventListener('focus', openOptions);
+    control.input.addEventListener('focus', () => {
+      products = filterProducts(control.input.value.trim().toLowerCase());
+      renderPickerOptions(control.options, products);
+    });
     control.options.addEventListener('mousedown', event => event.preventDefault());
     control.options.addEventListener('click', event => {
       const option = event.target.closest('[data-product-id]');
