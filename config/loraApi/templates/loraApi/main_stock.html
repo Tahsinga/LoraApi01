@@ -154,7 +154,7 @@
         </div>
         <p class="sub">Filter and select a Main POS product, then enter the quantity to send.</p>
         <form id="transfer-form" class="transfer-form">
-          <label class="product-picker">Product<input id="transfer-search" type="search" list="transfer-products" autocomplete="off" required placeholder="Type to filter products"><datalist id="transfer-products"></datalist></label>
+          <label class="product-picker">Product<input id="transfer-search" type="search" list="transfer-products" autocomplete="off" required placeholder="Type to filter products"><datalist id="transfer-products"></datalist><div id="transfer-product-options" class="product-picker-options" role="listbox"></div></label>
           <input id="transfer-product" type="hidden"><input id="transfer-name" type="hidden">
           <label>Quantity<input id="transfer-quantity" type="number" min="1" step="1" required></label>
           <button id="transfer-submit" type="submit">Send stock to branch</button>
@@ -258,7 +258,7 @@
   let activeTransfer = null;
   const productSearches = [
     { source: 'branch', input: document.querySelector('#main-stock-search'), list: document.querySelector('#main-stock-products'), options: document.querySelector('#main-stock-product-options'), id: document.querySelector('#main-stock-product'), name: document.querySelector('#main-stock-name') },
-    { source: 'main', input: document.querySelector('#transfer-search'), list: document.querySelector('#transfer-products'), id: document.querySelector('#transfer-product'), name: document.querySelector('#transfer-name') },
+    { source: 'main', input: document.querySelector('#transfer-search'), list: document.querySelector('#transfer-products'), options: document.querySelector('#transfer-product-options'), id: document.querySelector('#transfer-product'), name: document.querySelector('#transfer-name') },
     { source: 'branch', input: branchPriceSearch, list: branchPriceProducts, options: branchPriceProductOptions, id: branchPriceProduct, name: branchPriceName },
   ];
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
@@ -465,7 +465,7 @@
     let timer;
     const openOptions = () => control.options?.classList.add('is-open');
     const catalogProducts = () => control.source === 'main' ? mainCatalogProducts : branchCatalogProducts;
-    const filterProducts = query => catalogProducts().filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query))).slice(0, 100);
+    const filterProducts = query => catalogProducts().filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
     const applySelectedProduct = () => {
       const selected = [...products, ...(control.source === 'main' ? mainCatalogProducts : branchCatalogProducts)].find(product => product.product_name === control.input.value);
       if (!selected) return;
