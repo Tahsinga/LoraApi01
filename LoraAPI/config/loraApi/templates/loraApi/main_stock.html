@@ -23,6 +23,10 @@
     .workspace { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
     .stock-actions { display:grid; grid-column:1/-1; grid-template-columns:minmax(0, 1fr); gap:20px; }
     .panel { background:var(--white); border:1px solid var(--line); padding:26px; box-shadow:0 12px 35px rgba(28,62,54,.06); }
+    .branch-data-card { position:relative; }
+    .branch-data-card.is-loading::before { content:''; position:absolute; inset:0; z-index:2; background:rgba(255,255,255,.72); }
+    .branch-data-card.is-loading::after { content:''; position:absolute; top:50%; left:50%; z-index:3; width:30px; height:30px; margin:-15px 0 0 -15px; border:3px solid #c9ddd5; border-top-color:var(--teal); border-radius:50%; animation:branch-card-spin .8s linear infinite; }
+    @keyframes branch-card-spin { to { transform:rotate(360deg); } }
     .panel-wide { grid-column:1/-1; }
     h2 { margin:0 0 5px; font-size:25px; font-weight:500; }
     .sub { margin:0 0 22px; color:var(--muted); font:14px/1.5 Arial,sans-serif; }
@@ -139,7 +143,7 @@
         </form>
         <div id="main-stock-notice" class="notice" role="status"></div>
       </div>
-      <div class="panel transfer-panel">
+      <div class="panel transfer-panel branch-data-card" data-branch-loading-card>
         <div class="branch-load-row">
           <label class="selected-branch">Selected branch<select id="selected-branch" required><option value="">Loading branches...</option></select></label>
           <button id="load-stock-button" class="load-stock-button" type="button">Load stock</button>
@@ -180,16 +184,16 @@
         <div id="branch-price-notice" class="notice" role="status"></div>
       </div>
       </div>
-      <div id="products-panel" class="panel panel-wide product-browser">
+      <div id="products-panel" class="panel panel-wide product-browser branch-data-card" data-branch-loading-card>
         <div class="browser-heading"><div class="browser-actions"><span id="product-catalog-status" class="catalog-status">Select a branch to load products.</span></div></div>
         <label>Search products<input id="branch-product-search" type="search" placeholder="Search products by name, code, or barcode" autocomplete="off"></label>
         <div id="branch-products" class="stock-table-wrap"><p class="empty">Select a branch to see its products.</p></div>
       </div>
-      <div id="stock-activity-panel" class="panel panel-wide">
+      <div id="stock-activity-panel" class="panel panel-wide branch-data-card" data-branch-loading-card>
         <div class="browser-heading"><div><h2>Stock activity</h2><p class="sub">The newest stock movements for the selected branch.</p></div><div class="browser-actions"><label class="activity-branch-label">Branch<select id="activity-branch"><option value="">Select branch</option></select></label><span id="movement-status" class="catalog-status">Select a branch.</span></div></div>
         <div id="stock-movements" class="stock-table-wrap"><p class="empty">Loading stock activity...</p></div>
       </div>
-      <div class="panel panel-wide">
+      <div class="panel panel-wide branch-data-card" data-branch-loading-card>
         <div class="browser-heading"><div><h2>Stock transfer log</h2><p class="sub">Every transfer sent from main stock to a branch.</p></div><span id="transfer-status" class="catalog-status">Loading transfers...</span></div>
         <div id="stock-transfers" class="stock-table-wrap"><p class="empty">Loading transfer log...</p></div>
       </div>
@@ -222,6 +226,7 @@
   const transferNotice = document.querySelector('#transfer-notice');
   const transferSubmit = document.querySelector('#transfer-submit');
   const transferQueueList = document.querySelector('#transfer-queue');
+  const branchLoadingCards = [...document.querySelectorAll('[data-branch-loading-card]')];
   const branchProductForm = document.querySelector('#branch-product-form');
   const branchProductToggle = document.querySelector('#branch-product-toggle');
   const branchProductFormWrap = document.querySelector('#branch-product-form-wrap');
@@ -478,6 +483,20 @@
       if (!activityBranch.options.length) activityBranch.innerHTML = '<option value="">Branches unavailable</option>';
     }
   }
+  function setBranchCardsLoading(isLoading) {
+    branchLoadingCards.forEach(card => {
+      card.classList.toggle('is-loading', isLoading);
+      card.setAttribute('aria-busy', String(isLoading));
+    });
+  }
+  async function refreshBranchesWithLoading() {
+    setBranchCardsLoading(true);
+    try {
+      await refreshBranches();
+    } finally {
+      setBranchCardsLoading(false);
+    }
+  }
   function setupProductSearch(control) {
     let products = [];
     let timer;
@@ -547,10 +566,12 @@
   async function refreshAll() {
     if (refreshAllLoading) return;
     refreshAllLoading = true;
+    setBranchCardsLoading(true);
     try {
       await refreshBranches();
       await Promise.all([loadMainCatalogProducts(), loadBranchProducts(false), loadStockMovements(), loadStockTransfers()]);
     } finally {
+      setBranchCardsLoading(false);
       refreshAllLoading = false;
     }
   }
@@ -716,7 +737,7 @@
   });
   productSearches.forEach(setupProductSearch);
   refreshAll();
-  setInterval(refreshBranches, 5000);
+  setInterval(refreshBranchesWithLoading, 5000);
   setInterval(() => {
     loadBranchProducts(false);
     loadStockMovements();
