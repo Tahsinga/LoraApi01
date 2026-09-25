@@ -139,7 +139,7 @@
         <h2>Update main stock</h2>
         <p class="sub">Enter the exact stock-take value for this product.</p>
         <form id="main-stock-form">
-          <label class="product-picker">Product<input id="main-stock-search" type="search" list="main-stock-products" required placeholder="Type product name"><datalist id="main-stock-products"></datalist><div id="main-stock-product-options" class="product-picker-options" role="listbox"></div></label>
+          <label class="product-picker">Product<input id="main-stock-search" type="search" autocomplete="off" required placeholder="Type product name"><datalist id="main-stock-products"></datalist><div id="main-stock-product-options" class="product-picker-options" role="listbox"></div></label>
           <input id="main-stock-product" type="hidden"><input id="main-stock-name" type="hidden">
           <label>Stock-take value<input id="main-stock-quantity" type="number" min="0" step="1" required placeholder="Enter current stock"></label>
           <button id="main-stock-submit" type="submit">Update main stock</button>
@@ -154,7 +154,7 @@
         </div>
         <p class="sub">Filter and select a Main POS product, then enter the quantity to send.</p>
         <form id="transfer-form" class="transfer-form">
-          <label class="product-picker">Product<input id="transfer-search" type="search" list="transfer-products" autocomplete="off" required placeholder="Type to filter products"><datalist id="transfer-products"></datalist><div id="transfer-product-options" class="product-picker-options" role="listbox"></div></label>
+          <label class="product-picker">Product<input id="transfer-search" type="search" autocomplete="off" required placeholder="Type to filter products"><datalist id="transfer-products"></datalist><div id="transfer-product-options" class="product-picker-options" role="listbox"></div></label>
           <input id="transfer-product" type="hidden"><input id="transfer-name" type="hidden">
           <label>Quantity<input id="transfer-quantity" type="number" min="1" step="1" required></label>
           <button id="transfer-submit" type="submit">Send stock to branch</button>
