@@ -581,7 +581,15 @@ def stock_movements(request):
     selected_date = parse_date(selected_date_value) if selected_date_value else timezone.localdate()
     if selected_date is None:
         return JsonResponse({'status': 'error', 'message': 'Use a valid date.'}, status=400)
-    day_start = timezone.make_aware(datetime.combine(selected_date, datetime.min.time()))
+    timezone_offset_value = request.GET.get('timezone_offset', '0').strip()
+    try:
+        timezone_offset = int(timezone_offset_value)
+    except ValueError:
+        return JsonResponse({'status': 'error', 'message': 'Use a valid timezone offset.'}, status=400)
+    if not -840 <= timezone_offset <= 840:
+        return JsonResponse({'status': 'error', 'message': 'Timezone offset is out of range.'}, status=400)
+    local_day_start = datetime.combine(selected_date, datetime.min.time())
+    day_start = timezone.make_aware(local_day_start + timedelta(minutes=timezone_offset))
     day_end = day_start + timedelta(days=1)
     movements = StockMovement.objects.filter(
         branch__iexact=branch,

@@ -408,11 +408,12 @@
     }
     const branch = activityBranch.value;
     const date = activityDate.value;
+    const timezoneOffset = new Date().getTimezoneOffset();
     const controller = new AbortController();
     stockMovementsController = controller;
     stockMovementsLoading = true;
     try {
-      const response = await fetch(`/api/stock/movements/?branch=${encodeURIComponent(branch)}&date=${encodeURIComponent(date)}&_=${Date.now()}`, { cache: 'no-store', signal: controller.signal });
+      const response = await fetch(`/api/stock/movements/?branch=${encodeURIComponent(branch)}&date=${encodeURIComponent(date)}&timezone_offset=${encodeURIComponent(timezoneOffset)}&_=${Date.now()}`, { cache: 'no-store', signal: controller.signal });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Stock activity unavailable.');
       if (requestId !== stockMovementsRequestId || activityBranch.value !== branch) return;
