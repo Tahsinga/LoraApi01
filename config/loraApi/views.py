@@ -595,7 +595,7 @@ def stock_movements(request):
         branch__iexact=branch,
         created_at__gte=day_start,
         created_at__lt=day_end,
-    ).order_by('-created_at', '-id')[:50]
+    ).order_by('-created_at', '-id')[:20]
     return JsonResponse({
         'status': 'ok',
         'movements': [
