@@ -10,7 +10,7 @@ from django.contrib.auth import get_user_model, update_session_auth_hash
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.forms import SetPasswordForm, UserCreationForm
 from django.core.cache import cache
-from django.db import OperationalError, close_old_connections, transaction
+from django.db import OperationalError, ProgrammingError, close_old_connections, transaction
 from django.db.models import IntegerField, Max, Q, Sum
 from django.db.models.functions import Cast
 from django.http import JsonResponse, HttpResponse
@@ -50,6 +50,8 @@ This ensures the SAME invoice number that was cancelled is deleted with 100% acc
 """
 
 BRANCH_ONLINE_SECONDS = 120
+CONNECTED_BRANCHES = {}
+BRANCH_HEARTBEAT_DB_AVAILABLE = True
 PRODUCT_SYNC_QUEUE = Lock()
 PRODUCT_CACHE_VERSION_KEY = 'lora:product-cache-version'
 PRODUCT_CACHE_SECONDS = 15
@@ -1312,27 +1314,48 @@ def branch_status(request):
         if not branch or device_role.casefold() != 'branch pc':
             return JsonResponse({'status': 'error', 'message': 'A saved branch name and Branch PC device role are required.'}, status=400)
 
-        BranchHeartbeat.objects.update_or_create(
-            branch__iexact=branch,
-            defaults={
-                'branch': branch,
-                'last_seen': timezone.now(),
+        global BRANCH_HEARTBEAT_DB_AVAILABLE
+        if BRANCH_HEARTBEAT_DB_AVAILABLE:
+            try:
+                BranchHeartbeat.objects.update_or_create(
+                    branch__iexact=branch,
+                    defaults={
+                        'branch': branch,
+                        'last_seen': timezone.now(),
+                        'device_role': 'Branch PC',
+                    },
+                )
+            except ProgrammingError:
+                BRANCH_HEARTBEAT_DB_AVAILABLE = False
+        if not BRANCH_HEARTBEAT_DB_AVAILABLE:
+            CONNECTED_BRANCHES[branch.lower()] = {
+                'name': branch,
+                'last_seen': now,
                 'device_role': 'Branch PC',
-            },
-        )
+            }
         return JsonResponse({'status': 'online', 'branch': branch})
 
     if request.method == 'GET':
-        stale_before = timezone.now() - timedelta(seconds=BRANCH_ONLINE_SECONDS)
-        branches = [
-            {
-                'name': branch.branch,
-                'last_seen': branch.last_seen.timestamp(),
-                'device_role': branch.device_role,
-                'online': True,
-            }
-            for branch in BranchHeartbeat.objects.filter(last_seen__gt=stale_before)
-        ]
+        if BRANCH_HEARTBEAT_DB_AVAILABLE:
+            try:
+                stale_before = timezone.now() - timedelta(seconds=BRANCH_ONLINE_SECONDS)
+                branches = [
+                    {
+                        'name': branch.branch,
+                        'last_seen': branch.last_seen.timestamp(),
+                        'device_role': branch.device_role,
+                        'online': True,
+                    }
+                    for branch in BranchHeartbeat.objects.filter(last_seen__gt=stale_before)
+                ]
+            except ProgrammingError:
+                BRANCH_HEARTBEAT_DB_AVAILABLE = False
+        if not BRANCH_HEARTBEAT_DB_AVAILABLE:
+            branches = [
+                {**branch, 'online': True}
+                for branch in CONNECTED_BRANCHES.values()
+                if now - branch['last_seen'] <= BRANCH_ONLINE_SECONDS
+            ]
         return JsonResponse({'status': 'ok', 'branches': branches, 'count': len(branches), 'online_count': len(branches)})
 
     return JsonResponse({'status': 'error', 'message': 'Use GET or POST method'}, status=405)
