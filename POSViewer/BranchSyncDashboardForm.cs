@@ -141,7 +141,7 @@ public sealed class BranchSyncDashboardForm : Form
                 _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ [CONNECTION] Web API heartbeat failed: {ex.Message}");
             }
 
-            if (!_productCatalogSynced || DateTime.UtcNow - _lastProductCatalogSyncUtc >= TimeSpan.FromSeconds(5))
+            if (!_productCatalogSynced || DateTime.UtcNow - _lastProductCatalogSyncUtc >= TimeSpan.FromSeconds(60))
             {
                 _productCatalogSynced = await SyncProductCatalogAsync(client, branchName);
                 if (_productCatalogSynced)

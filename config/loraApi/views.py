@@ -1,6 +1,7 @@
 import hashlib
 import json
 import time
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import wraps
@@ -10,7 +11,7 @@ from django.contrib.auth import get_user_model, update_session_auth_hash
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.forms import SetPasswordForm, UserCreationForm
 from django.core.cache import cache
-from django.db import OperationalError, ProgrammingError, close_old_connections, transaction
+from django.db import OperationalError, ProgrammingError, close_old_connections, connection, transaction
 from django.db.models import IntegerField, Max, Q, Sum
 from django.db.models.functions import Cast
 from django.http import JsonResponse, HttpResponse
@@ -49,7 +50,7 @@ This ensures the SAME invoice number that was cancelled is deleted with 100% acc
 ================================================================================
 """
 
-BRANCH_ONLINE_SECONDS = 120
+BRANCH_ONLINE_SECONDS = 300
 CONNECTED_BRANCHES = {}
 BRANCH_HEARTBEAT_DB_AVAILABLE = True
 PRODUCT_SYNC_QUEUE = Lock()
@@ -65,7 +66,8 @@ def invalidate_product_catalog_cache():
 def retry_on_database_lock(view_func):
     @wraps(view_func)
     def wrapped_view(request, *args, **kwargs):
-        with PRODUCT_SYNC_QUEUE:
+        sync_lock = PRODUCT_SYNC_QUEUE if connection.vendor == 'sqlite' else nullcontext()
+        with sync_lock:
             for attempt in range(5):
                 try:
                     close_old_connections()

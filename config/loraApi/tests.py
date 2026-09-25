@@ -266,6 +266,18 @@ class StockTransferTests(TestCase):
 		branches = self.client.get('/api/branches/').json()['branches']
 		self.assertEqual([item['name'] for item in branches], ['Online Branch'])
 
+	def test_branch_list_supports_twelve_online_branch_pc_heartbeats(self):
+		for index in range(1, 13):
+			response = self.client.post(
+				'/api/branches/',
+				data=json.dumps({'branch': f'Branch {index}', 'device_role': 'Branch PC'}),
+				content_type='application/json',
+			)
+			self.assertEqual(response.status_code, 200)
+
+		branches = self.client.get('/api/branches/').json()['branches']
+		self.assertEqual(len(branches), 12)
+
 	def test_publish_product_catalog_upserts_products(self):
 		response = self.client.post(
 			'/api/products/publish/',

@@ -11,7 +11,7 @@ services:
       python config/manage.py collectstatic --noinput
     startCommand: |
       python config/manage.py migrate --noinput &&
-      gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 4 --worker-class gthread --preload --timeout 60 --graceful-timeout 30
+      gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 4 --worker-class gthread --preload --timeout 300 --graceful-timeout 30
     envVars:
       - key: PYTHON_VERSION
         value: 3.13
