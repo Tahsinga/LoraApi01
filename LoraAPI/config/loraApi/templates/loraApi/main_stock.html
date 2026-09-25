@@ -400,6 +400,7 @@
   }
   async function refreshBranches() {
     try {
+      const previousBranch = selectedBranch.value;
       const currentBranch = selectedBranch.value || localStorage.getItem(selectedBranchKey) || '';
       const response = await fetch(`/api/branches/?_=${Date.now()}`, { cache: 'no-store' });
       const data = await response.json();
@@ -410,6 +411,7 @@
       activityBranch.innerHTML = branchOptions;
       if (currentBranch && [...selectedBranch.options].some(option => option.value === currentBranch)) selectedBranch.value = currentBranch;
       if (currentBranch && [...activityBranch.options].some(option => option.value === currentBranch)) activityBranch.value = currentBranch;
+      if (selectedBranch.value && selectedBranch.value !== previousBranch) selectedBranch.dispatchEvent(new Event('change'));
     } catch (error) {
       if (!selectedBranch.options.length) selectedBranch.innerHTML = '<option value="">Branches unavailable</option>';
       if (!activityBranch.options.length) activityBranch.innerHTML = '<option value="">Branches unavailable</option>';
