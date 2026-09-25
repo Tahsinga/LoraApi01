@@ -67,6 +67,9 @@
     .row small { display:block; margin-top:4px; color:var(--muted); }
     .badge { align-self:start; padding:5px 8px; color:#8b651d; background:#fff3d4; font:700 10px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; }
     .badge.confirmed { color:#176342; background:#dff2e7; }
+    .badge.sent, .badge.processing { color:#245a82; background:#dcecf8; }
+    .badge.printed, .badge.processed { color:#176342; background:#dff2e7; }
+    .badge.failed { color:#9c352b; background:#fbe1dd; }
     .empty { padding:18px 0 4px; color:var(--muted); font:14px Arial,sans-serif; }
     @media (max-width:760px) { header { display:block; padding-top:28px; } .live { gap:5px; margin-top:20px; font-size:9px; letter-spacing:.5px; } .history-link, .logout-button { font-size:9px; letter-spacing:.5px; } main { padding:0 16px 36px; } .workspace { grid-template-columns:1fr; } .panel { padding:20px; } .report-panel, .queue { grid-column:auto; grid-row:auto; margin-top:20px; } form { grid-template-columns:1fr; } .wide { grid-column:auto; } button { grid-column:auto; } }
   </style>
@@ -151,8 +154,9 @@
       const data = await response.json();
       document.querySelector('#pending').textContent = data.pending_count ?? 0;
       document.querySelector('#processed').textContent = data.processed_count ?? 0;
-      const items = data.pending_deletions ?? [];
-      rows.innerHTML = items.length ? items.map(item => `<div class="row"><div><b>${escapeHtml(item.invoice)}</b><small>${escapeHtml(item.branch)} · Whole invoice</small></div><span class="badge">Pending</span></div>`).join('') : '<div class="empty">No cancellations are waiting.</div>';
+      const items = data.queue ?? [];
+      const statusLabels = { pending: 'Queued', processing: 'Sent', printed: 'Printed', processed: 'Completed', failed: 'Failed' };
+      rows.innerHTML = items.length ? items.map(item => `<div class="row"><div><b>${escapeHtml(item.label)}</b><small>${escapeHtml(item.branch)} · ${escapeHtml(item.detail)}</small></div><span class="badge ${escapeHtml(item.status)}">${escapeHtml(statusLabels[item.status] || item.status)}</span></div>`).join('') : '<div class="empty">No commands are waiting or recently completed.</div>';
     } catch (error) { rows.innerHTML = '<div class="empty">Queue unavailable. Try again.</div>'; }
   }
   async function refreshBranches() {
