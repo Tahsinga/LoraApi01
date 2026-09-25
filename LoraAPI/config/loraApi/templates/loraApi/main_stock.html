@@ -132,7 +132,7 @@
         <h2>Update main stock</h2>
         <p class="sub">Enter the exact stock-take value for this product.</p>
         <form id="main-stock-form">
-          <label class="product-picker">Product<input id="main-stock-search" type="search" list="main-stock-products" required placeholder="Type product name"><datalist id="main-stock-products"></datalist><div id="main-stock-product-options" class="product-picker-options" role="listbox"></div></label>
+          <label class="product-picker">Product<input id="main-stock-search" type="search" autocomplete="off" required placeholder="Type product name"><datalist id="main-stock-products"></datalist><div id="main-stock-product-options" class="product-picker-options" role="listbox"></div></label>
           <input id="main-stock-product" type="hidden"><input id="main-stock-name" type="hidden">
           <label>Stock-take value<input id="main-stock-quantity" type="number" min="0" step="1" required placeholder="Enter current stock"></label>
           <button id="main-stock-submit" type="submit">Update main stock</button>
@@ -147,7 +147,7 @@
         </div>
         <p class="sub">Filter and select a Main POS product, then enter the quantity to send.</p>
         <form id="transfer-form" class="transfer-form">
-          <label class="product-picker">Product<input id="transfer-search" type="search" list="transfer-products" autocomplete="off" required placeholder="Type to filter products"><datalist id="transfer-products"></datalist><div id="transfer-product-options" class="product-picker-options" role="listbox"></div></label>
+          <label class="product-picker">Product<input id="transfer-search" type="search" autocomplete="off" required placeholder="Type to filter products"><datalist id="transfer-products"></datalist><div id="transfer-product-options" class="product-picker-options" role="listbox"></div></label>
           <input id="transfer-product" type="hidden"><input id="transfer-name" type="hidden">
           <label>Quantity<input id="transfer-quantity" type="number" min="1" step="1" required></label>
           <button id="transfer-submit" type="submit">Send stock to branch</button>
@@ -171,7 +171,7 @@
           <div id="branch-product-notice" class="notice" role="status"></div>
         </div>
         <form id="branch-price-form" class="transfer-form">
-          <label>Product<input id="branch-price-search" type="search" list="branch-price-products" autocomplete="off" required placeholder="Type to filter branch products"><datalist id="branch-price-products"></datalist></label>
+          <label class="product-picker">Product<input id="branch-price-search" type="search" autocomplete="off" required placeholder="Type to filter branch products"><datalist id="branch-price-products"></datalist><div id="branch-price-product-options" class="product-picker-options" role="listbox"></div></label>
           <input id="branch-price-product" type="hidden"><input id="branch-price-name" type="hidden">
           <label>Current branch price<input id="branch-current-price" type="text" readonly placeholder="Select a branch product"></label>
           <label>New branch price<input id="branch-price-input" type="number" min="0" step="0.01" required placeholder="Current price appears after selecting a product"></label>
@@ -231,6 +231,7 @@
   const branchProductNotice = document.querySelector('#branch-product-notice');
   const branchPriceForm = document.querySelector('#branch-price-form');
   const branchPriceSearch = document.querySelector('#branch-price-search');
+  const branchPriceProductOptions = document.querySelector('#branch-price-product-options');
   const branchPriceProduct = document.querySelector('#branch-price-product');
   const branchPriceName = document.querySelector('#branch-price-name');
   const branchPriceProducts = document.querySelector('#branch-price-products');
@@ -279,6 +280,18 @@
     mainStockProductOptions.classList.add('is-open');
   }
   function closeMainStockProductOptions() { mainStockProductOptions.classList.remove('is-open'); }
+  function renderBranchPriceProductOptions() {
+    const query = branchPriceSearch.value.trim().toLowerCase();
+    const products = branchCatalogProducts.filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
+    branchPriceProductOptions.innerHTML = products.length
+      ? products.map(product => `<button type="button" class="product-picker-option" role="option" data-product-id="${escapeHtml(product.product_id)}"><strong>${escapeHtml(product.product_name)}</strong><small>ID ${escapeHtml(product.product_id)}${product.product_code ? ` · ${escapeHtml(product.product_code)}` : ''}</small></button>`).join('')
+      : '<span class="empty">No matching branch products.</span>';
+  }
+  function openBranchPriceProductOptions() {
+    renderBranchPriceProductOptions();
+    branchPriceProductOptions.classList.add('is-open');
+  }
+  function closeBranchPriceProductOptions() { branchPriceProductOptions.classList.remove('is-open'); }
   function renderTransferQueue() {
     const waiting = transferQueue.map((transfer, index) => `<div class="transfer-queue-item"><div><div class="transfer-queue-product">${escapeHtml(transfer.product_name)}</div><div class="transfer-queue-detail">${escapeHtml(transfer.quantity)} to ${escapeHtml(transfer.branch)} · #${index + 1} waiting</div></div><span class="transfer-queue-state">Waiting</span></div>`).join('');
     const sending = activeTransfer ? `<div class="transfer-queue-item"><div><div class="transfer-queue-product">${escapeHtml(activeTransfer.product_name)}</div><div class="transfer-queue-detail">${escapeHtml(activeTransfer.quantity)} to ${escapeHtml(activeTransfer.branch)}</div></div><span class="transfer-queue-state sending">Sending</span></div>` : '';
@@ -361,6 +374,8 @@
       branchPriceProducts.innerHTML = productOptions(branchCatalogProducts);
       productCatalogStatus.textContent = `${branchCatalogProducts.length} products updated for ${branch}.`;
       renderBranchProducts();
+      if (mainStockProductOptions.classList.contains('is-open')) renderMainStockProductOptions();
+      if (branchPriceProductOptions.classList.contains('is-open')) renderBranchPriceProductOptions();
     } catch (error) {
       productCatalogStatus.textContent = branchCatalogProducts.length
         ? `Refresh failed; showing the last ${branchCatalogProducts.length} products.`
@@ -603,10 +618,26 @@
     closeMainStockProductOptions();
     document.querySelector('#main-stock-quantity').focus();
   });
+  branchPriceSearch.addEventListener('focus', openBranchPriceProductOptions);
+  branchPriceSearch.addEventListener('input', openBranchPriceProductOptions);
+  branchPriceProductOptions.addEventListener('mousedown', event => event.preventDefault());
+  branchPriceProductOptions.addEventListener('click', event => {
+    const option = event.target.closest('[data-product-id]');
+    if (!option) return;
+    const product = branchCatalogProducts.find(item => String(item.product_id) === option.dataset.productId);
+    if (!product) return;
+    branchPriceSearch.value = product.product_name;
+    branchPriceProduct.value = product.product_id;
+    branchPriceName.value = product.product_name;
+    setBranchPriceFields(product.selling_price);
+    closeBranchPriceProductOptions();
+    branchPriceInput.focus();
+  });
   document.addEventListener('click', event => {
     if (!event.target.closest('.product-picker')) {
       closeTransferProductOptions();
       closeMainStockProductOptions();
+      closeBranchPriceProductOptions();
     }
   });
   async function processTransferQueue() {
