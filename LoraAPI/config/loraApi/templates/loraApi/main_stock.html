@@ -261,7 +261,7 @@
   function renderTransferProductOptions() {
     const query = document.querySelector('#transfer-search').value.trim().toLowerCase();
     const products = mainCatalogProducts.filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
-    transferProductOptions.innerHTML = products.length
+    transferProductOptions.innerHTML = !query ? '' : products.length
       ? products.map(product => `<button type="button" class="product-picker-option" role="option" data-product-id="${escapeHtml(product.product_id)}"><strong>${escapeHtml(product.product_name)}</strong><small>ID ${escapeHtml(product.product_id)}${product.product_code ? ` · ${escapeHtml(product.product_code)}` : ''}</small></button>`).join('')
       : '<span class="empty">No matching Main POS products.</span>';
   }
