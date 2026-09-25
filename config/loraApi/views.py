@@ -126,6 +126,10 @@ def report_payload(report):
         'branch': report.branch,
         'report_date': report.report_date.isoformat(),
         'status': report.status,
+        'requested_at': report.requested_at.timestamp(),
+        'completed_at': report.completed_at.timestamp() if report.completed_at else None,
+        'row_count': report.row_count,
+        'error': report.error_message,
     }
 
 
@@ -1411,7 +1415,12 @@ def branch_sync(request):
         pending_query = DeletionRecord.objects.filter(status='pending')
         if branch_name:
             pending_query = pending_query.filter(branch__iexact=branch_name)
-        pending = [record_payload(item) for item in pending_query]
+        with transaction.atomic():
+            pending_records = list(pending_query.select_for_update())
+            for record in pending_records:
+                record.status = 'processing'
+                record.save(update_fields=['status'])
+        pending = [record_payload(item) for item in pending_records]
 
         report_query = SalesReportRequest.objects.filter(status='pending')
         if branch_name:
@@ -1548,6 +1557,35 @@ def main_sync(request):
     if request.method == 'GET':
         pending = [record_payload(item) for item in DeletionRecord.objects.filter(status__in=['pending', 'processing'])]
         processed = [record_payload(item) for item in DeletionRecord.objects.filter(status='processed').order_by('-confirmation_timestamp')[:10]]
+        failed = [record_payload(item) for item in DeletionRecord.objects.filter(status='failed').order_by('-confirmation_timestamp')[:10]]
+        pending_reports = [report_payload(item) for item in SalesReportRequest.objects.filter(status__in=['pending', 'processing']).order_by('-requested_at')[:20]]
+        completed_reports = [report_payload(item) for item in SalesReportRequest.objects.filter(status__in=['printed', 'failed']).order_by('-completed_at')[:20]]
+        queue = [
+            {
+                'type': 'cancellation',
+                'id': item['id'],
+                'branch': item['branch'],
+                'label': f"Cancellation {item['invoice']}",
+                'detail': 'Whole invoice',
+                'status': item['status'],
+                'timestamp': item['timestamp'],
+                'completed_at': item['confirmation_timestamp'],
+            }
+            for item in pending + processed + failed
+        ] + [
+            {
+                'type': 'sales_report',
+                'id': item['id'],
+                'branch': item['branch'],
+                'label': 'Sales report',
+                'detail': item['report_date'],
+                'status': item['status'],
+                'timestamp': item['requested_at'],
+                'completed_at': item['completed_at'],
+            }
+            for item in pending_reports + completed_reports
+        ]
+        queue.sort(key=lambda item: item['timestamp'], reverse=True)
 
         return JsonResponse({
             'status': 'ok',
@@ -1555,7 +1593,8 @@ def main_sync(request):
             'pending_deletions': pending,
             'pending_count': DeletionRecord.objects.filter(status__in=['pending', 'processing']).count(),
             'recently_processed': processed,
-            'processed_count': DeletionRecord.objects.filter(status='processed').count()
+            'processed_count': DeletionRecord.objects.filter(status='processed').count(),
+            'queue': queue[:40],
         })
 
     try:

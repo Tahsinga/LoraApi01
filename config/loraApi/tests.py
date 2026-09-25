@@ -626,6 +626,47 @@ class DeletionQueueTests(TestCase):
 		self.assertEqual(summary['pending_count'], 0)
 		self.assertEqual(summary['processed_count'], 1)
 
+	def test_main_queue_includes_cancellation_and_sales_report_statuses(self):
+		cancellation = self.client.post(
+			'/api/cancel-sale/',
+			data=json.dumps({'invoice': 'INV-QUEUE', 'branch': 'Branch A'}),
+			content_type='application/json',
+		).json()
+		report = self.client.post(
+			'/api/sales-report/',
+			data=json.dumps({'report_date': '2026-09-25', 'branches': ['Branch A']}),
+			content_type='application/json',
+		).json()
+
+		queue = self.client.get('/api/main-sync/').json()['queue']
+		statuses = {(item['type'], item['id']): item['status'] for item in queue}
+		self.assertEqual(statuses[('cancellation', cancellation['deletion_id'])], 'pending')
+		self.assertEqual(statuses[('sales_report', report['reports'][0]['id'])], 'pending')
+
+	def test_queue_shows_sent_and_printed_states(self):
+		cancellation_id = self.client.post(
+			'/api/cancel-sale/',
+			data=json.dumps({'invoice': 'INV-SENT', 'branch': 'Branch A'}),
+			content_type='application/json',
+		).json()['deletion_id']
+		report_id = self.client.post(
+			'/api/sales-report/',
+			data=json.dumps({'report_date': '2026-09-25', 'branches': ['Branch A']}),
+			content_type='application/json',
+		).json()['reports'][0]['id']
+
+		self.client.get('/api/branch-sync/?branch=Branch A')
+		self.client.post(
+			'/api/sales-report/complete/',
+			data=json.dumps({'report_id': report_id, 'success': True, 'row_count': 4, 'branch': 'Branch A'}),
+			content_type='application/json',
+		)
+
+		queue = self.client.get('/api/main-sync/').json()['queue']
+		statuses = {item['id']: item['status'] for item in queue}
+		self.assertEqual(statuses[cancellation_id], 'processing')
+		self.assertEqual(statuses[report_id], 'printed')
+
 	def test_history_returns_confirmed_invoices_newest_first(self):
 		older = self.client.post(
 			'/api/cancel-sale/',
