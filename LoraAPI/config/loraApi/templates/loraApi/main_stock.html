@@ -43,6 +43,8 @@
     .browser-actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; justify-content:flex-end; }
     .activity-branch-label { flex-direction:row; align-items:center; gap:8px; white-space:nowrap; }
     .activity-branch-label select { width:auto; min-width:150px; }
+    .activity-date-label { flex-direction:row; align-items:center; gap:8px; white-space:nowrap; }
+    .activity-date-label input { width:auto; min-width:145px; }
     .catalog-status { color:var(--muted); font:13px Arial,sans-serif; }
     .refresh-stock-button { width:auto; margin:0; padding:9px 12px; background:var(--teal); }
     .refresh-stock-button:hover { background:var(--teal-dark); }
@@ -191,7 +193,7 @@
         <div id="branch-products" class="stock-table-wrap"><p class="empty">Select a branch to see its products.</p></div>
       </div>
       <div id="stock-activity-panel" class="panel panel-wide branch-data-card" data-branch-loading-card>
-        <div class="browser-heading"><div><h2>Stock activity</h2><p class="sub">The newest stock movements for the selected branch.</p></div><div class="browser-actions"><label class="activity-branch-label">Branch<select id="activity-branch"><option value="">Select branch</option></select></label><span id="movement-status" class="catalog-status">Select a branch.</span></div></div>
+        <div class="browser-heading"><div><h2>Stock activity</h2><p class="sub">The newest stock movements for the selected branch.</p></div><div class="browser-actions"><label class="activity-branch-label">Branch<select id="activity-branch"><option value="">Select branch</option></select></label><label class="activity-date-label">Date<input id="activity-date" type="date"></label><span id="movement-status" class="catalog-status">Select a branch.</span></div></div>
         <div id="stock-movements" class="stock-table-wrap"><p class="empty">Loading stock activity...</p></div>
       </div>
       <div class="panel panel-wide">
@@ -215,6 +217,7 @@
   const stockActivityPanel = document.querySelector('#stock-activity-panel');
   const sectionJumpButton = document.querySelector('#section-jump-button');
   const activityBranch = document.querySelector('#activity-branch');
+  const activityDate = document.querySelector('#activity-date');
   const movementStatus = document.querySelector('#movement-status');
   const stockTransfers = document.querySelector('#stock-transfers');
   const transferStatus = document.querySelector('#transfer-status');
@@ -423,11 +426,12 @@
       return;
     }
     const branch = activityBranch.value;
+    const date = activityDate.value;
     const controller = new AbortController();
     stockMovementsController = controller;
     stockMovementsLoading = true;
     try {
-      const response = await fetch(`/api/stock/movements/?branch=${encodeURIComponent(branch)}&_=${Date.now()}`, { cache: 'no-store', signal: controller.signal });
+      const response = await fetch(`/api/stock/movements/?branch=${encodeURIComponent(branch)}&date=${encodeURIComponent(date)}&_=${Date.now()}`, { cache: 'no-store', signal: controller.signal });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Stock activity unavailable.');
       if (requestId !== stockMovementsRequestId || activityBranch.value !== branch) return;
@@ -568,6 +572,7 @@
     }
   });
   activityBranch.addEventListener('change', loadStockMovements);
+  activityDate.addEventListener('change', loadStockMovements);
   loadStockButton.addEventListener('click', requestBranchLoad);
   async function refreshAll() {
     if (refreshAllLoading) return;
@@ -772,6 +777,8 @@
     finally { branchPriceSubmit.disabled = false; }
   });
   productSearches.forEach(setupProductSearch);
+  const today = new Date();
+  activityDate.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
   refreshAll();
   setInterval(refreshBranches, 5000);
   setInterval(() => {

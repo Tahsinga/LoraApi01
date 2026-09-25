@@ -1,7 +1,7 @@
 import hashlib
 import json
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import wraps
 from threading import Lock
@@ -575,7 +575,17 @@ def stock_movements(request):
     branch = str(request.GET.get('branch', '')).strip()
     if not branch:
         return JsonResponse({'status': 'error', 'message': 'Select a branch first.'}, status=400)
-    movements = StockMovement.objects.filter(branch__iexact=branch).order_by('-created_at', '-id')[:200]
+    selected_date_value = request.GET.get('date', '').strip()
+    selected_date = parse_date(selected_date_value) if selected_date_value else timezone.localdate()
+    if selected_date is None:
+        return JsonResponse({'status': 'error', 'message': 'Use a valid date.'}, status=400)
+    day_start = timezone.make_aware(datetime.combine(selected_date, datetime.min.time()))
+    day_end = day_start + timedelta(days=1)
+    movements = StockMovement.objects.filter(
+        branch__iexact=branch,
+        created_at__gte=day_start,
+        created_at__lt=day_end,
+    ).order_by('-created_at', '-id')[:200]
     return JsonResponse({
         'status': 'ok',
         'movements': [

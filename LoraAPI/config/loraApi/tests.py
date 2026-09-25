@@ -436,6 +436,27 @@ class StockTransferTests(TestCase):
 		self.assertEqual([movement['product_id'] for movement in movements], [newer.product_id, older.product_id])
 		self.assertTrue(movements[0]['created_at'])
 
+	def test_stock_movements_can_be_filtered_by_date(self):
+		from django.utils import timezone
+		from datetime import timedelta
+
+		today = StockMovement.objects.create(
+			branch='BranchA', product_id=1001, product_name='Today Product',
+			movement_type='received', quantity=1, source='sync',
+		)
+		yesterday = StockMovement.objects.create(
+			branch='BranchA', product_id=1002, product_name='Yesterday Product',
+			movement_type='received', quantity=2, source='sync',
+		)
+		StockMovement.objects.filter(pk=yesterday.pk).update(
+			created_at=timezone.now() - timedelta(days=1),
+		)
+
+		response = self.client.get(f'/api/stock/movements/?branch=BranchA&date={timezone.localdate().isoformat()}')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual([movement['product_id'] for movement in response.json()['movements']], [today.product_id])
+
 	def test_catalog_sync_records_reduction_as_sold(self):
 		ProductCatalog.objects.create(
 			branch='BranchA', product_id=999, product_name='Test Product', available_quantity=10,
