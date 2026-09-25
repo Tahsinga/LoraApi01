@@ -177,6 +177,8 @@
           <div id="branch-product-notice" class="notice" role="status"></div>
         </div>
         <form id="branch-price-form" class="transfer-form">
+          <label class="product-picker">Product<input id="branch-price-search" type="search" autocomplete="off" required placeholder="Type to filter branch products"><datalist id="branch-price-products"></datalist><div id="branch-price-product-options" class="product-picker-options" role="listbox"></div></label>
+          <input id="branch-price-product" type="hidden"><input id="branch-price-name" type="hidden">
           <label>Current branch price<input id="branch-current-price" type="text" readonly placeholder="Select a branch product"></label>
           <label>New branch price<input id="branch-price-input" type="number" min="0" step="0.01" required placeholder="Current price appears after selecting a product"></label>
           <button id="branch-price-submit" type="submit">Save branch price</button>
@@ -233,6 +235,11 @@
   const branchProductSubmit = document.querySelector('#branch-product-submit');
   const branchProductNotice = document.querySelector('#branch-product-notice');
   const branchPriceForm = document.querySelector('#branch-price-form');
+  const branchPriceSearch = document.querySelector('#branch-price-search');
+  const branchPriceProductOptions = document.querySelector('#branch-price-product-options');
+  const branchPriceProduct = document.querySelector('#branch-price-product');
+  const branchPriceName = document.querySelector('#branch-price-name');
+  const branchPriceProducts = document.querySelector('#branch-price-products');
   const branchCurrentPrice = document.querySelector('#branch-current-price');
   const branchPriceInput = document.querySelector('#branch-price-input');
   const branchPriceSubmit = document.querySelector('#branch-price-submit');
@@ -250,6 +257,7 @@
   const productSearches = [
     { source: 'branch', input: document.querySelector('#main-stock-search'), list: document.querySelector('#main-stock-products'), options: document.querySelector('#main-stock-product-options'), id: document.querySelector('#main-stock-product'), name: document.querySelector('#main-stock-name') },
     { source: 'main', input: document.querySelector('#transfer-search'), list: document.querySelector('#transfer-products'), options: document.querySelector('#transfer-product-options'), id: document.querySelector('#transfer-product'), name: document.querySelector('#transfer-name') },
+    { source: 'branch', input: branchPriceSearch, list: branchPriceProducts, options: branchPriceProductOptions, id: branchPriceProduct, name: branchPriceName },
   ];
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
   const productOptions = products => products.map(product => `<option value="${escapeHtml(product.product_name)}" label="ID ${escapeHtml(product.product_id)}${product.product_code ? ` · ${escapeHtml(product.product_code)}` : ''}"></option>`).join('');
@@ -325,6 +333,7 @@
     if (!branch) {
       if (requestId !== branchProductsRequestId) return;
       branchCatalogProducts = [];
+      branchPriceProducts.innerHTML = '';
       branchProducts.innerHTML = '<p class="empty">Select a branch to see its products.</p>';
       productCatalogStatus.textContent = 'Select a branch to load products.';
       branchProductsLoading = false;
@@ -341,6 +350,7 @@
       if (requestId !== branchProductsRequestId) return;
       branchCatalogProducts = data.products || [];
       document.querySelector('#main-stock-products').innerHTML = productOptions(branchCatalogProducts);
+      branchPriceProducts.innerHTML = productOptions(branchCatalogProducts);
       productCatalogStatus.textContent = `${branchCatalogProducts.length} products updated for ${branch}.`;
       renderBranchProducts();
     } catch (error) {
@@ -661,8 +671,8 @@
     event.preventDefault(); branchPriceSubmit.disabled = true; branchPriceNotice.className = 'notice'; branchPriceNotice.textContent = '';
     try {
       if (!selectedBranch.value) throw new Error('Select a connected branch first.');
-      if (!document.querySelector('#transfer-product').value || !document.querySelector('#transfer-name').value) throw new Error('Select a product from the branch stock list first.');
-      const response = await fetch('/api/stock/prices/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch:selectedBranch.value, product_id:document.querySelector('#transfer-product').value, product_name:document.querySelector('#transfer-name').value, selling_price:branchPriceInput.value }) });
+      if (!branchPriceProduct.value || !branchPriceName.value) throw new Error('Select a branch product from the product list first.');
+      const response = await fetch('/api/stock/prices/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch:selectedBranch.value, product_id:branchPriceProduct.value, product_name:branchPriceName.value, selling_price:branchPriceInput.value }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || 'Branch price update could not be queued.');
       branchPriceNotice.className = 'notice ok'; branchPriceNotice.textContent = `${data.product_name} price saved for ${data.branch}. The branch will apply it on its next sync; Main will mirror it after confirmation.`;
