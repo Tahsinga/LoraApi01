@@ -132,7 +132,7 @@
         <h2>Update main stock</h2>
         <p class="sub">Enter the exact stock-take value for this product.</p>
         <form id="main-stock-form">
-          <label>Product<input id="main-stock-search" type="search" list="main-stock-products" required placeholder="Type product name"><datalist id="main-stock-products"></datalist></label>
+          <label class="product-picker">Product<input id="main-stock-search" type="search" list="main-stock-products" required placeholder="Type product name"><datalist id="main-stock-products"></datalist><div id="main-stock-product-options" class="product-picker-options" role="listbox"></div></label>
           <input id="main-stock-product" type="hidden"><input id="main-stock-name" type="hidden">
           <label>Stock-take value<input id="main-stock-quantity" type="number" min="0" step="1" required placeholder="Enter current stock"></label>
           <button id="main-stock-submit" type="submit">Update main stock</button>
@@ -214,6 +214,7 @@
   const stockTransfers = document.querySelector('#stock-transfers');
   const transferStatus = document.querySelector('#transfer-status');
   const mainStockForm = document.querySelector('#main-stock-form');
+  const mainStockProductOptions = document.querySelector('#main-stock-product-options');
   const mainStockNotice = document.querySelector('#main-stock-notice');
   const mainStockSubmit = document.querySelector('#main-stock-submit');
   const transferForm = document.querySelector('#transfer-form');
@@ -266,6 +267,18 @@
     transferProductOptions.classList.add('is-open');
   }
   function closeTransferProductOptions() { transferProductOptions.classList.remove('is-open'); }
+  function renderMainStockProductOptions() {
+    const query = document.querySelector('#main-stock-search').value.trim().toLowerCase();
+    const products = branchCatalogProducts.filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
+    mainStockProductOptions.innerHTML = products.length
+      ? products.map(product => `<button type="button" class="product-picker-option" role="option" data-product-id="${escapeHtml(product.product_id)}"><strong>${escapeHtml(product.product_name)}</strong><small>ID ${escapeHtml(product.product_id)}${product.product_code ? ` · ${escapeHtml(product.product_code)}` : ''}</small></button>`).join('')
+      : '<span class="empty">No matching branch products.</span>';
+  }
+  function openMainStockProductOptions() {
+    renderMainStockProductOptions();
+    mainStockProductOptions.classList.add('is-open');
+  }
+  function closeMainStockProductOptions() { mainStockProductOptions.classList.remove('is-open'); }
   function renderTransferQueue() {
     const waiting = transferQueue.map((transfer, index) => `<div class="transfer-queue-item"><div><div class="transfer-queue-product">${escapeHtml(transfer.product_name)}</div><div class="transfer-queue-detail">${escapeHtml(transfer.quantity)} to ${escapeHtml(transfer.branch)} · #${index + 1} waiting</div></div><span class="transfer-queue-state">Waiting</span></div>`).join('');
     const sending = activeTransfer ? `<div class="transfer-queue-item"><div><div class="transfer-queue-product">${escapeHtml(activeTransfer.product_name)}</div><div class="transfer-queue-detail">${escapeHtml(activeTransfer.quantity)} to ${escapeHtml(activeTransfer.branch)}</div></div><span class="transfer-queue-state sending">Sending</span></div>` : '';
@@ -576,8 +589,25 @@
     closeTransferProductOptions();
     document.querySelector('#transfer-quantity').focus();
   });
+  document.querySelector('#main-stock-search').addEventListener('focus', openMainStockProductOptions);
+  document.querySelector('#main-stock-search').addEventListener('input', openMainStockProductOptions);
+  mainStockProductOptions.addEventListener('mousedown', event => event.preventDefault());
+  mainStockProductOptions.addEventListener('click', event => {
+    const option = event.target.closest('[data-product-id]');
+    if (!option) return;
+    const product = branchCatalogProducts.find(item => String(item.product_id) === option.dataset.productId);
+    if (!product) return;
+    document.querySelector('#main-stock-search').value = product.product_name;
+    document.querySelector('#main-stock-product').value = product.product_id;
+    document.querySelector('#main-stock-name').value = product.product_name;
+    closeMainStockProductOptions();
+    document.querySelector('#main-stock-quantity').focus();
+  });
   document.addEventListener('click', event => {
-    if (!event.target.closest('.product-picker')) closeTransferProductOptions();
+    if (!event.target.closest('.product-picker')) {
+      closeTransferProductOptions();
+      closeMainStockProductOptions();
+    }
   });
   async function processTransferQueue() {
     if (transferQueueProcessing) return;
