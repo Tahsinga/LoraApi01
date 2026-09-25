@@ -148,7 +148,7 @@
         </div>
         <p class="sub">Filter and select a Main POS product, then enter the quantity to send.</p>
         <form id="transfer-form" class="transfer-form">
-          <label class="product-picker">Product<input id="transfer-search" type="search" autocomplete="off" required placeholder="Type to filter products"><datalist id="transfer-products"></datalist><div id="transfer-product-options" class="product-picker-options" role="listbox"></div></label>
+          <label class="product-picker">Product<input id="transfer-search" type="search" autocomplete="off" required placeholder="Type to filter products"><datalist id="transfer-products"></datalist></label>
           <input id="transfer-product" type="hidden"><input id="transfer-name" type="hidden">
           <label>Quantity<input id="transfer-quantity" type="number" min="1" step="1" required></label>
           <button id="transfer-submit" type="submit">Send stock to branch</button>
@@ -219,7 +219,6 @@
   const mainStockNotice = document.querySelector('#main-stock-notice');
   const mainStockSubmit = document.querySelector('#main-stock-submit');
   const transferForm = document.querySelector('#transfer-form');
-  const transferProductOptions = document.querySelector('#transfer-product-options');
   const transferNotice = document.querySelector('#transfer-notice');
   const transferSubmit = document.querySelector('#transfer-submit');
   const transferQueueList = document.querySelector('#transfer-queue');
@@ -258,18 +257,6 @@
   ];
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
   const productOptions = products => products.map(product => `<option value="${escapeHtml(product.product_name)}" label="ID ${escapeHtml(product.product_id)}${product.product_code ? ` · ${escapeHtml(product.product_code)}` : ''}"></option>`).join('');
-  function renderTransferProductOptions() {
-    const query = document.querySelector('#transfer-search').value.trim().toLowerCase();
-    const products = mainCatalogProducts.filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
-    transferProductOptions.innerHTML = !query ? '' : products.length
-      ? products.map(product => `<button type="button" class="product-picker-option" role="option" data-product-id="${escapeHtml(product.product_id)}"><strong>${escapeHtml(product.product_name)}</strong><small>ID ${escapeHtml(product.product_id)}${product.product_code ? ` · ${escapeHtml(product.product_code)}` : ''}</small></button>`).join('')
-      : '<span class="empty">No matching Main POS products.</span>';
-  }
-  function openTransferProductOptions() {
-    renderTransferProductOptions();
-    transferProductOptions.classList.add('is-open');
-  }
-  function closeTransferProductOptions() { transferProductOptions.classList.remove('is-open'); }
   function renderMainStockProductOptions() {
     const query = document.querySelector('#main-stock-search').value.trim().toLowerCase();
     const products = branchCatalogProducts.filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
@@ -603,21 +590,6 @@
       void processTransferQueue();
     } catch (error) { transferNotice.className = 'notice error'; transferNotice.textContent = error.message; }
   });
-  document.querySelector('#transfer-search').addEventListener('focus', openTransferProductOptions);
-  document.querySelector('#transfer-search').addEventListener('input', openTransferProductOptions);
-  transferProductOptions.addEventListener('mousedown', event => event.preventDefault());
-  transferProductOptions.addEventListener('click', event => {
-    const option = event.target.closest('[data-product-id]');
-    if (!option) return;
-    const product = mainCatalogProducts.find(item => String(item.product_id) === option.dataset.productId);
-    if (!product) return;
-    document.querySelector('#transfer-search').value = product.product_name;
-    document.querySelector('#transfer-product').value = product.product_id;
-    document.querySelector('#transfer-name').value = product.product_name;
-    void loadSelectedBranchPrice(product.product_id, product.product_name);
-    closeTransferProductOptions();
-    document.querySelector('#transfer-quantity').focus();
-  });
   document.querySelector('#main-stock-search').addEventListener('focus', openMainStockProductOptions);
   document.querySelector('#main-stock-search').addEventListener('input', openMainStockProductOptions);
   mainStockProductOptions.addEventListener('mousedown', event => event.preventDefault());
@@ -649,7 +621,6 @@
   });
   document.addEventListener('click', event => {
     if (!event.target.closest('.product-picker')) {
-      closeTransferProductOptions();
       closeMainStockProductOptions();
       closeBranchPriceProductOptions();
     }
