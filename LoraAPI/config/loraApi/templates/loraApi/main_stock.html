@@ -46,10 +46,7 @@
     .catalog-status { color:var(--muted); font:13px Arial,sans-serif; }
     .refresh-stock-button { width:auto; margin:0; padding:9px 12px; background:var(--teal); }
     .refresh-stock-button:hover { background:var(--teal-dark); }
-    .selected-branch { margin:0 0 20px; padding:14px 16px; background:#e7f2ee; border:1px solid #c9ddd5; border-left:4px solid var(--teal); }
-    .selected-branch select { height:50px; font-size:18px; font-weight:600; }
     .branch-load-row { display:flex; gap:10px; align-items:end; margin-bottom:20px; }
-    .branch-load-row .selected-branch { flex:1; margin:0; }
     .load-stock-button { flex:0 0 auto; width:auto; margin:0; padding:14px 16px; background:var(--teal); }
     .load-stock-button:hover { background:var(--teal-dark); }
     .transfer-form { margin-top:20px; padding-top:20px; border-top:1px solid var(--line); }
@@ -57,8 +54,6 @@
     .transfer-panel h2 { margin-bottom:2px; }
     .transfer-panel .sub { margin-bottom:8px; }
     .transfer-panel .branch-load-row { margin-bottom:8px; }
-    .transfer-panel .selected-branch { padding:6px 10px; }
-    .transfer-panel .selected-branch select { height:36px; padding:6px 11px; font-size:15px; line-height:1.2; }
     .transfer-panel .load-stock-button { padding:10px 13px; }
     .transfer-panel .transfer-form { grid-template-columns:minmax(0, 1.5fr) minmax(150px, .75fr) auto; align-items:end; gap:10px; margin-top:8px; padding-top:8px; }
     .transfer-panel .transfer-form input { height:40px; padding:8px 11px; }
@@ -147,7 +142,7 @@
       </div>
       <div class="panel transfer-panel branch-data-card" data-branch-loading-card>
         <div class="branch-load-row">
-          <label class="selected-branch">Selected branch<select id="selected-branch" required><option value="">Loading branches...</option></select></label>
+          <select id="selected-branch" hidden required><option value="">Loading branches...</option></select>
           <button id="load-stock-button" class="load-stock-button" type="button">Load stock</button>
           <button id="refresh-stock-button" class="refresh-stock-button" type="button">Refresh figures</button>
         </div>
@@ -330,14 +325,9 @@
     }
   }
   function selectProduct(product) {
-    productSearches.forEach(control => {
-      const selected = control.source === 'main'
-        ? mainCatalogProducts.find(item => String(item.product_id) === String(product.product_id)) || product
-        : product;
-      control.input.value = selected.product_name;
-      control.id.value = selected.product_id;
-      control.name.value = selected.product_name;
-    });
+    document.querySelector('#main-stock-search').value = product.product_name;
+    document.querySelector('#main-stock-product').value = product.product_id;
+    document.querySelector('#main-stock-name').value = product.product_name;
     void loadSelectedBranchPrice(product.product_id, product.product_name);
     document.querySelector('#transfer-quantity').focus();
   }
@@ -479,6 +469,7 @@
         : '<option value="">No online branches</option>';
       selectedBranch.innerHTML = branchOptions;
       activityBranch.innerHTML = branchOptions;
+      if (!currentBranch && availableBranches.length) selectedBranch.value = availableBranches[0].name;
       if (currentBranch && [...selectedBranch.options].some(option => option.value === currentBranch)) selectedBranch.value = currentBranch;
       if (currentBranch && [...activityBranch.options].some(option => option.value === currentBranch)) activityBranch.value = currentBranch;
       if (selectedBranch.value && selectedBranch.value !== previousBranch) selectedBranch.dispatchEvent(new Event('change'));
