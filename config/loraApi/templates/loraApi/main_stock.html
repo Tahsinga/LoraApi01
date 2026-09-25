@@ -260,6 +260,8 @@
   let branchCatalogProducts = [];
   let branchProductsLoading = false;
   let branchProductsRequestId = 0;
+  let branchRefreshRequestId = 0;
+  let branchRefreshController = null;
   let stockMovementsLoading = false;
   let stockMovementsRequestId = 0;
   let stockMovementsController = null;
@@ -450,11 +452,16 @@
     }
   }
   async function refreshBranches() {
+    const requestId = ++branchRefreshRequestId;
+    branchRefreshController?.abort();
+    const controller = new AbortController();
+    branchRefreshController = controller;
     try {
       const previousBranch = selectedBranch.value;
-      const currentBranch = selectedBranch.value || localStorage.getItem(selectedBranchKey) || '';
-      const response = await fetch(`/api/branches/?_=${Date.now()}`, { cache: 'no-store' });
+      const response = await fetch(`/api/branches/?_=${Date.now()}`, { cache: 'no-store', signal: controller.signal });
       const data = await response.json();
+      if (requestId !== branchRefreshRequestId) return;
+      const currentBranch = selectedBranch.value || localStorage.getItem(selectedBranchKey) || '';
       const branches = data.branches || [];
       const availableBranches = branches.filter(branch => branch.online === true);
       const currentBranchOption = currentBranch && !availableBranches.some(branch => branch.name === currentBranch)
@@ -471,8 +478,11 @@
       selectedBranchName.textContent = selectedBranch.value || 'No online branch';
       if (selectedBranch.value && selectedBranch.value !== previousBranch) selectedBranch.dispatchEvent(new Event('change'));
     } catch (error) {
+      if (error.name === 'AbortError' || requestId !== branchRefreshRequestId) return;
       if (!selectedBranch.options.length) selectedBranch.innerHTML = '<option value="">Branches unavailable</option>';
       if (!activityBranch.options.length) activityBranch.innerHTML = '<option value="">Branches unavailable</option>';
+    } finally {
+      if (requestId === branchRefreshRequestId) branchRefreshController = null;
     }
   }
   function setBranchCardsLoading(isLoading) {
