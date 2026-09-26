@@ -1,8 +1,11 @@
+from datetime import timedelta
+
 from django.test import TestCase
 from django.contrib.auth import authenticate, get_user_model
 from django.core.management import call_command
 from loraApi.state_store import load_state
-from loraApi.models import InvoiceReprintRequest, MainStockBalance, ProductCatalog, StockMovement, StockTransfer
+from django.utils import timezone
+from loraApi.models import InvoiceReprintRequest, MainStockBalance, ProductCatalog, SalesReportRequest, StockMovement, StockTransfer
 import json
 
 
@@ -670,6 +673,27 @@ class DeletionQueueTests(TestCase):
 		statuses = {item['id']: item['status'] for item in queue}
 		self.assertEqual(statuses[cancellation_id], 'processing')
 		self.assertEqual(statuses[report_id], 'printed')
+
+	def test_scheduled_report_is_only_released_to_selected_branch_when_due(self):
+		scheduled_at = timezone.now() + timedelta(minutes=2)
+		response = self.client.post(
+			'/api/sales-report/',
+			data=json.dumps({
+				'report_date': '2026-09-25',
+				'branches': ['Branch A'],
+				'scheduled_at': scheduled_at.isoformat(),
+			}),
+			content_type='application/json',
+		)
+		self.assertEqual(response.status_code, 202)
+		report_id = response.json()['reports'][0]['id']
+		self.assertEqual(SalesReportRequest.objects.get(pk=report_id).status, 'scheduled')
+		self.assertEqual(self.client.get('/api/branch-sync/?branch=Branch A').json()['pending_reports'], [])
+
+		SalesReportRequest.objects.filter(pk=report_id).update(scheduled_at=timezone.now() - timedelta(seconds=1))
+		self.assertEqual(self.client.get('/api/branch-sync/?branch=Branch B').json()['pending_reports'], [])
+		branch_a_reports = self.client.get('/api/branch-sync/?branch=Branch A').json()['pending_reports']
+		self.assertEqual([report['id'] for report in branch_a_reports], [report_id])
 
 	def test_history_returns_confirmed_invoices_newest_first(self):
 		older = self.client.post(

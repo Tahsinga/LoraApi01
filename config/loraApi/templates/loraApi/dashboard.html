@@ -109,10 +109,12 @@
           <p class="sub">Print end-of-day totals by cashier and payment method on the branch computer.</p>
           <form id="report-form">
             <label>Report date<input id="report-date" name="report_date" type="date" required></label>
+            <label>Automatic print time<input id="report-time" type="datetime-local"></label>
             <label>Branches<div id="report-branches" class="branch-options" role="group" aria-describedby="branch-help"><span class="sub">Loading branches...</span></div></label>
             <label class="branch-all"><input id="all-branches" type="checkbox"><span>All connected branches</span></label>
             <small id="branch-help" class="sub">Select one or more branches.</small>
-            <button id="report-submit" type="submit">Run and print report</button>
+            <button id="report-submit" type="submit" value="now">Print report now</button>
+            <button id="report-schedule" type="submit" value="schedule">Set print time</button>
           </form>
           <div id="report-notice" class="notice" role="status"></div>
         </section>
@@ -132,6 +134,7 @@
   const reportForm = document.querySelector('#report-form');
   const reportNotice = document.querySelector('#report-notice');
   const reportSubmit = document.querySelector('#report-submit');
+  const reportSchedule = document.querySelector('#report-schedule');
   const allBranches = document.querySelector('#all-branches');
   const rows = document.querySelector('#rows');
   const branchSelect = document.querySelector('#branch');
@@ -167,8 +170,8 @@
         label: `Cancellation ${item.invoice}`, detail: 'Whole invoice', status: item.status,
         timestamp: item.timestamp, completed_at: item.confirmation_timestamp,
       }));
-      const statusLabels = { pending: 'Queued', processing: 'Sent', printed: 'Printed', processed: 'Completed', failed: 'Failed' };
-      rows.innerHTML = items.length ? items.map(item => `<div class="row"><div><b>${escapeHtml(item.label)}</b><small>${escapeHtml(item.branch)} · ${escapeHtml(item.detail)}</small></div><span class="badge ${escapeHtml(item.status)}">${escapeHtml(statusLabels[item.status] || item.status)}</span></div>`).join('') : '<div class="empty">No commands are waiting or recently completed.</div>';
+      const statusLabels = { scheduled: 'Scheduled', pending: 'Queued', processing: 'Sent', printed: 'Printed', processed: 'Completed', failed: 'Failed' };
+      rows.innerHTML = items.length ? items.map(item => `<div class="row"><div><b>${escapeHtml(item.label)}</b><small>${escapeHtml(item.branch)} · ${escapeHtml(item.detail)}${item.scheduled_at ? ` · ${escapeHtml(new Date(item.scheduled_at).toLocaleString())}` : ''}</small></div><span class="badge ${escapeHtml(item.status)}">${escapeHtml(statusLabels[item.status] || item.status)}</span></div>`).join('') : '<div class="empty">No commands are waiting or recently completed.</div>';
     } catch (error) { rows.innerHTML = '<div class="empty">Queue unavailable. Try again.</div>'; }
   }
   async function refreshBranches() {
@@ -214,19 +217,26 @@
   });
   reportForm.addEventListener('submit', async event => {
     event.preventDefault(); reportSubmit.disabled = true; reportNotice.className = 'notice'; reportNotice.textContent = '';
+    const scheduleReport = event.submitter?.value === 'schedule';
+    const localSchedule = document.querySelector('#report-time').value;
+    if (scheduleReport && (!localSchedule || new Date(localSchedule).getTime() <= Date.now())) {
+      reportNotice.className = 'notice error'; reportNotice.textContent = 'Choose a future print time.'; reportSubmit.disabled = false; return;
+    }
+    reportSchedule.disabled = true;
     const selectedBranches = [...reportBranches.querySelectorAll('.branch-option-input:checked')].map(input => input.value);
     const payload = {
       report_date: document.querySelector('#report-date').value,
       branches: selectedBranches,
       all_branches: allBranches.checked,
+      ...(scheduleReport ? { scheduled_at: new Date(localSchedule).toISOString() } : {}),
     };
     try {
       const response = await fetch('/api/sales-report/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Sales report could not be queued.');
-      reportNotice.className = 'notice ok'; reportNotice.textContent = data.message + ' The branch computer will print it on its next sync.';
+      reportNotice.className = 'notice ok'; reportNotice.textContent = data.message + (scheduleReport ? ' Branch computers will print it after the scheduled time on their next sync.' : ' The branch computer will print it on its next sync.');
     } catch (error) { reportNotice.className = 'notice error'; reportNotice.textContent = error.message; }
-    finally { reportSubmit.disabled = false; }
+    finally { reportSubmit.disabled = false; reportSchedule.disabled = false; }
   });
   allBranches.addEventListener('change', () => {
     reportBranches.classList.toggle('is-disabled', allBranches.checked);

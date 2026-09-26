@@ -17,7 +17,7 @@ from django.db.models.functions import Cast
 from django.http import JsonResponse, HttpResponse
 from django.shortcuts import render
 from django.utils import timezone
-from django.utils.dateparse import parse_date
+from django.utils.dateparse import parse_date, parse_datetime
 from django.views.decorators.csrf import csrf_exempt
 
 from .models import BranchHeartbeat, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, SalesReportRequest, StockMovement, StockTransfer
@@ -125,6 +125,7 @@ def report_payload(report):
         'id': report.request_id,
         'branch': report.branch,
         'report_date': report.report_date.isoformat(),
+        'scheduled_at': report.scheduled_at.isoformat() if report.scheduled_at else None,
         'status': report.status,
         'requested_at': report.requested_at.timestamp(),
         'completed_at': report.completed_at.timestamp() if report.completed_at else None,
@@ -404,6 +405,12 @@ def request_sales_report(request):
         branches = [branch['name'] for branch in CONNECTED_BRANCHES.values()]
     branches = sorted(set(branches), key=str.casefold)
     report_date = parse_date(str(payload.get('report_date', '')).strip())
+    scheduled_at_value = payload.get('scheduled_at')
+    scheduled_at = parse_datetime(str(scheduled_at_value)) if scheduled_at_value else None
+    if scheduled_at_value and (scheduled_at is None or timezone.is_naive(scheduled_at)):
+        return JsonResponse({'status': 'error', 'message': 'Choose a valid local print time.'}, status=400)
+    if scheduled_at and scheduled_at <= timezone.now():
+        return JsonResponse({'status': 'error', 'message': 'Print time must be in the future.'}, status=400)
     if not branches or report_date is None:
         return JsonResponse({'status': 'error', 'message': 'Select at least one branch and a valid report date.'}, status=400)
 
@@ -414,11 +421,16 @@ def request_sales_report(request):
             request_id=request_id,
             branch=branch,
             report_date=report_date,
+            scheduled_at=scheduled_at,
+            status='scheduled' if scheduled_at else 'pending',
             requested_by=request.user.get_username(),
         ))
     return JsonResponse({
         'status': 'accepted',
-        'message': f'Sales reports queued for {len(reports)} branch(es) on {report_date.isoformat()}.',
+        'message': (
+            f'Sales reports scheduled for {len(reports)} branch(es) at {timezone.localtime(scheduled_at).strftime("%Y-%m-%d %H:%M")}.'
+            if scheduled_at else f'Sales reports queued for {len(reports)} branch(es) on {report_date.isoformat()}.'
+        ),
         'reports': [report_payload(report) for report in reports],
     }, status=202)
 
@@ -1415,6 +1427,13 @@ def branch_sync(request):
 
     if request.method == 'GET':
         branch_name = request.GET.get('branch', '').strip()
+        with transaction.atomic():
+            due_reports = SalesReportRequest.objects.filter(
+                status='scheduled',
+                scheduled_at__lte=timezone.now(),
+            ).select_for_update()
+            due_reports.update(status='pending')
+
         pending_query = DeletionRecord.objects.filter(status='pending')
         if branch_name:
             pending_query = pending_query.filter(branch__iexact=branch_name)
@@ -1561,7 +1580,7 @@ def main_sync(request):
         pending = [record_payload(item) for item in DeletionRecord.objects.filter(status__in=['pending', 'processing'])]
         processed = [record_payload(item) for item in DeletionRecord.objects.filter(status='processed').order_by('-confirmation_timestamp')[:10]]
         failed = [record_payload(item) for item in DeletionRecord.objects.filter(status='failed').order_by('-confirmation_timestamp')[:10]]
-        pending_reports = [report_payload(item) for item in SalesReportRequest.objects.filter(status__in=['pending', 'processing']).order_by('-requested_at')[:20]]
+        pending_reports = [report_payload(item) for item in SalesReportRequest.objects.filter(status__in=['scheduled', 'pending', 'processing']).order_by('-requested_at')[:20]]
         completed_reports = [report_payload(item) for item in SalesReportRequest.objects.filter(status__in=['printed', 'failed']).order_by('-completed_at')[:20]]
         queue = [
             {
@@ -1584,6 +1603,7 @@ def main_sync(request):
                 'detail': item['report_date'],
                 'status': item['status'],
                 'timestamp': item['requested_at'],
+                'scheduled_at': item['scheduled_at'],
                 'completed_at': item['completed_at'],
             }
             for item in pending_reports + completed_reports
