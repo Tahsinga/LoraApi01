@@ -413,6 +413,24 @@ class StockTransferTests(TestCase):
 		self.assertEqual(product['received_quantity'], '5')
 		self.assertEqual(product['sold_quantity'], '3')
 
+	def test_stock_summary_available_matches_adjustment_and_movement_ledger(self):
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=999, product_name='Test Product', available_quantity=999,
+		)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=999, product_name='Test Product',
+			movement_type='adjusted', quantity=140, source='stock take',
+		)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=999, product_name='Test Product',
+			movement_type='sold', quantity=48, source='sale',
+		)
+
+		response = self.client.get('/api/stock/summary/?branch=BranchA')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()['products'][0]['available_quantity'], '92')
+
 	def test_catalog_sync_records_reduction_as_sold(self):
 		ProductCatalog.objects.create(
 			branch='BranchA', product_id=999, product_name='Test Product', available_quantity=10,

@@ -536,6 +536,23 @@ def stock_summary(request):
         target = received_by_product if movement['movement_type'] == 'received' else sold_by_product
         target[movement['product_id']] = movement['total'] or 0
 
+    movement_balances = {}
+    movement_balance_sources = set()
+    for movement in StockMovement.objects.filter(
+        branch__iexact=branch,
+        product_id__in=product_ids,
+    ).order_by('product_id', 'created_at', 'id').values('product_id', 'movement_type', 'quantity'):
+        product_id = movement['product_id']
+        quantity = Decimal(str(movement['quantity'] or 0))
+        if movement['movement_type'] == 'adjusted':
+            movement_balances[product_id] = quantity
+            movement_balance_sources.add(product_id)
+        elif movement['movement_type'] == 'received':
+            movement_balances[product_id] = movement_balances.get(product_id, Decimal('0')) + quantity
+            movement_balance_sources.add(product_id)
+        elif movement['movement_type'] == 'sold' and product_id in movement_balance_sources:
+            movement_balances[product_id] -= quantity
+
     sent_by_product = {
         row['product_id']: row['total'] or 0
         for row in StockTransfer.objects.filter(
@@ -552,7 +569,7 @@ def stock_summary(request):
             'received_quantity': str(received_by_product.get(product.product_id, 0)),
             'sent_quantity': str(sent_by_product.get(product.product_id, 0)),
             'sold_quantity': str(sold_by_product.get(product.product_id, 0)),
-            'available_quantity': str(product.available_quantity),
+            'available_quantity': str(movement_balances.get(product.product_id, product.available_quantity)),
         })
     return JsonResponse({'status': 'ok', 'branch': branch, 'products': summary})
 
