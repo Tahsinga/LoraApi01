@@ -51,10 +51,10 @@
     .selected-branch { margin:0 0 20px; padding:14px 16px; background:#e7f2ee; border:1px solid #c9ddd5; border-left:4px solid var(--teal); }
     .selected-branch-name { display:block; margin-top:7px; color:var(--ink); font:600 18px Georgia,serif; letter-spacing:0; text-transform:none; }
     .selected-branch select { height:50px; font-size:18px; font-weight:600; }
-    .branch-load-row { display:grid; grid-template-columns:minmax(0, 1fr) minmax(180px, .8fr); gap:20px; align-items:start; margin-bottom:20px; }
+    .branch-load-row { display:flex; flex-direction:column; gap:10px; align-items:stretch; margin-bottom:20px; }
     .branch-load-row .selected-branch { margin:0; }
-    .branch-load-actions { display:flex; gap:10px; align-items:center; }
-    .branch-selector { display:block; }
+  .branch-load-actions { display:flex; gap:10px; align-items:center; }
+  .branch-selector { display:block; }
     .load-stock-button { flex:0 0 auto; width:auto; margin:0; padding:14px 16px; background:var(--teal); }
     .load-stock-button:hover { background:var(--teal-dark); }
     .transfer-form { margin-top:20px; padding-top:20px; border-top:1px solid var(--line); }
@@ -156,10 +156,12 @@
           <div class="selected-branch">
             <span>Selected branch</span>
             <span id="selected-branch-name" class="selected-branch-name">Loading branches...</span>
-            <div class="branch-load-actions"><button id="load-stock-button" class="load-stock-button" type="button">Load stock</button>
-            <button id="refresh-stock-button" class="refresh-stock-button" type="button">Refresh figures</button></div>
           </div>
           <label class="branch-selector">Select branch<select id="selected-branch" required><option value="">Loading branches...</option></select></label>
+          <div class="branch-load-actions">
+            <button id="load-stock-button" class="load-stock-button" type="button">Load stock</button>
+            <button id="refresh-stock-button" class="refresh-stock-button" type="button">Refresh figures</button>
+          </div>
         </div>
         <p class="sub">Filter and select a Main POS product, then enter the quantity to send.</p>
         <form id="transfer-form" class="transfer-form">
