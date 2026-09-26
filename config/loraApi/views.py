@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import wraps
 from threading import Lock
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.contrib.auth import get_user_model, update_session_auth_hash
 from django.contrib.auth.decorators import login_required, user_passes_test
@@ -17,10 +18,10 @@ from django.db.models.functions import Cast
 from django.http import JsonResponse, HttpResponse
 from django.shortcuts import render
 from django.utils import timezone
-from django.utils.dateparse import parse_date, parse_datetime
+from django.utils.dateparse import parse_date, parse_datetime, parse_time
 from django.views.decorators.csrf import csrf_exempt
 
-from .models import BranchHeartbeat, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, SalesReportRequest, StockMovement, StockTransfer
+from .models import BranchHeartbeat, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
 from .state_store import sync_users_to_state
 
 """
@@ -433,6 +434,78 @@ def request_sales_report(request):
         ),
         'reports': [report_payload(report) for report in reports],
     }, status=202)
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
+@retry_on_database_lock
+def sales_report_schedules(request):
+    if request.method == 'GET':
+        schedules = SalesReportSchedule.objects.all()
+        return JsonResponse({
+            'status': 'ok',
+            'schedules': [
+                {
+                    'branch': schedule.branch,
+                    'time': schedule.report_time.strftime('%H:%M'),
+                    'timezone': schedule.timezone,
+                }
+                for schedule in schedules
+            ],
+        })
+
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use GET or POST method'}, status=405)
+
+    try:
+        payload = json.loads(request.body or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'status': 'error', 'message': 'Invalid JSON'}, status=400)
+
+    schedule_rows = payload.get('schedules')
+    if not isinstance(schedule_rows, list):
+        return JsonResponse({'status': 'error', 'message': 'Schedules must be a list.'}, status=400)
+
+    normalized_schedules = {}
+    for row in schedule_rows:
+        branch = str(row.get('branch', '')).strip() if isinstance(row, dict) else ''
+        report_time = parse_time(str(row.get('time', '')).strip()) if isinstance(row, dict) else None
+        time_zone = str(row.get('timezone', '')).strip() if isinstance(row, dict) else ''
+        if not branch or report_time is None or report_time.tzinfo is not None or not time_zone:
+            return JsonResponse({'status': 'error', 'message': 'Each schedule needs a branch, local time, and timezone.'}, status=400)
+        try:
+            ZoneInfo(time_zone)
+        except (ZoneInfoNotFoundError, ValueError):
+            return JsonResponse({'status': 'error', 'message': f'Unknown timezone for {branch}.'}, status=400)
+        branch_key = branch.casefold()
+        if branch_key in normalized_schedules:
+            return JsonResponse({'status': 'error', 'message': f'{branch} is listed more than once.'}, status=400)
+        normalized_schedules[branch_key] = (branch, report_time, time_zone)
+
+    with transaction.atomic():
+        for branch, report_time, time_zone in normalized_schedules.values():
+            schedule = SalesReportSchedule.objects.filter(branch__iexact=branch).first()
+            if schedule is None:
+                SalesReportSchedule.objects.create(
+                    branch=branch,
+                    report_time=report_time,
+                    timezone=time_zone,
+                )
+            else:
+                schedule.branch = branch
+                schedule.report_time = report_time
+                schedule.timezone = time_zone
+                schedule.save(update_fields=['branch', 'report_time', 'timezone', 'updated_at'])
+
+        for schedule in SalesReportSchedule.objects.all():
+            if schedule.branch.casefold() not in normalized_schedules:
+                schedule.delete()
+
+    return JsonResponse({
+        'status': 'ok',
+        'message': f'Daily print times saved for {len(normalized_schedules)} branch(es).',
+        'count': len(normalized_schedules),
+    })
 
 
 @login_required(login_url='/login/')
@@ -1428,6 +1501,29 @@ def branch_sync(request):
     if request.method == 'GET':
         branch_name = request.GET.get('branch', '').strip()
         with transaction.atomic():
+            if branch_name:
+                schedules = SalesReportSchedule.objects.select_for_update().filter(branch__iexact=branch_name)
+            else:
+                schedules = SalesReportSchedule.objects.select_for_update().all()
+            for schedule in schedules:
+                local_now = timezone.now().astimezone(ZoneInfo(schedule.timezone))
+                local_date = local_now.date()
+                if local_now.time().replace(tzinfo=None) < schedule.report_time or schedule.last_queued_date == local_date:
+                    continue
+
+                report_id = f'REPORT_DAILY_{schedule.pk}_{local_date.isoformat()}'
+                SalesReportRequest.objects.get_or_create(
+                    request_id=report_id,
+                    defaults={
+                        'branch': schedule.branch,
+                        'report_date': local_date,
+                        'status': 'pending',
+                        'requested_by': 'daily_schedule',
+                    },
+                )
+                schedule.last_queued_date = local_date
+                schedule.save(update_fields=['last_queued_date', 'updated_at'])
+
             due_reports = SalesReportRequest.objects.filter(
                 status='scheduled',
                 scheduled_at__lte=timezone.now(),

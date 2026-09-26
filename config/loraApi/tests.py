@@ -1,11 +1,12 @@
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as datetime_timezone
+from unittest.mock import patch
 
 from django.test import TestCase
 from django.contrib.auth import authenticate, get_user_model
 from django.core.management import call_command
 from loraApi.state_store import load_state
 from django.utils import timezone
-from loraApi.models import InvoiceReprintRequest, MainStockBalance, ProductCatalog, SalesReportRequest, StockMovement, StockTransfer
+from loraApi.models import InvoiceReprintRequest, MainStockBalance, ProductCatalog, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
 import json
 
 
@@ -694,6 +695,35 @@ class DeletionQueueTests(TestCase):
 		self.assertEqual(self.client.get('/api/branch-sync/?branch=Branch B').json()['pending_reports'], [])
 		branch_a_reports = self.client.get('/api/branch-sync/?branch=Branch A').json()['pending_reports']
 		self.assertEqual([report['id'] for report in branch_a_reports], [report_id])
+
+	def test_daily_report_schedules_are_branch_specific_and_repeat_once_per_day(self):
+		fixed_now = datetime(2026, 9, 26, 12, 1, tzinfo=datetime_timezone.utc)
+		response = self.client.post(
+			'/api/sales-report/schedules/',
+			data=json.dumps({
+				'schedules': [
+					{'branch': 'Branch A', 'time': '12:00', 'timezone': 'UTC'},
+					{'branch': 'Branch B', 'time': '12:02', 'timezone': 'UTC'},
+				],
+			}),
+			content_type='application/json',
+		)
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(SalesReportSchedule.objects.count(), 2)
+
+		with patch('loraApi.views.timezone.now', return_value=fixed_now):
+			branch_b_reports = self.client.get('/api/branch-sync/?branch=Branch B').json()['pending_reports']
+			self.assertEqual(branch_b_reports, [])
+			branch_a_reports = self.client.get('/api/branch-sync/?branch=Branch A').json()['pending_reports']
+			self.assertEqual(len(branch_a_reports), 1)
+			self.assertEqual(branch_a_reports[0]['report_date'], '2026-09-26')
+			self.assertEqual(self.client.get('/api/branch-sync/?branch=Branch A').json()['pending_reports'], [])
+			self.assertEqual(SalesReportRequest.objects.filter(branch='Branch A', report_date=fixed_now.date()).count(), 1)
+
+		with patch('loraApi.views.timezone.now', return_value=fixed_now + timedelta(days=1)):
+			next_day_reports = self.client.get('/api/branch-sync/?branch=Branch A').json()['pending_reports']
+		self.assertEqual(len(next_day_reports), 1)
+		self.assertEqual(next_day_reports[0]['report_date'], '2026-09-27')
 
 	def test_history_returns_confirmed_invoices_newest_first(self):
 		older = self.client.post(
