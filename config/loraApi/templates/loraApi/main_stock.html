@@ -337,6 +337,7 @@
       : '<p class="empty">No products match your search.</p>';
   }
   async function loadBranchProducts(showLoading = true) {
+    if (branchProductsLoading) return;
     const requestId = ++branchProductsRequestId;
     const branch = selectedBranch.value;
     if (showLoading) {
@@ -399,6 +400,7 @@
     return loadBranchProducts(true);
   }
   async function loadStockMovements() {
+    if (stockMovementsLoading) return;
     const requestId = ++stockMovementsRequestId;
     stockMovementsController?.abort();
     if (!activityBranch.value) {
@@ -750,12 +752,12 @@
     if (!event.target.closest('.product-picker')) productSearches.forEach(control => closePickerOptions(control.options));
   });
   refreshAll();
-  setInterval(refreshBranches, 5000);
+  setInterval(refreshBranches, 30000);
   setInterval(() => {
     loadBranchProducts(false);
     loadStockMovements();
     loadStockTransfers();
-  }, 5000);
+  }, 30000);
 </script>
 </body>
 </html>

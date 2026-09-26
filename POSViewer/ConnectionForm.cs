@@ -1,5 +1,6 @@
 using System.Data.SqlClient;
 using System.Net.Http.Json;
+using System.Text.Json;
 
 namespace POSViewer;
 
@@ -332,23 +333,39 @@ public sealed class ConnectionForm : Form
 
     private static async Task<bool> CheckGatewayAsync(string apiBaseUrl)
     {
-        try
-        {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            var normalizedApiUrl = ConnectionSettings.NormalizeApiBaseUrl(apiBaseUrl);
-            var response = await client.GetAsync($"{normalizedApiUrl}/api/health/");
-            if (!response.IsSuccessStatusCode)
-            {
-                return false;
-            }
+        var requestedUrl = ConnectionSettings.NormalizeApiBaseUrl(apiBaseUrl);
+        var apiUrls = new[] { requestedUrl, ConnectionSettings.DefaultApiBaseUrl }
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        var failures = new List<string>();
 
-            var payload = await response.Content.ReadFromJsonAsync<GatewayHealthResponse>();
-            return payload is not null && string.Equals(payload.status, "ok", StringComparison.OrdinalIgnoreCase);
-        }
-        catch
+        foreach (var candidateUrl in apiUrls)
         {
-            return false;
+            try
+            {
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                using var response = await client.GetAsync($"{candidateUrl}/api/health/");
+                var responseBody = await response.Content.ReadAsStringAsync();
+                if (!response.IsSuccessStatusCode)
+                {
+                    failures.Add($"{candidateUrl}: HTTP {(int)response.StatusCode}");
+                    continue;
+                }
+
+                var payload = JsonSerializer.Deserialize<GatewayHealthResponse>(responseBody);
+                if (payload is not null && string.Equals(payload.status, "ok", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                failures.Add($"{candidateUrl}: invalid health response");
+            }
+            catch (Exception ex)
+            {
+                failures.Add($"{candidateUrl}: {ex.Message}");
+            }
         }
+
+        throw new HttpRequestException(string.Join(" | ", failures));
     }
 
     private async Task TestSqlConnectionAsync()
