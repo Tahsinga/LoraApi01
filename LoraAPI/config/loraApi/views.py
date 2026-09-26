@@ -458,7 +458,7 @@ def sales_report_schedules(request):
             'status': 'ok',
             'schedules': [
                 {'branch': item.branch, 'time': item.report_time.strftime('%H:%M'), 'timezone': item.timezone}
-                for item in SalesReportSchedule.objects.all()
+                for item in SalesReportSchedule.objects.all().order_by('branch', 'report_time')
             ],
         })
     if request.method != 'POST':
@@ -482,14 +482,14 @@ def sales_report_schedules(request):
             ZoneInfo(time_zone)
         except (ZoneInfoNotFoundError, ValueError):
             return JsonResponse({'status': 'error', 'message': f'Unknown timezone for {branch}.'}, status=400)
-        key = branch.casefold()
+        key = (branch.casefold(), report_time)
         if key in schedules:
-            return JsonResponse({'status': 'error', 'message': f'{branch} is listed more than once.'}, status=400)
+            return JsonResponse({'status': 'error', 'message': f'{branch} has the same print time more than once.'}, status=400)
         schedules[key] = (branch, report_time, time_zone)
 
     with transaction.atomic():
         for branch, report_time, time_zone in schedules.values():
-            item = SalesReportSchedule.objects.filter(branch__iexact=branch).first()
+            item = SalesReportSchedule.objects.filter(branch__iexact=branch, report_time=report_time).first()
             if item is None:
                 SalesReportSchedule.objects.create(branch=branch, report_time=report_time, timezone=time_zone)
             else:
@@ -497,11 +497,13 @@ def sales_report_schedules(request):
                 item.report_time = report_time
                 item.timezone = time_zone
                 item.save(update_fields=['branch', 'report_time', 'timezone', 'updated_at'])
+        desired_schedules = set(schedules)
         for item in SalesReportSchedule.objects.all():
-            if item.branch.casefold() not in schedules:
+            if (item.branch.casefold(), item.report_time) not in desired_schedules:
                 item.delete()
 
-    return JsonResponse({'status': 'ok', 'message': f'Daily print times saved for {len(schedules)} branch(es).', 'count': len(schedules)})
+    branch_count = len({branch.casefold() for branch, _, _ in schedules.values()})
+    return JsonResponse({'status': 'ok', 'message': f'Daily print times saved for {len(schedules)} time slot(s) across {branch_count} branch(es).', 'count': len(schedules)})
 
 
 @login_required(login_url='/login/')

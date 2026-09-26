@@ -786,6 +786,33 @@ class DailySalesReportScheduleTests(TestCase):
 		self.assertEqual(len(branch_reports), 1)
 		self.assertEqual(branch_reports[0]['report_date'], fixed_now.date().isoformat())
 
+	def test_branch_can_queue_multiple_daily_report_times(self):
+		response = self.client.post(
+			'/api/sales-report/schedules/',
+			data=json.dumps({'schedules': [
+				{'branch': 'Branch A', 'time': '12:00', 'timezone': 'UTC'},
+				{'branch': 'Branch A', 'time': '18:00', 'timezone': 'UTC'},
+			]}),
+			content_type='application/json',
+		)
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(SalesReportSchedule.objects.filter(branch='Branch A').count(), 2)
+
+		morning = datetime(2026, 9, 26, 12, 1, tzinfo=datetime_timezone.utc)
+		with patch('loraApi.views.timezone.now', return_value=morning):
+			queue = self.client.get('/api/main-sync/').json()['queue']
+		morning_reports = [item for item in queue if item['type'] == 'sales_report' and item['branch'] == 'Branch A']
+		self.assertEqual(len(morning_reports), 1)
+
+		evening = datetime(2026, 9, 26, 18, 1, tzinfo=datetime_timezone.utc)
+		with patch('loraApi.views.timezone.now', return_value=evening):
+			queue = self.client.get('/api/main-sync/').json()['queue']
+			repeated_queue = self.client.get('/api/main-sync/').json()['queue']
+		evening_reports = [item for item in queue if item['type'] == 'sales_report' and item['branch'] == 'Branch A']
+		repeated_reports = [item for item in repeated_queue if item['type'] == 'sales_report' and item['branch'] == 'Branch A']
+		self.assertEqual(len(evening_reports), 2)
+		self.assertEqual(len(repeated_reports), 2)
+
 	def test_clear_sales_report_queue_deletes_only_pending_and_failed_reports(self):
 		for status in ['pending', 'failed', 'processing', 'scheduled', 'printed']:
 			SalesReportRequest.objects.create(
