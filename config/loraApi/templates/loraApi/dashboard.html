@@ -68,9 +68,11 @@
     .schedule-dialog h2 { margin:0; font:500 24px Georgia,serif; }
     .schedule-dialog .sub { margin:0; color:var(--muted); font:13px/1.45 Arial,sans-serif; }
     .schedule-branch-list { display:grid; gap:7px; max-height:48dvh; overflow:auto; }
-    .schedule-branch-row { display:grid; grid-template-columns:minmax(0,1fr) 145px; align-items:center; gap:12px; padding:8px 10px; background:#f5f8f5; border:1px solid var(--line); }
-    .schedule-branch-row strong { overflow-wrap:anywhere; font:600 14px Arial,sans-serif; }
-    .schedule-branch-row input { height:36px; }
+    .schedule-branch-row { display:grid; grid-template-columns:20px minmax(0,1fr) 145px; align-items:center; gap:10px; padding:8px 10px; background:#f5f8f5; border:1px solid var(--line); text-transform:none; letter-spacing:0; }
+    .schedule-branch-row strong { overflow-wrap:anywhere; font:600 14px Arial,sans-serif; text-transform:none; }
+    .schedule-branch-row input[type="checkbox"] { width:18px; height:18px; margin:0; padding:0; accent-color:var(--teal); }
+    .schedule-branch-row input[type="time"] { height:36px; }
+    .schedule-branch-row input[type="time"]:disabled { opacity:.5; }
     .schedule-dialog-actions { display:flex; justify-content:flex-end; gap:9px; }
     .schedule-dialog-actions button { grid-column:auto; margin:0; padding:11px 14px; }
     .schedule-cancel { color:var(--ink); background:#e8eeeb; }
@@ -92,7 +94,7 @@
     .badge.printed, .badge.processed { color:#176342; background:#dff2e7; }
     .badge.failed { color:#9c352b; background:#fbe1dd; }
     .empty { padding:18px 0 4px; color:var(--muted); font:14px Arial,sans-serif; }
-    @media (max-width:420px) { .schedule-dialog-inner { padding:14px; } .schedule-branch-row { grid-template-columns:minmax(0,1fr) 120px; gap:8px; padding:7px; } .schedule-dialog-actions button { flex:1; } }
+    @media (max-width:420px) { .schedule-dialog-inner { padding:14px; } .schedule-branch-row { grid-template-columns:20px minmax(0,1fr) 120px; gap:8px; padding:7px; } .schedule-dialog-actions button { flex:1; } }
     @media (max-width:760px) { header { display:block; padding-top:28px; } .live { gap:5px; margin-top:20px; font-size:9px; letter-spacing:.5px; } .history-link, .logout-button { font-size:9px; letter-spacing:.5px; } main { padding:0 16px 36px; } .workspace { grid-template-columns:1fr; } .panel, .workspace > .panel { padding:16px; } .report-panel { margin-top:14px; padding-top:14px; } .report-panel, .queue { grid-column:auto; grid-row:auto; } form { grid-template-columns:1fr; } .wide { grid-column:auto; } button { grid-column:auto; } }
   </style>
 </head>
@@ -141,7 +143,7 @@
   <dialog id="report-schedule-dialog" class="schedule-dialog" aria-labelledby="schedule-dialog-title">
     <div class="schedule-dialog-inner">
       <h2 id="schedule-dialog-title">Daily report times</h2>
-      <p class="sub">Set a local print time for each branch. Leave a time blank to turn off its daily report.</p>
+      <p class="sub">Tick each branch for daily printing, then set its local print time. The dashboard branch checks are only for printing now.</p>
       <div id="schedule-branch-list" class="schedule-branch-list"><p class="sub">Loading branches...</p></div>
       <div id="schedule-notice" class="notice" role="status"></div>
       <div class="schedule-dialog-actions">
@@ -269,7 +271,8 @@
     scheduleBranchList.innerHTML = branchNames.length
       ? branchNames.map(branch => {
         const saved = savedByBranch.get(branch.toLocaleLowerCase());
-        return `<label class="schedule-branch-row"><strong>${escapeHtml(branch)}</strong><input class="daily-time-input" type="time" value="${escapeHtml(saved?.time ?? '')}" aria-label="Daily print time for ${escapeHtml(branch)}" data-branch="${escapeHtml(branch)}"></label>`;
+        const enabled = Boolean(saved);
+        return `<div class="schedule-branch-row"><input class="daily-schedule-enabled" type="checkbox"${enabled ? ' checked' : ''} aria-label="Schedule daily reports for ${escapeHtml(branch)}"><strong>${escapeHtml(branch)}</strong><input class="daily-time-input" type="time" value="${escapeHtml(saved?.time ?? '')}"${enabled ? '' : ' disabled'} aria-label="Daily print time for ${escapeHtml(branch)}" data-branch="${escapeHtml(branch)}"></div>`;
       }).join('')
       : '<p class="sub">No branches are connected and no saved schedules exist.</p>';
   }
@@ -288,12 +291,25 @@
     }
   });
   document.querySelector('#schedule-cancel').addEventListener('click', () => scheduleDialog.close());
+  scheduleBranchList.addEventListener('change', event => {
+    if (event.target.matches('.daily-schedule-enabled')) {
+      event.target.closest('.schedule-branch-row').querySelector('.daily-time-input').disabled = !event.target.checked;
+    }
+  });
   scheduleSave.addEventListener('click', async () => {
     scheduleSave.disabled = true; scheduleNotice.className = 'notice'; scheduleNotice.textContent = '';
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-    const schedules = [...scheduleBranchList.querySelectorAll('.daily-time-input')]
-      .filter(input => input.value)
-      .map(input => ({ branch: input.dataset.branch, time: input.value, timezone: timeZone }));
+    const enabledRows = [...scheduleBranchList.querySelectorAll('.schedule-branch-row')]
+      .filter(row => row.querySelector('.daily-schedule-enabled').checked);
+    if (enabledRows.some(row => !row.querySelector('.daily-time-input').value)) {
+      scheduleNotice.className = 'notice error'; scheduleNotice.textContent = 'Set a time for every ticked branch.';
+      scheduleSave.disabled = false;
+      return;
+    }
+    const schedules = enabledRows.map(row => {
+      const input = row.querySelector('.daily-time-input');
+      return { branch: input.dataset.branch, time: input.value, timezone: timeZone };
+    });
     try {
       const response = await fetch('/api/sales-report/schedules/', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
