@@ -27,6 +27,9 @@
     .panel { background:var(--white); border:1px solid var(--line); padding:26px; box-shadow:0 12px 35px rgba(28,62,54,.06); }
     .panel h2 { margin:0 0 5px; font-size:25px; font-weight:500; }
     .panel .sub { margin:0 0 22px; color:var(--muted); font:14px/1.5 Arial,sans-serif; }
+    .workspace > .panel { padding:20px; }
+    .workspace > .panel h2 { font-size:23px; }
+    .workspace > .panel .sub { margin-bottom:14px; }
     form { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
     label { display:flex; flex-direction:column; gap:7px; color:#435153; font:700 11px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; }
     input, select { width:100%; height:46px; padding:12px 13px; color:var(--ink); background:#fbfcfa; border:1px solid #cbd7d2; border-radius:2px; outline:none; font:16px Georgia,serif; }
@@ -55,6 +58,10 @@
     .queue { margin-top:20px; }
     .report-panel { grid-column:1; grid-row:2; margin-top:20px; }
     .report-panel #report-form { grid-template-columns:1fr; }
+    .report-panel { margin-top:16px; padding-top:16px; border-top:1px solid var(--line); }
+    .report-panel h2 { font-size:21px; }
+    .report-panel .sub { margin-bottom:12px; }
+    .report-panel form { gap:10px; }
     .queue { grid-column:2; grid-row:1; margin-top:0; }
     .queue-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:14px; }
     .queue-head h2 { margin:0; }
@@ -63,16 +70,16 @@
     .refresh { padding:8px 11px; color:var(--teal-dark); background:#e1f0eb; font-size:10px; }
     .refresh:hover { background:#cce7df; }
     .rows { display:grid; gap:9px; }
-    .row { display:flex; justify-content:space-between; gap:16px; padding:13px 0; border-top:1px solid var(--line); font:14px Arial,sans-serif; }
+    .row { display:flex; justify-content:space-between; gap:16px; padding:10px 0; border-top:1px solid var(--line); font:14px Arial,sans-serif; }
     .row b { font-family:Georgia,serif; font-size:16px; font-weight:500; }
-    .row small { display:block; margin-top:4px; color:var(--muted); }
+    .row small { display:block; margin-top:2px; color:var(--muted); }
     .badge { align-self:start; padding:5px 8px; color:#8b651d; background:#fff3d4; font:700 10px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; }
     .badge.confirmed { color:#176342; background:#dff2e7; }
     .badge.sent, .badge.processing { color:#245a82; background:#dcecf8; }
     .badge.printed, .badge.processed { color:#176342; background:#dff2e7; }
     .badge.failed { color:#9c352b; background:#fbe1dd; }
     .empty { padding:18px 0 4px; color:var(--muted); font:14px Arial,sans-serif; }
-    @media (max-width:760px) { header { display:block; padding-top:28px; } .live { gap:5px; margin-top:20px; font-size:9px; letter-spacing:.5px; } .history-link, .logout-button { font-size:9px; letter-spacing:.5px; } main { padding:0 16px 36px; } .workspace { grid-template-columns:1fr; } .panel { padding:20px; } .report-panel, .queue { grid-column:auto; grid-row:auto; margin-top:20px; } form { grid-template-columns:1fr; } .wide { grid-column:auto; } button { grid-column:auto; } }
+    @media (max-width:760px) { header { display:block; padding-top:28px; } .live { gap:5px; margin-top:20px; font-size:9px; letter-spacing:.5px; } .history-link, .logout-button { font-size:9px; letter-spacing:.5px; } main { padding:0 16px 36px; } .workspace { grid-template-columns:1fr; } .panel, .workspace > .panel { padding:16px; } .report-panel { margin-top:14px; padding-top:14px; } .report-panel, .queue { grid-column:auto; grid-row:auto; } form { grid-template-columns:1fr; } .wide { grid-column:auto; } button { grid-column:auto; } }
   </style>
 </head>
 <body>
