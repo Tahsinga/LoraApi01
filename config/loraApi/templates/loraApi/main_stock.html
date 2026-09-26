@@ -324,12 +324,22 @@
       branchPriceInput.placeholder = 'Branch price unavailable';
     }
   }
-  function selectProduct(product) {
-    document.querySelector('#main-stock-search').value = product.product_name;
-    document.querySelector('#main-stock-product').value = product.product_id;
-    document.querySelector('#main-stock-name').value = product.product_name;
+  function setSelectedProduct(product, focusTransfer = false) {
+    const productFields = [
+      ['#main-stock-search', '#main-stock-product', '#main-stock-name'],
+      ['#transfer-search', '#transfer-product', '#transfer-name'],
+      ['#branch-price-search', '#branch-price-product', '#branch-price-name'],
+    ];
+    productFields.forEach(([inputSelector, idSelector, nameSelector]) => {
+      document.querySelector(inputSelector).value = product.product_name;
+      document.querySelector(idSelector).value = product.product_id;
+      document.querySelector(nameSelector).value = product.product_name;
+    });
     void loadSelectedBranchPrice(product.product_id, product.product_name);
-    document.querySelector('#transfer-quantity').focus();
+    if (focusTransfer) document.querySelector('#transfer-quantity').focus();
+  }
+  function selectProduct(product) {
+    setSelectedProduct(product, true);
   }
   function renderBranchProducts() {
     const query = branchProductSearch.value.trim().toLowerCase();
@@ -545,9 +555,7 @@
       const product = products.find(item => String(item.product_id) === option.dataset.productId)
         || branchCatalogProducts.find(item => String(item.product_id) === option.dataset.productId);
       if (!product) return;
-      control.input.value = product.product_name;
-      control.id.value = product.product_id;
-      control.name.value = product.product_name;
+      setSelectedProduct(product);
       closePickerOptions(control.options);
     });
   }
