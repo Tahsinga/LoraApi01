@@ -712,18 +712,29 @@ class DeletionQueueTests(TestCase):
 		self.assertEqual(SalesReportSchedule.objects.count(), 2)
 
 		with patch('loraApi.views.timezone.now', return_value=fixed_now):
+			main_queue = self.client.get('/api/main-sync/').json()['queue']
+			daily_reports = [item for item in main_queue if item['type'] == 'sales_report']
+			self.assertEqual(len(daily_reports), 1)
+			self.assertEqual(daily_reports[0]['branch'], 'Branch A')
 			branch_b_reports = self.client.get('/api/branch-sync/?branch=Branch B').json()['pending_reports']
 			self.assertEqual(branch_b_reports, [])
 			branch_a_reports = self.client.get('/api/branch-sync/?branch=Branch A').json()['pending_reports']
 			self.assertEqual(len(branch_a_reports), 1)
 			self.assertEqual(branch_a_reports[0]['report_date'], '2026-09-26')
 			self.assertEqual(self.client.get('/api/branch-sync/?branch=Branch A').json()['pending_reports'], [])
+			main_queue = self.client.get('/api/main-sync/').json()['queue']
+			daily_reports = [item for item in main_queue if item['type'] == 'sales_report']
+			self.assertEqual(len(daily_reports), 1)
 			self.assertEqual(SalesReportRequest.objects.filter(branch='Branch A', report_date=fixed_now.date()).count(), 1)
 
 		with patch('loraApi.views.timezone.now', return_value=fixed_now + timedelta(days=1)):
-			next_day_reports = self.client.get('/api/branch-sync/?branch=Branch A').json()['pending_reports']
+			main_queue = self.client.get('/api/main-sync/').json()['queue']
+			next_day_reports = [
+				item for item in main_queue
+				if item['type'] == 'sales_report' and item['branch'] == 'Branch A' and item['detail'] == '2026-09-27'
+			]
 		self.assertEqual(len(next_day_reports), 1)
-		self.assertEqual(next_day_reports[0]['report_date'], '2026-09-27')
+		self.assertEqual(next_day_reports[0]['detail'], '2026-09-27')
 
 	def test_history_returns_confirmed_invoices_newest_first(self):
 		older = self.client.post(

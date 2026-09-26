@@ -135,6 +135,43 @@ def report_payload(report):
     }
 
 
+def queue_due_sales_reports(branch_name=None):
+    current_time = timezone.now()
+    with transaction.atomic():
+        if branch_name:
+            schedules = SalesReportSchedule.objects.select_for_update().filter(branch__iexact=branch_name)
+        else:
+            schedules = SalesReportSchedule.objects.select_for_update().all()
+
+        for schedule in schedules:
+            try:
+                local_now = current_time.astimezone(ZoneInfo(schedule.timezone))
+            except (ZoneInfoNotFoundError, ValueError):
+                continue
+
+            local_date = local_now.date()
+            if local_now.time().replace(tzinfo=None) < schedule.report_time or schedule.last_queued_date == local_date:
+                continue
+
+            report_id = f'REPORT_DAILY_{schedule.pk}_{local_date.isoformat()}'
+            SalesReportRequest.objects.get_or_create(
+                request_id=report_id,
+                defaults={
+                    'branch': schedule.branch,
+                    'report_date': local_date,
+                    'status': 'pending',
+                    'requested_by': 'daily_schedule',
+                },
+            )
+            schedule.last_queued_date = local_date
+            schedule.save(update_fields=['last_queued_date', 'updated_at'])
+
+        SalesReportRequest.objects.filter(
+            status='scheduled',
+            scheduled_at__lte=current_time,
+        ).update(status='pending')
+
+
 def transfer_payload(transfer):
     return {
         'id': transfer.transfer_id,
@@ -1500,35 +1537,7 @@ def branch_sync(request):
 
     if request.method == 'GET':
         branch_name = request.GET.get('branch', '').strip()
-        with transaction.atomic():
-            if branch_name:
-                schedules = SalesReportSchedule.objects.select_for_update().filter(branch__iexact=branch_name)
-            else:
-                schedules = SalesReportSchedule.objects.select_for_update().all()
-            for schedule in schedules:
-                local_now = timezone.now().astimezone(ZoneInfo(schedule.timezone))
-                local_date = local_now.date()
-                if local_now.time().replace(tzinfo=None) < schedule.report_time or schedule.last_queued_date == local_date:
-                    continue
-
-                report_id = f'REPORT_DAILY_{schedule.pk}_{local_date.isoformat()}'
-                SalesReportRequest.objects.get_or_create(
-                    request_id=report_id,
-                    defaults={
-                        'branch': schedule.branch,
-                        'report_date': local_date,
-                        'status': 'pending',
-                        'requested_by': 'daily_schedule',
-                    },
-                )
-                schedule.last_queued_date = local_date
-                schedule.save(update_fields=['last_queued_date', 'updated_at'])
-
-            due_reports = SalesReportRequest.objects.filter(
-                status='scheduled',
-                scheduled_at__lte=timezone.now(),
-            ).select_for_update()
-            due_reports.update(status='pending')
+        queue_due_sales_reports(branch_name)
 
         pending_query = DeletionRecord.objects.filter(status='pending')
         if branch_name:
@@ -1673,6 +1682,7 @@ def main_sync(request):
     cleanup_queues()
 
     if request.method == 'GET':
+        queue_due_sales_reports()
         pending = [record_payload(item) for item in DeletionRecord.objects.filter(status__in=['pending', 'processing'])]
         processed = [record_payload(item) for item in DeletionRecord.objects.filter(status='processed').order_by('-confirmation_timestamp')[:10]]
         failed = [record_payload(item) for item in DeletionRecord.objects.filter(status='failed').order_by('-confirmation_timestamp')[:10]]
