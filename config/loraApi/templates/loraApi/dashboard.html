@@ -33,8 +33,8 @@
     form { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
     label { display:flex; flex-direction:column; gap:5px; color:#435153; font:700 11px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; }
     input, select { width:100%; height:40px; padding:8px 11px; color:var(--ink); background:#fbfcfa; border:1px solid #cbd7d2; border-radius:2px; outline:none; font:15px Georgia,serif; }
-    .branch-options { display:grid; gap:7px; max-height:142px; overflow:auto; padding:8px; background:#fbfcfa; border:1px solid #cbd7d2; border-radius:2px; }
-    .branch-option { display:flex; flex-direction:row; align-items:center; gap:9px; padding:7px 8px; color:var(--ink); background:#fff; border:1px solid #e1e9e5; font:14px Arial,sans-serif; letter-spacing:0; text-transform:none; cursor:pointer; }
+    .branch-options { display:grid; gap:5px; max-height:92px; overflow:auto; padding:6px; background:#fbfcfa; border:1px solid #cbd7d2; border-radius:2px; }
+    .branch-option { display:flex; flex-direction:row; align-items:center; gap:8px; padding:5px 7px; color:var(--ink); background:#fff; border:1px solid #e1e9e5; font:13px Arial,sans-serif; letter-spacing:0; text-transform:none; cursor:pointer; }
     .branch-option input { width:17px; height:17px; margin:0; accent-color:var(--teal); }
     .branch-options.is-disabled { opacity:.55; pointer-events:none; }
     input:focus, select:focus { border-color:var(--teal); box-shadow:0 0 0 3px #d9efeb; }
@@ -69,7 +69,7 @@
     .history-button:hover { background:#cce7df; }
     .refresh { padding:8px 11px; color:var(--teal-dark); background:#e1f0eb; font-size:10px; }
     .refresh:hover { background:#cce7df; }
-    .rows { display:grid; gap:9px; }
+    .rows { display:grid; gap:7px; max-height:330px; overflow-y:auto; padding-right:5px; }
     .row { display:flex; justify-content:space-between; gap:16px; padding:7px 0; border-top:1px solid var(--line); font:13px Arial,sans-serif; }
     .row b { font-family:Georgia,serif; font-size:15px; font-weight:500; }
     .row small { display:block; margin-top:2px; color:var(--muted); }
