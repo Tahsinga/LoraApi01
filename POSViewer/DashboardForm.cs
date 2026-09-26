@@ -391,14 +391,28 @@ public sealed class DashboardForm : Form
             }
 
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
-            var payload = JsonSerializer.Serialize(new { products });
-            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
-            var response = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/products/publish/", content);
-            AddLog(response.IsSuccessStatusCode
-                ? $"[SUCCESS] Synced {products.Count} products to the web catalog."
-                : $"[WARNING] Product catalog sync failed: {response.StatusCode}", response.IsSuccessStatusCode ? Color.LightGreen : Color.Orange);
-            _statusLabel.Text = response.IsSuccessStatusCode
-                ? $"Main PC catalog synced: {products.Count} products."
+            var publishedCount = 0;
+            var syncSucceeded = true;
+            foreach (var batch in products.Chunk(500))
+            {
+                var payload = JsonSerializer.Serialize(new { products = batch });
+                using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+                using var response = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/products/publish/", content);
+                if (!response.IsSuccessStatusCode)
+                {
+                    syncSucceeded = false;
+                    AddLog($"[WARNING] Product catalog batch failed after {publishedCount} products: {response.StatusCode}", Color.Orange);
+                    break;
+                }
+
+                publishedCount += batch.Length;
+            }
+
+            AddLog(syncSucceeded
+                ? $"[SUCCESS] Synced {publishedCount} products to the web catalog in batches."
+                : "[WARNING] Product catalog sync failed.", syncSucceeded ? Color.LightGreen : Color.Orange);
+            _statusLabel.Text = syncSucceeded
+                ? $"Main PC catalog synced: {publishedCount} products."
                 : "Main PC catalog sync failed.";
         }
         catch (Exception ex)

@@ -35,13 +35,24 @@ public sealed class ConnectionSettings
 
     public static string NormalizeApiBaseUrl(string apiBaseUrl)
     {
-        var value = apiBaseUrl.Trim();
+        var value = apiBaseUrl.Trim().TrimEnd('/');
         if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
         {
-            return new UriBuilder(uri.Scheme, uri.Host, uri.Port).Uri.ToString().TrimEnd('/');
+            var path = uri.AbsolutePath.TrimEnd('/');
+            if (path.Equals("/api", StringComparison.OrdinalIgnoreCase))
+            {
+                path = string.Empty;
+            }
+
+            return new UriBuilder(uri.Scheme, uri.Host, uri.Port)
+            {
+                Path = path
+            }.Uri.ToString().TrimEnd('/');
         }
 
-        return value.TrimEnd('/');
+        return value.EndsWith("/api", StringComparison.OrdinalIgnoreCase)
+            ? value[..^4].TrimEnd('/')
+            : value;
     }
 
     public static string StoragePath

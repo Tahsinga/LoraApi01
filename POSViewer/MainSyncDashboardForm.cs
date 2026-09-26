@@ -90,7 +90,7 @@ public sealed class MainSyncDashboardForm : Form
         FormClosing += (_, _) => _autoSyncTimer.Stop();
 
         AddLog("[MAIN] Main PC ready to receive products from branches.");
-        _autoSyncTimer.Interval = 5000;
+        _autoSyncTimer.Interval = 60000;
         _autoSyncTimer.Tick += async (_, _) => await SyncNowAsync();
         _autoSyncTimer.Start();
         _ = SyncNowAsync();
@@ -427,14 +427,20 @@ public sealed class MainSyncDashboardForm : Form
             return true;
         }
 
-        var json = JsonSerializer.Serialize(new { products });
-        using var content = new StringContent(json, Encoding.UTF8, "application/json");
-        var response = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/products/publish/", content);
-        var responseBody = await response.Content.ReadAsStringAsync();
-        if (!response.IsSuccessStatusCode)
+        var publishedCount = 0;
+        foreach (var batch in products.Chunk(500))
         {
-            AddLog($"[ERROR] Main catalog publish returned {(int)response.StatusCode} {response.ReasonPhrase}: {responseBody}");
-            return false;
+            var json = JsonSerializer.Serialize(new { products = batch });
+            using var content = new StringContent(json, Encoding.UTF8, "application/json");
+            using var response = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/products/publish/", content);
+            var responseBody = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                AddLog($"[ERROR] Main catalog publish batch failed after {publishedCount} product(s): {(int)response.StatusCode} {response.ReasonPhrase}: {responseBody}");
+                return false;
+            }
+
+            publishedCount += batch.Length;
         }
 
         _publishedCatalogStates.Clear();
@@ -442,7 +448,7 @@ public sealed class MainSyncDashboardForm : Form
         {
             _publishedCatalogStates[item.Key] = item.Value;
         }
-        AddLog($"[PUBLISHED] Sent {products.Count} changed catalog product(s); API response: {responseBody}");
+        AddLog($"[PUBLISHED] Sent {publishedCount} changed catalog product(s) in batches.");
         return true;
     }
 

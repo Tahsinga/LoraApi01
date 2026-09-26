@@ -20,6 +20,7 @@ public sealed class BranchSyncDashboardForm : Form
     private string? _branchName;
     private bool _productCatalogSynced;
     private DateTime _lastProductCatalogSyncUtc = DateTime.MinValue;
+    private readonly Dictionary<string, string> _productCatalogStates = new(StringComparer.OrdinalIgnoreCase);
 
     public BranchSyncDashboardForm(ConnectionSettings settings, ConnectionForm connectionForm)
     {
@@ -356,18 +357,31 @@ public sealed class BranchSyncDashboardForm : Form
             command.Parameters.AddWithValue("@branch", branchName);
             using var reader = await command.ExecuteReaderAsync();
             var products = new List<object>();
+            var productStates = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var availableCount = 0;
             while (await reader.ReadAsync())
             {
+                var productId = Convert.ToInt32(reader["ProductID"]);
+                var productName = reader["ProductDesc"]?.ToString()?.Trim() ?? string.Empty;
+                var productCode = reader["ProductCode"]?.ToString()?.Trim() ?? string.Empty;
+                var barcode = reader["BarCode"]?.ToString()?.Trim() ?? string.Empty;
+                var sellingPrice = Convert.ToDecimal(reader["SellingPrice"], CultureInfo.InvariantCulture);
+                var soldQuantity = Convert.ToDecimal(reader["SoldQuantity"], CultureInfo.InvariantCulture);
                 var availableQuantity = Convert.ToDecimal(reader["AvailableQuantity"], CultureInfo.InvariantCulture);
+                var stateKey = productId.ToString(CultureInfo.InvariantCulture);
+                var state = string.Join("\u001f", productName, productCode, barcode,
+                    sellingPrice.ToString(CultureInfo.InvariantCulture),
+                    soldQuantity.ToString(CultureInfo.InvariantCulture),
+                    availableQuantity.ToString(CultureInfo.InvariantCulture));
+                productStates[stateKey] = state;
                 products.Add(new
                 {
-                    product_id = Convert.ToInt32(reader["ProductID"]),
-                    product_name = reader["ProductDesc"]?.ToString()?.Trim() ?? string.Empty,
-                    product_code = reader["ProductCode"]?.ToString()?.Trim() ?? string.Empty,
-                    barcode = reader["BarCode"]?.ToString()?.Trim() ?? string.Empty,
-                    selling_price = Convert.ToDecimal(reader["SellingPrice"], CultureInfo.InvariantCulture),
-                    sold_quantity = Convert.ToDecimal(reader["SoldQuantity"], CultureInfo.InvariantCulture),
+                    product_id = productId,
+                    product_name = productName,
+                    product_code = productCode,
+                    barcode,
+                    selling_price = sellingPrice,
+                    sold_quantity = soldQuantity,
                     available_quantity = availableQuantity,
                 });
                 if (availableQuantity != 0)
@@ -376,14 +390,49 @@ public sealed class BranchSyncDashboardForm : Form
                 }
             }
 
-            var payload = JsonSerializer.Serialize(new { branch = branchName, entered_by = Environment.UserName, products });
-            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
-            var response = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/products/sync/", content);
+            products = products
+                .Where(product =>
+                {
+                    var productId = (int)product.GetType().GetProperty("product_id")!.GetValue(product)!;
+                    return !_productCatalogStates.TryGetValue(productId.ToString(CultureInfo.InvariantCulture), out var previousState)
+                        || previousState != productStates[productId.ToString(CultureInfo.InvariantCulture)];
+                })
+                .ToList();
+
             _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [BALANCE] Read {availableCount} non-zero available stock balance(s) for {branchName}.");
-            _syncQueueListBox.Items.Insert(0, response.IsSuccessStatusCode
-                ? $"[{DateTime.Now:HH:mm:ss}] ✓ Synced {products.Count} products for {branchName}."
-                : $"[{DateTime.Now:HH:mm:ss}] WARNING: Product sync failed: {response.StatusCode}");
-            return response.IsSuccessStatusCode;
+            if (products.Count == 0)
+            {
+                _productCatalogStates.Clear();
+                foreach (var item in productStates)
+                {
+                    _productCatalogStates[item.Key] = item.Value;
+                }
+                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [BALANCE] No catalog changes for {branchName}; skipped upload.");
+                return true;
+            }
+
+            var syncedCount = 0;
+            foreach (var batch in products.Chunk(500))
+            {
+                var payload = JsonSerializer.Serialize(new { branch = branchName, entered_by = Environment.UserName, products = batch });
+                using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+                using var response = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/products/sync/", content);
+                if (!response.IsSuccessStatusCode)
+                {
+                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Product sync failed after {syncedCount} products: {response.StatusCode}");
+                    return false;
+                }
+
+                syncedCount += batch.Length;
+            }
+
+            _productCatalogStates.Clear();
+            foreach (var item in productStates)
+            {
+                _productCatalogStates[item.Key] = item.Value;
+            }
+            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✓ Synced {syncedCount} products for {branchName} in batches.");
+            return true;
         }
         catch (Exception ex)
         {
@@ -1221,6 +1270,7 @@ public sealed class BranchSyncDashboardForm : Form
                         const string query = @"
                             WITH Sales AS (
                                 SELECT
+                                    CAST(m.InvoiceNum AS nvarchar(100)) AS InvoiceNumber,
                                     COALESCE(NULLIF(LTRIM(RTRIM(m.DoneBy)), ''), 'Unknown') AS Cashier,
                                     COALESCE(pm.PaymentMethodDesc, CONCAT('Method ', COALESCE(CAST(m.ReceiptDisplayPaymentMethod AS nvarchar(20)), '0'))) AS PaymentMethod,
                                     COALESCE(NULLIF(pm.Currency, ''), 'UNKNOWN') AS Currency,
@@ -1228,7 +1278,8 @@ public sealed class BranchSyncDashboardForm : Form
                                         (
                                             (COALESCE(m.Quantity, 0) * COALESCE(m.SellingPrice, 0))
                                             - COALESCE(m.DiscountAmt, 0)
-                                            - COALESCE(m.InvDiscount, 0)
+                                            - CASE WHEN ROW_NUMBER() OVER (PARTITION BY m.InvoiceNum ORDER BY m.ProductID, m.EntryNo) = 1
+                                                   THEN COALESCE(m.InvDiscount, 0) ELSE 0 END
                                             + COALESCE(m.TaxAmt, 0)
                                         )
                                     ) AS decimal(28, 6)) AS SaleTotal
@@ -1253,7 +1304,7 @@ public sealed class BranchSyncDashboardForm : Form
                                 Rate,
                                 CAST(SUM(SaleTotal) AS decimal(28, 2)) AS Total,
                                 CAST(SUM(TaxTotal) AS decimal(28, 2)) AS TaxTotal,
-                                COUNT_BIG(*) AS ReceiptCount
+                                COUNT(DISTINCT InvoiceNumber) AS ReceiptCount
                                 FROM Sales
                                         GROUP BY Cashier, PaymentMethod, Currency, Rate
                                         ORDER BY Cashier, PaymentMethod, Currency, Rate;";
