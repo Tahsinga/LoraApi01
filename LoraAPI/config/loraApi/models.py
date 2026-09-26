@@ -45,14 +45,17 @@ class SalesReportRequest(models.Model):
 
 
 class SalesReportSchedule(models.Model):
-	branch = models.CharField(max_length=255, unique=True)
+	branch = models.CharField(max_length=255)
 	report_time = models.TimeField()
 	timezone = models.CharField(max_length=64, default='UTC')
 	last_queued_date = models.DateField(null=True, blank=True)
 	updated_at = models.DateTimeField(auto_now=True)
 
 	class Meta:
-		ordering = ['branch']
+		ordering = ['branch', 'report_time']
+		constraints = [
+			models.UniqueConstraint(fields=['branch', 'report_time'], name='uniq_sales_report_branch_time'),
+		]
 
 
 class InvoiceReprintRequest(models.Model):
