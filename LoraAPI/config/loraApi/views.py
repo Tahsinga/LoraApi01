@@ -1341,6 +1341,17 @@ def complete_sales_report(request):
     return JsonResponse({'status': 'ok', 'report': report_payload(report)})
 
 
+@login_required
+def clear_sales_report_queue(request):
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+    if not request.user.is_staff:
+        return JsonResponse({'status': 'error', 'message': 'Staff access is required.'}, status=403)
+
+    deleted_count, _ = SalesReportRequest.objects.filter(status__in=['pending', 'failed']).delete()
+    return JsonResponse({'status': 'ok', 'deleted_count': deleted_count})
+
+
 @csrf_exempt
 @retry_on_database_lock
 def complete_stock_transfer(request):

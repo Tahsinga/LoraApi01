@@ -760,6 +760,11 @@ class DailySalesReportScheduleTests(TestCase):
 		admin = get_user_model().objects.create_superuser(username='schedule-admin', password='SchedulePass4182!')
 		self.client.force_login(admin)
 
+	def test_staff_dashboard_renders_report_cleanup_control_and_csrf_token(self):
+		response = self.client.get('/')
+		self.assertContains(response, 'Clear pending/failed reports')
+		self.assertContains(response, 'csrfmiddlewaretoken')
+
 	def test_web_queue_poll_triggers_due_report_for_scheduled_branch_only(self):
 		response = self.client.post(
 			'/api/sales-report/schedules/',
@@ -780,3 +785,27 @@ class DailySalesReportScheduleTests(TestCase):
 			branch_reports = self.client.get('/api/branch-sync/?branch=Branch A').json()['pending_reports']
 		self.assertEqual(len(branch_reports), 1)
 		self.assertEqual(branch_reports[0]['report_date'], fixed_now.date().isoformat())
+
+	def test_clear_sales_report_queue_deletes_only_pending_and_failed_reports(self):
+		for status in ['pending', 'failed', 'processing', 'scheduled', 'printed']:
+			SalesReportRequest.objects.create(
+				request_id=f'REPORT-{status}',
+				branch='Branch A',
+				report_date=datetime(2026, 9, 26).date(),
+				status=status,
+			)
+
+		response = self.client.post('/api/sales-report/clear-queue/')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()['deleted_count'], 2)
+		self.assertEqual(
+			set(SalesReportRequest.objects.values_list('status', flat=True)),
+			{'processing', 'scheduled', 'printed'},
+		)
+
+	def test_clear_sales_report_queue_requires_staff_access(self):
+		operator = get_user_model().objects.create_user(username='report-operator', password='OperatorPass4182!')
+		self.client.force_login(operator)
+		response = self.client.post('/api/sales-report/clear-queue/')
+		self.assertEqual(response.status_code, 403)
