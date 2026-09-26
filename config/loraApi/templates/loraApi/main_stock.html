@@ -53,8 +53,8 @@
     .selected-branch select { height:50px; font-size:18px; font-weight:600; }
     .branch-load-row { display:flex; flex-direction:column; gap:10px; align-items:stretch; margin-bottom:20px; }
     .branch-load-row .selected-branch { margin:0; }
-  .branch-load-actions { display:flex; gap:10px; align-items:center; }
-  .branch-selector { display:block; }
+    .branch-load-actions { display:flex; gap:10px; align-items:center; }
+    .branch-selector { display:block; }
     .load-stock-button { flex:0 0 auto; width:auto; margin:0; padding:14px 16px; background:var(--teal); }
     .load-stock-button:hover { background:var(--teal-dark); }
     .transfer-form { margin-top:20px; padding-top:20px; border-top:1px solid var(--line); }
@@ -126,7 +126,35 @@
     .section-jump-button.visible { display:block; }
     .section-jump-button:hover { background:var(--coral); }
     #products-panel, #stock-activity-panel { scroll-margin-top:24px; }
-    @media (max-width:760px) { header { display:block; padding:28px 16px 24px; } .nav { justify-content:flex-start; margin-top:20px; gap:10px; } main { padding:0 16px 36px; } .workspace { grid-template-columns:1fr; } .panel, .panel-wide { grid-column:auto; padding:20px; } form { grid-template-columns:1fr; } .transfer-panel .transfer-form { grid-template-columns:1fr; } .transfer-panel .transfer-form button { grid-column:1/-1; } button { grid-column:auto; } .branch-load-row { grid-template-columns:1fr; gap:14px; } .browser-heading { display:block; } .catalog-status { display:block; margin-top:8px; } .product-row { grid-template-columns:1fr; gap:8px; } }
+    @media (max-width:760px) {
+      header { display:block; padding:24px 14px 20px; }
+      h1 { font-size:40px; white-space:normal; }
+      .nav { justify-content:flex-start; gap:10px 14px; margin-top:18px; }
+      .nav-link, .logout-button { font-size:11px; }
+      main { padding:0 12px 32px; }
+      .intro { font-size:13px; }
+      .workspace { grid-template-columns:1fr; gap:12px; }
+      .panel, .panel-wide { grid-column:auto; padding:16px; }
+      h2 { font-size:22px; }
+      .sub { font-size:13px; margin-bottom:16px; }
+      form, .transfer-panel .transfer-form { grid-template-columns:1fr; gap:11px; }
+      input, select { height:44px; font-size:16px; }
+      button, .transfer-panel .transfer-form button { width:100%; min-height:44px; grid-column:1/-1; margin-top:0; }
+      .branch-load-row { gap:10px; }
+      .branch-load-actions { flex-direction:column; gap:8px; }
+      .branch-load-actions button { width:100%; }
+      .toggle-row { flex-direction:column; align-items:stretch; gap:9px; margin:10px 0 14px; }
+      .toggle-button { width:100%; min-width:0; }
+      .browser-heading { display:block; }
+      .browser-actions { display:grid; grid-template-columns:1fr; gap:10px; justify-content:stretch; }
+      .activity-branch-label, .activity-date-label { display:flex; flex-direction:column; align-items:stretch; gap:6px; white-space:normal; }
+      .activity-branch-label select, .activity-date-label input { width:100%; min-width:0; }
+      .catalog-status { display:block; margin-top:8px; }
+      .stock-table, .movement-table, .transfer-table { font-size:12px; }
+      .stock-table th, .stock-table td, .movement-table th, .movement-table td, .transfer-table th, .transfer-table td { padding:10px 9px; }
+      .stock-table .product-name { font-size:14px; }
+      .section-jump-button { right:12px; bottom:12px; }
+    }
   </style>
 </head>
 <body>
