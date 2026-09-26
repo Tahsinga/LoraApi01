@@ -32,6 +32,7 @@ class SalesReportRequest(models.Model):
 	request_id = models.CharField(max_length=255, primary_key=True)
 	branch = models.CharField(max_length=255)
 	report_date = models.DateField()
+	scheduled_at = models.DateTimeField(null=True, blank=True)
 	status = models.CharField(max_length=20, default='pending')
 	requested_by = models.CharField(max_length=255, blank=True, default='')
 	requested_at = models.DateTimeField(auto_now_add=True)
@@ -41,6 +42,17 @@ class SalesReportRequest(models.Model):
 
 	class Meta:
 		ordering = ['-requested_at']
+
+
+class SalesReportSchedule(models.Model):
+	branch = models.CharField(max_length=255, unique=True)
+	report_time = models.TimeField()
+	timezone = models.CharField(max_length=64, default='UTC')
+	last_queued_date = models.DateField(null=True, blank=True)
+	updated_at = models.DateTimeField(auto_now=True)
+
+	class Meta:
+		ordering = ['branch']
 
 
 class InvoiceReprintRequest(models.Model):

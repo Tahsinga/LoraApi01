@@ -54,6 +54,21 @@
     .reprint-button:hover { background:var(--teal-dark); }
     .queue { margin-top:20px; }
     .report-panel { grid-column:1; grid-row:2; margin-top:20px; }
+    .schedule-dialog { width:min(520px, calc(100% - 28px)); max-height:calc(100dvh - 28px); padding:0; color:var(--ink); background:var(--white); border:1px solid var(--line); box-shadow:0 22px 70px rgba(12,38,34,.28); }
+    .schedule-dialog::backdrop { background:rgba(13,29,30,.48); }
+    .schedule-dialog-inner { display:grid; gap:14px; padding:20px; }
+    .schedule-dialog h2 { margin:0; font:500 24px Georgia,serif; }
+    .schedule-dialog .sub { margin:0; color:var(--muted); font:13px/1.45 Arial,sans-serif; }
+    .schedule-branch-list { display:grid; gap:7px; max-height:48dvh; overflow:auto; }
+    .schedule-branch-row { display:grid; grid-template-columns:20px minmax(0,1fr) 145px; align-items:center; gap:10px; padding:8px 10px; background:#f5f8f5; border:1px solid var(--line); text-transform:none; letter-spacing:0; }
+    .schedule-branch-row strong { overflow-wrap:anywhere; font:600 14px Arial,sans-serif; text-transform:none; }
+    .schedule-branch-row input[type="checkbox"] { width:18px; height:18px; margin:0; padding:0; accent-color:var(--teal); }
+    .schedule-branch-row input[type="time"] { height:36px; }
+    .schedule-branch-row input[type="time"]:disabled { opacity:.5; }
+    .schedule-dialog-actions { display:flex; justify-content:flex-end; gap:9px; }
+    .schedule-dialog-actions button { grid-column:auto; margin:0; padding:11px 14px; }
+    .schedule-cancel { color:var(--ink); background:#e8eeeb; }
+    .schedule-cancel:hover { background:#dce6e1; }
     .queue { grid-column:2; grid-row:1; margin-top:0; }
     .queue-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:14px; }
     .queue-head h2 { margin:0; }
@@ -67,6 +82,10 @@
     .row small { display:block; margin-top:4px; color:var(--muted); }
     .badge { align-self:start; padding:5px 8px; color:#8b651d; background:#fff3d4; font:700 10px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; }
     .badge.confirmed { color:#176342; background:#dff2e7; }
+    .badge.scheduled { color:#8b651d; background:#fff3d4; }
+    .badge.processing { color:#245a82; background:#dcecf8; }
+    .badge.printed { color:#176342; background:#dff2e7; }
+    .badge.failed { color:#9c352b; background:#fbe1dd; }
     .empty { padding:18px 0 4px; color:var(--muted); font:14px Arial,sans-serif; }
     @media (max-width:760px) { header { display:block; padding-top:28px; } .live { gap:5px; margin-top:20px; font-size:9px; letter-spacing:.5px; } .history-link, .logout-button { font-size:9px; letter-spacing:.5px; } main { padding:0 16px 36px; } .workspace { grid-template-columns:1fr; } .panel { padding:20px; } .report-panel, .queue { grid-column:auto; grid-row:auto; margin-top:20px; } form { grid-template-columns:1fr; } .wide { grid-column:auto; } button { grid-column:auto; } }
   </style>
@@ -104,6 +123,7 @@
           <small id="branch-help" class="sub">Select one or more branches.</small>
           <button id="report-submit" type="submit">Run and print report</button>
         </form>
+        <button id="report-schedule" class="reprint-button" type="button">Set daily print times</button>
         <div id="report-notice" class="notice" role="status"></div>
       </div>
       <div class="panel queue">
@@ -112,6 +132,18 @@
       </div>
     </section>
   </main>
+  <dialog id="report-schedule-dialog" class="schedule-dialog" aria-labelledby="schedule-dialog-title">
+    <div class="schedule-dialog-inner">
+      <h2 id="schedule-dialog-title">Daily report times</h2>
+      <p class="sub">Tick each branch for daily printing, then set its local print time. Dashboard branch checks are only for printing now.</p>
+      <div id="schedule-branch-list" class="schedule-branch-list"><p class="sub">Loading branches...</p></div>
+      <div id="schedule-notice" class="notice" role="status"></div>
+      <div class="schedule-dialog-actions">
+        <button id="schedule-cancel" class="schedule-cancel" type="button">Cancel</button>
+        <button id="schedule-save" type="button">Save daily times</button>
+      </div>
+    </div>
+  </dialog>
 </div>
 <script>
   const form = document.querySelector('#cancel-form');
@@ -121,11 +153,17 @@
   const reportForm = document.querySelector('#report-form');
   const reportNotice = document.querySelector('#report-notice');
   const reportSubmit = document.querySelector('#report-submit');
+  const reportSchedule = document.querySelector('#report-schedule');
+  const scheduleDialog = document.querySelector('#report-schedule-dialog');
+  const scheduleBranchList = document.querySelector('#schedule-branch-list');
+  const scheduleNotice = document.querySelector('#schedule-notice');
+  const scheduleSave = document.querySelector('#schedule-save');
   const allBranches = document.querySelector('#all-branches');
   const rows = document.querySelector('#rows');
   const branchSelect = document.querySelector('#branch');
   const reportBranches = document.querySelector('#report-branches');
   const reportSelectionKey = 'lora-report-branch-selection';
+  let connectedBranches = [];
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
   function loadReportSelection() {
     try { return JSON.parse(localStorage.getItem(reportSelectionKey) || '{"branches":[],"all":false}'); }
@@ -151,14 +189,16 @@
       const data = await response.json();
       document.querySelector('#pending').textContent = data.pending_count ?? 0;
       document.querySelector('#processed').textContent = data.processed_count ?? 0;
-      const items = data.pending_deletions ?? [];
-      rows.innerHTML = items.length ? items.map(item => `<div class="row"><div><b>${escapeHtml(item.invoice)}</b><small>${escapeHtml(item.branch)} · Whole invoice</small></div><span class="badge">Pending</span></div>`).join('') : '<div class="empty">No cancellations are waiting.</div>';
+      const items = data.queue ?? (data.pending_deletions ?? []).map(item => ({ type: 'cancellation', branch: item.branch, label: `Cancellation ${item.invoice}`, detail: 'Whole invoice', status: item.status }));
+      const statusLabels = { scheduled: 'Scheduled', pending: 'Queued', processing: 'Sent', printed: 'Printed', failed: 'Failed', processed: 'Completed' };
+      rows.innerHTML = items.length ? items.map(item => `<div class="row"><div><b>${escapeHtml(item.label)}</b><small>${escapeHtml(item.branch)} · ${escapeHtml(item.detail)}${item.scheduled_at ? ` · ${escapeHtml(new Date(item.scheduled_at).toLocaleString())}` : ''}</small></div><span class="badge ${escapeHtml(item.status)}">${escapeHtml(statusLabels[item.status] || item.status)}</span></div>`).join('') : '<div class="empty">No commands are waiting or recently completed.</div>';
     } catch (error) { rows.innerHTML = '<div class="empty">Queue unavailable. Try again.</div>'; }
   }
   async function refreshBranches() {
     try {
       const response = await fetch('/api/branches/');
       const data = await response.json();
+      connectedBranches = data.branches?.map(branch => branch.name) ?? [];
       const selected = branchSelect.value;
       branchSelect.innerHTML = data.branches?.length
         ? '<option value="">Select connected branch</option>' + data.branches.map(branch => `<option value="${escapeHtml(branch.name)}">${escapeHtml(branch.name)}</option>`).join('')
@@ -211,6 +251,65 @@
       reportNotice.className = 'notice ok'; reportNotice.textContent = data.message + ' The branch computer will print it on its next sync.';
     } catch (error) { reportNotice.className = 'notice error'; reportNotice.textContent = error.message; }
     finally { reportSubmit.disabled = false; }
+  });
+  function renderScheduleBranches(schedules) {
+    const savedByBranch = new Map(schedules.map(schedule => [schedule.branch.toLocaleLowerCase(), schedule]));
+    const branchNames = [...new Set([...connectedBranches, ...schedules.map(schedule => schedule.branch)])]
+      .sort((left, right) => left.localeCompare(right));
+    scheduleBranchList.innerHTML = branchNames.length
+      ? branchNames.map(branch => {
+        const saved = savedByBranch.get(branch.toLocaleLowerCase());
+        const enabled = Boolean(saved);
+        return `<div class="schedule-branch-row"><input class="daily-schedule-enabled" type="checkbox"${enabled ? ' checked' : ''} aria-label="Schedule daily reports for ${escapeHtml(branch)}"><strong>${escapeHtml(branch)}</strong><input class="daily-time-input" type="time" value="${escapeHtml(saved?.time ?? '')}"${enabled ? '' : ' disabled'} aria-label="Daily print time for ${escapeHtml(branch)}" data-branch="${escapeHtml(branch)}"></div>`;
+      }).join('')
+      : '<p class="sub">No branches are connected and no saved schedules exist.</p>';
+  }
+  reportSchedule.addEventListener('click', async () => {
+    scheduleNotice.className = 'notice'; scheduleNotice.textContent = '';
+    scheduleBranchList.innerHTML = '<p class="sub">Loading branches...</p>';
+    scheduleDialog.showModal();
+    try {
+      const response = await fetch('/api/sales-report/schedules/');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Daily schedules could not be loaded.');
+      renderScheduleBranches(data.schedules ?? []);
+    } catch (error) {
+      scheduleBranchList.innerHTML = '';
+      scheduleNotice.className = 'notice error'; scheduleNotice.textContent = error.message;
+    }
+  });
+  document.querySelector('#schedule-cancel').addEventListener('click', () => scheduleDialog.close());
+  scheduleBranchList.addEventListener('change', event => {
+    if (event.target.matches('.daily-schedule-enabled')) {
+      event.target.closest('.schedule-branch-row').querySelector('.daily-time-input').disabled = !event.target.checked;
+    }
+  });
+  scheduleSave.addEventListener('click', async () => {
+    scheduleSave.disabled = true; scheduleNotice.className = 'notice'; scheduleNotice.textContent = '';
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    const enabledRows = [...scheduleBranchList.querySelectorAll('.schedule-branch-row')]
+      .filter(row => row.querySelector('.daily-schedule-enabled').checked);
+    if (enabledRows.some(row => !row.querySelector('.daily-time-input').value)) {
+      scheduleNotice.className = 'notice error'; scheduleNotice.textContent = 'Set a time for every ticked branch.';
+      scheduleSave.disabled = false;
+      return;
+    }
+    const schedules = enabledRows.map(row => {
+      const input = row.querySelector('.daily-time-input');
+      return { branch: input.dataset.branch, time: input.value, timezone: timeZone };
+    });
+    try {
+      const response = await fetch('/api/sales-report/schedules/', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schedules }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Daily schedules could not be saved.');
+      reportNotice.className = 'notice ok'; reportNotice.textContent = data.message;
+      scheduleDialog.close();
+    } catch (error) {
+      scheduleNotice.className = 'notice error'; scheduleNotice.textContent = error.message;
+    } finally { scheduleSave.disabled = false; }
   });
   allBranches.addEventListener('change', () => {
     reportBranches.classList.toggle('is-disabled', allBranches.checked);

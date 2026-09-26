@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import wraps
 from threading import Lock
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.contrib.auth import get_user_model, update_session_auth_hash
 from django.contrib.auth.decorators import login_required, user_passes_test
@@ -16,10 +17,10 @@ from django.db.models.functions import Cast
 from django.http import JsonResponse, HttpResponse
 from django.shortcuts import render
 from django.utils import timezone
-from django.utils.dateparse import parse_date
+from django.utils.dateparse import parse_date, parse_datetime, parse_time
 from django.views.decorators.csrf import csrf_exempt
 
-from .models import BranchHeartbeat, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, SalesReportRequest, StockMovement, StockTransfer
+from .models import BranchHeartbeat, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
 from .state_store import sync_users_to_state
 
 """
@@ -124,7 +125,41 @@ def report_payload(report):
         'branch': report.branch,
         'report_date': report.report_date.isoformat(),
         'status': report.status,
+        'requested_at': report.requested_at.timestamp(),
+        'scheduled_at': report.scheduled_at.isoformat() if report.scheduled_at else None,
+        'completed_at': report.completed_at.timestamp() if report.completed_at else None,
+        'row_count': report.row_count,
+        'error': report.error_message,
     }
+
+
+def queue_due_sales_reports(branch_name=None):
+    current_time = timezone.now()
+    with transaction.atomic():
+        schedules = SalesReportSchedule.objects.select_for_update().all()
+        if branch_name:
+            schedules = schedules.filter(branch__iexact=branch_name)
+        for schedule in schedules:
+            try:
+                local_now = current_time.astimezone(ZoneInfo(schedule.timezone))
+            except (ZoneInfoNotFoundError, ValueError):
+                continue
+            local_date = local_now.date()
+            if local_now.time().replace(tzinfo=None) < schedule.report_time or schedule.last_queued_date == local_date:
+                continue
+            report_id = f'REPORT_DAILY_{schedule.pk}_{local_date.isoformat()}'
+            SalesReportRequest.objects.get_or_create(
+                request_id=report_id,
+                defaults={
+                    'branch': schedule.branch,
+                    'report_date': local_date,
+                    'status': 'pending',
+                    'requested_by': 'daily_schedule',
+                },
+            )
+            schedule.last_queued_date = local_date
+            schedule.save(update_fields=['last_queued_date', 'updated_at'])
+        SalesReportRequest.objects.filter(status='scheduled', scheduled_at__lte=current_time).update(status='pending')
 
 
 def transfer_payload(transfer):
@@ -412,6 +447,61 @@ def request_sales_report(request):
         'message': f'Sales reports queued for {len(reports)} branch(es) on {report_date.isoformat()}.',
         'reports': [report_payload(report) for report in reports],
     }, status=202)
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
+@retry_on_database_lock
+def sales_report_schedules(request):
+    if request.method == 'GET':
+        return JsonResponse({
+            'status': 'ok',
+            'schedules': [
+                {'branch': item.branch, 'time': item.report_time.strftime('%H:%M'), 'timezone': item.timezone}
+                for item in SalesReportSchedule.objects.all()
+            ],
+        })
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use GET or POST method'}, status=405)
+    try:
+        payload = json.loads(request.body or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'status': 'error', 'message': 'Invalid JSON'}, status=400)
+    rows = payload.get('schedules')
+    if not isinstance(rows, list):
+        return JsonResponse({'status': 'error', 'message': 'Schedules must be a list.'}, status=400)
+
+    schedules = {}
+    for row in rows:
+        branch = str(row.get('branch', '')).strip() if isinstance(row, dict) else ''
+        report_time = parse_time(str(row.get('time', '')).strip()) if isinstance(row, dict) else None
+        time_zone = str(row.get('timezone', '')).strip() if isinstance(row, dict) else ''
+        if not branch or report_time is None or report_time.tzinfo is not None or not time_zone:
+            return JsonResponse({'status': 'error', 'message': 'Each schedule needs a branch, local time, and timezone.'}, status=400)
+        try:
+            ZoneInfo(time_zone)
+        except (ZoneInfoNotFoundError, ValueError):
+            return JsonResponse({'status': 'error', 'message': f'Unknown timezone for {branch}.'}, status=400)
+        key = branch.casefold()
+        if key in schedules:
+            return JsonResponse({'status': 'error', 'message': f'{branch} is listed more than once.'}, status=400)
+        schedules[key] = (branch, report_time, time_zone)
+
+    with transaction.atomic():
+        for branch, report_time, time_zone in schedules.values():
+            item = SalesReportSchedule.objects.filter(branch__iexact=branch).first()
+            if item is None:
+                SalesReportSchedule.objects.create(branch=branch, report_time=report_time, timezone=time_zone)
+            else:
+                item.branch = branch
+                item.report_time = report_time
+                item.timezone = time_zone
+                item.save(update_fields=['branch', 'report_time', 'timezone', 'updated_at'])
+        for item in SalesReportSchedule.objects.all():
+            if item.branch.casefold() not in schedules:
+                item.delete()
+
+    return JsonResponse({'status': 'ok', 'message': f'Daily print times saved for {len(schedules)} branch(es).', 'count': len(schedules)})
 
 
 @login_required(login_url='/login/')
@@ -1398,6 +1488,7 @@ def branch_sync(request):
 
     if request.method == 'GET':
         branch_name = request.GET.get('branch', '').strip()
+        queue_due_sales_reports(branch_name)
         pending_query = DeletionRecord.objects.filter(status='pending')
         if branch_name:
             pending_query = pending_query.filter(branch__iexact=branch_name)
@@ -1536,13 +1627,35 @@ def main_sync(request):
     cleanup_queues()
 
     if request.method == 'GET':
+        queue_due_sales_reports()
         pending = [record_payload(item) for item in DeletionRecord.objects.filter(status__in=['pending', 'processing'])]
         processed = [record_payload(item) for item in DeletionRecord.objects.filter(status='processed').order_by('-confirmation_timestamp')[:10]]
+        pending_reports = [report_payload(item) for item in SalesReportRequest.objects.filter(status__in=['scheduled', 'pending', 'processing']).order_by('-requested_at')[:20]]
+        completed_reports = [report_payload(item) for item in SalesReportRequest.objects.filter(status__in=['printed', 'failed']).order_by('-completed_at')[:20]]
+        queue = [
+            {
+                'type': 'cancellation', 'id': item['id'], 'branch': item['branch'],
+                'label': f"Cancellation {item['invoice']}", 'detail': 'Whole invoice',
+                'status': item['status'], 'timestamp': item['timestamp'],
+                'completed_at': item['confirmation_timestamp'],
+            }
+            for item in pending + processed
+        ] + [
+            {
+                'type': 'sales_report', 'id': item['id'], 'branch': item['branch'],
+                'label': 'Sales report', 'detail': item['report_date'], 'status': item['status'],
+                'timestamp': item['requested_at'], 'scheduled_at': item['scheduled_at'],
+                'completed_at': item['completed_at'],
+            }
+            for item in pending_reports + completed_reports
+        ]
+        queue.sort(key=lambda item: item['timestamp'], reverse=True)
 
         return JsonResponse({
             'status': 'ok',
             'service': 'main_sync_trigger',
             'pending_deletions': pending,
+            'queue': queue,
             'pending_count': DeletionRecord.objects.filter(status__in=['pending', 'processing']).count(),
             'recently_processed': processed,
             'processed_count': DeletionRecord.objects.filter(status='processed').count()

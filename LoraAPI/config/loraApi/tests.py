@@ -1,8 +1,12 @@
+from datetime import datetime, timezone as datetime_timezone
+from unittest.mock import patch
+
 from django.test import TestCase
 from django.contrib.auth import authenticate, get_user_model
 from django.core.management import call_command
+from django.utils import timezone
 from loraApi.state_store import load_state
-from loraApi.models import InvoiceReprintRequest, MainStockBalance, ProductCatalog, StockMovement, StockTransfer
+from loraApi.models import InvoiceReprintRequest, MainStockBalance, ProductCatalog, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
 import json
 
 
@@ -749,3 +753,30 @@ class AuthenticationTests(TestCase):
 		self.assertEqual(self.client.post('/logout/').status_code, 302)
 		self.assertEqual(self.client.post('/logout/').url, '/login/')
 		self.assertRedirects(self.client.get('/'), '/login/?next=/')
+
+
+class DailySalesReportScheduleTests(TestCase):
+	def setUp(self):
+		admin = get_user_model().objects.create_superuser(username='schedule-admin', password='SchedulePass4182!')
+		self.client.force_login(admin)
+
+	def test_web_queue_poll_triggers_due_report_for_scheduled_branch_only(self):
+		response = self.client.post(
+			'/api/sales-report/schedules/',
+			data=json.dumps({'schedules': [
+				{'branch': 'Branch A', 'time': '12:00', 'timezone': 'UTC'},
+			]}),
+			content_type='application/json',
+		)
+		self.assertEqual(response.status_code, 200)
+		fixed_now = datetime(2026, 9, 26, 12, 1, tzinfo=datetime_timezone.utc)
+		with patch('loraApi.views.timezone.now', return_value=fixed_now):
+			queue = self.client.get('/api/main-sync/').json()['queue']
+			daily_reports = [item for item in queue if item['type'] == 'sales_report']
+			self.assertEqual(len(daily_reports), 1)
+			self.assertEqual(daily_reports[0]['branch'], 'Branch A')
+			self.assertEqual(SalesReportRequest.objects.count(), 1)
+			self.assertEqual(self.client.get('/api/branch-sync/?branch=Branch B').json()['pending_reports'], [])
+			branch_reports = self.client.get('/api/branch-sync/?branch=Branch A').json()['pending_reports']
+		self.assertEqual(len(branch_reports), 1)
+		self.assertEqual(branch_reports[0]['report_date'], fixed_now.date().isoformat())
