@@ -96,18 +96,18 @@
         </form>
         <button id="reprint-submit" class="reprint-button" type="button">Reprint invoice</button>
         <div id="notice" class="notice" role="status"></div>
-      </div>
-      <div class="panel report-panel">
-        <h2>Print sales report</h2>
-        <p class="sub">Print end-of-day totals by cashier and payment method on the branch computer.</p>
-        <form id="report-form">
-          <label>Report date<input id="report-date" name="report_date" type="date" required></label>
-          <label>Branches<div id="report-branches" class="branch-options" role="group" aria-describedby="branch-help"><span class="sub">Loading branches...</span></div></label>
-          <label class="branch-all"><input id="all-branches" type="checkbox"><span>All connected branches</span></label>
-          <small id="branch-help" class="sub">Select one or more branches.</small>
-          <button id="report-submit" type="submit">Run and print report</button>
-        </form>
-        <div id="report-notice" class="notice" role="status"></div>
+        <section class="report-panel">
+          <h2>Print sales report</h2>
+          <p class="sub">Print end-of-day totals by cashier and payment method on the branch computer.</p>
+          <form id="report-form">
+            <label>Report date<input id="report-date" name="report_date" type="date" required></label>
+            <label>Branches<div id="report-branches" class="branch-options" role="group" aria-describedby="branch-help"><span class="sub">Loading branches...</span></div></label>
+            <label class="branch-all"><input id="all-branches" type="checkbox"><span>All connected branches</span></label>
+            <small id="branch-help" class="sub">Select one or more branches.</small>
+            <button id="report-submit" type="submit">Run and print report</button>
+          </form>
+          <div id="report-notice" class="notice" role="status"></div>
+        </section>
       </div>
       <div class="panel queue">
         <div class="queue-head"><h2>Branch queue</h2><div><a class="history-button" href="/history/">View cancelled invoices</a><button class="refresh" id="refresh" type="button">Refresh</button></div></div>
