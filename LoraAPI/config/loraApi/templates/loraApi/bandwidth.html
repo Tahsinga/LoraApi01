@@ -20,8 +20,20 @@
     .metric + .metric { border-left:1px solid var(--line); }
     .metric span { display:block; color:var(--muted); font:700 11px Arial,sans-serif; text-transform:uppercase; }
     .metric strong { display:block; margin-top:10px; font-size:40px; font-weight:500; overflow-wrap:anywhere; }
+    .month-log { margin-top:18px; background:var(--white); border:1px solid var(--line); }
+    .month-heading { display:flex; justify-content:space-between; align-items:end; gap:16px; padding:20px 24px; border-bottom:1px solid var(--line); }
+    .month-heading h2 { margin:0; font-size:24px; font-weight:500; }
+    .month-total { text-align:right; }
+    .month-total span { display:block; color:var(--muted); font:700 10px Arial,sans-serif; text-transform:uppercase; }
+    .month-total strong { display:block; margin-top:5px; font-size:24px; font-weight:500; }
+    .month-table-wrap { overflow-x:auto; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { padding:12px 18px; border-bottom:1px solid var(--line); text-align:left; font:13px Arial,sans-serif; }
+    th { color:var(--muted); font-size:10px; text-transform:uppercase; }
+    td:nth-child(n+2), th:nth-child(n+2) { text-align:right; }
+    .empty-log { padding:18px; color:var(--muted); font:13px Arial,sans-serif; }
     .note { max-width:700px; margin:18px 0; color:var(--muted); font:14px/1.6 Arial,sans-serif; }
-    @media (max-width:600px) { header { display:block; padding:28px 16px 24px; } h1 { font-size:38px; } header a { display:inline-block; margin-top:18px; } main { padding:0 16px 36px; } .summary { grid-template-columns:1fr; } .metric + .metric { border-top:1px solid var(--line); border-left:0; } .metric strong { font-size:32px; } }
+    @media (max-width:600px) { header { display:block; padding:28px 16px 24px; } h1 { font-size:38px; } header a { display:inline-block; margin-top:18px; } main { padding:0 16px 36px; } .summary { grid-template-columns:1fr; } .metric + .metric { border-top:1px solid var(--line); border-left:0; } .metric strong { font-size:32px; } .month-heading { align-items:start; padding:16px; } .month-heading h2 { font-size:21px; } .month-total strong { font-size:20px; } th, td { padding:11px 12px; } }
   </style>
 </head>
 <body>
@@ -35,7 +47,19 @@
       <div class="metric"><span>API data received today</span><strong data-bandwidth-bytes>0 B</strong></div>
       <div class="metric"><span>API responses observed</span><strong data-bandwidth-count>0 responses</strong></div>
     </section>
-    <p class="note">Totals are measured by this browser and saved locally for today. They include same-origin API response transfer sizes, including response headers where reported by the browser. Request uploads, static files, and traffic from other devices or browsers are not included.</p>
+    <section class="month-log" aria-label="Bandwidth log by date for this month">
+      <div class="month-heading">
+        <h2>Daily log <span data-bandwidth-month></span></h2>
+        <div class="month-total"><span>Received this month</span><strong data-bandwidth-month-total>0 B</strong></div>
+      </div>
+      <div class="month-table-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>Data received</th><th>Responses</th></tr></thead>
+          <tbody data-bandwidth-month-log><tr><td colspan="3" class="empty-log">No daily totals recorded this month.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+    <p class="note">Totals are measured by this browser and saved locally. Daily totals reset each day; the monthly log keeps each date for this month. Only same-origin API response transfer sizes are counted. Request uploads and traffic from other devices or browsers are not included.</p>
   </main>
 </div>
 <script src="{% static 'loraApi/bandwidth.js' %}" defer></script>
