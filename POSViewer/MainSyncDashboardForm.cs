@@ -18,6 +18,7 @@ public sealed class MainSyncDashboardForm : Form
     private readonly SemaphoreSlim _syncGate = new(1, 1);
     private readonly Dictionary<string, string> _transferStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _publishedCatalogStates = new(StringComparer.OrdinalIgnoreCase);
+    private DateTimeOffset? _productInboxSince;
 
     public MainSyncDashboardForm(ConnectionSettings settings, ConnectionForm connectionForm)
     {
@@ -116,7 +117,13 @@ public sealed class MainSyncDashboardForm : Form
             await StoreCancellationRecordsAsync(client);
             await PollStockTransfersAsync(client);
             await StoreStockMovementsAsync(client);
-            var response = await client.GetAsync($"{_settings.GetApiBaseUrl()}/api/products/inbox/");
+            var inboxStartedAt = DateTimeOffset.UtcNow;
+            var inboxUrl = $"{_settings.GetApiBaseUrl()}/api/products/inbox/";
+            if (_productInboxSince.HasValue)
+            {
+                inboxUrl += $"?since={Uri.EscapeDataString(_productInboxSince.Value.ToString("O", CultureInfo.InvariantCulture))}";
+            }
+            var response = await client.GetAsync(inboxUrl);
             if (!response.IsSuccessStatusCode)
             {
                 _statusLabel.ForeColor = Color.DarkRed;
@@ -128,6 +135,7 @@ public sealed class MainSyncDashboardForm : Form
             var payload = await response.Content.ReadFromJsonAsync<ProductInboxResponse>();
             var products = payload?.products ?? new List<ProductCatalogItem>();
             await StoreBranchProductsAsync(products);
+            _productInboxSince = inboxStartedAt;
             AddLog($"[RECEIVED] {products.Count} branch snapshot product(s) stored in CloudPOS.dbo.BranchProductCatalog.");
 
             var published = await PublishMainCatalogAsync(client);

@@ -250,6 +250,8 @@
   const branchPriceSubmit = document.querySelector('#branch-price-submit');
   const branchPriceNotice = document.querySelector('#branch-price-notice');
   let branchCatalogProducts = [];
+  let branchCatalogSince = '';
+  let branchCatalogSinceBranch = '';
   let branchProductsLoading = false;
   let branchProductsRequestId = 0;
   let stockMovementsLoading = false;
@@ -382,11 +384,28 @@
     }
     if (showLoading) productCatalogStatus.textContent = 'Loading products...';
     try {
-      const response = await fetch(`/api/stock/summary/?branch=${encodeURIComponent(branch)}&_=${Date.now()}`, { cache: 'no-store', signal: AbortSignal.timeout(30000) });
+      const startedAt = new Date().toISOString();
+      const params = new URLSearchParams({ branch });
+      if (branchCatalogSince && branchCatalogSinceBranch === branch) params.set('since', branchCatalogSince);
+      const response = await fetch(`/api/stock/summary/?${params}`, { cache: 'no-store', signal: AbortSignal.timeout(30000) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || 'Products could not be loaded.');
       if (requestId !== branchProductsRequestId) return;
-      branchCatalogProducts = data.products || [];
+      const products = data.products || [];
+      const fullSnapshot = data.full !== false;
+      if (fullSnapshot) {
+        branchCatalogProducts = products;
+      } else if (data.changed) {
+        const productsById = new Map(branchCatalogProducts.map(product => [String(product.product_id), product]));
+        products.forEach(product => productsById.set(String(product.product_id), product));
+        branchCatalogProducts = [...productsById.values()];
+      }
+      branchCatalogSince = startedAt;
+      branchCatalogSinceBranch = branch;
+      if (!fullSnapshot && !data.changed) {
+        productCatalogStatus.textContent = `${branchCatalogProducts.length} products up to date for ${branch}.`;
+        return;
+      }
       document.querySelector('#main-stock-products').innerHTML = productOptions(branchCatalogProducts);
       branchPriceProducts.innerHTML = productOptions(branchCatalogProducts);
       document.querySelector('#transfer-products').innerHTML = productOptions(branchCatalogProducts);
@@ -553,6 +572,8 @@
   sectionObserver.observe(productsPanel);
   sectionObserver.observe(stockActivityPanel);
   selectedBranch.addEventListener('change', async () => {
+    branchCatalogSince = '';
+    branchCatalogSinceBranch = '';
     setBranchCardsLoading(true);
     localStorage.setItem(selectedBranchKey, selectedBranch.value);
     productSearches.forEach(control => {

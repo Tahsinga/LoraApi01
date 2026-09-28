@@ -1298,16 +1298,15 @@ public sealed class BranchSyncDashboardForm : Form
                                   AND ISNULL(m.IsStockIn, 0) = 0
                             )
                                 SELECT
+                                InvoiceNumber,
                                 Cashier,
                                 PaymentMethod,
                                 Currency,
-                                Rate,
                                 CAST(SUM(SaleTotal) AS decimal(28, 2)) AS Total,
-                                CAST(SUM(TaxTotal) AS decimal(28, 2)) AS TaxTotal,
-                                COUNT(DISTINCT InvoiceNumber) AS ReceiptCount
+                                CAST(SUM(TaxTotal) AS decimal(28, 2)) AS TaxTotal
                                 FROM Sales
-                                        GROUP BY Cashier, PaymentMethod, Currency, Rate
-                                        ORDER BY Cashier, PaymentMethod, Currency, Rate;";
+                                    GROUP BY InvoiceNumber, Cashier, PaymentMethod, Currency
+                                    ORDER BY Cashier, InvoiceNumber, PaymentMethod, Currency;";
 
             using var command = new SqlCommand(query, connection);
             command.Parameters.Add("@reportDate", SqlDbType.Int).Value = int.Parse(reportDate.ToString("yyyyMMdd"));
