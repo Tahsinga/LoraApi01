@@ -1,4 +1,14 @@
 (() => {
+  document.querySelectorAll('.logout-form').forEach(form => {
+    form.addEventListener('submit', () => {
+      const button = form.querySelector('button[type="submit"]');
+      if (!button || button.disabled) return;
+      button.disabled = true;
+      button.textContent = 'Signing out...';
+      form.setAttribute('aria-busy', 'true');
+    });
+  });
+
   const meter = document.querySelector('#api-bandwidth-meter');
   const details = document.querySelector('#bandwidth-details');
   if ((!meter && !details) || !('PerformanceObserver' in window)) return;
