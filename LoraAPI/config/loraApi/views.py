@@ -1131,6 +1131,8 @@ def update_product_tax_rate(request):
 @csrf_exempt
 @retry_on_database_lock
 def create_branch_product(request):
+    global BRANCH_HEARTBEAT_DB_AVAILABLE
+
     if request.method != 'POST':
         return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
 
@@ -1148,10 +1150,30 @@ def create_branch_product(request):
 
     if requested_product_id and requested_product_id < 12_100_000:
         return JsonResponse({'status': 'error', 'message': 'Product ID must be at least 12100000.'}, status=400)
-    if not branch or branch.casefold() == 'main' or not product_name or len(product_name) > 250:
-        return JsonResponse({'status': 'error', 'message': 'A branch and product name are required.'}, status=400)
+    if branch.casefold() == 'main' or not product_name or len(product_name) > 250:
+        return JsonResponse({'status': 'error', 'message': 'A product name is required; Main cannot be selected as a branch.'}, status=400)
     if len(product_code) > 50 or len(barcode) > 100 or initial_quantity < 0 or initial_quantity != whole_quantity(initial_quantity) or selling_price < 0:
         return JsonResponse({'status': 'error', 'message': 'Product code, barcode, quantity, and price are invalid.'}, status=400)
+
+    branch_targets = set(ProductCatalog.objects.exclude(branch__iexact='MAIN').exclude(branch='').values_list('branch', flat=True))
+    if BRANCH_HEARTBEAT_DB_AVAILABLE:
+        try:
+            branch_targets.update(BranchHeartbeat.objects.values_list('branch', flat=True))
+        except ProgrammingError:
+            BRANCH_HEARTBEAT_DB_AVAILABLE = False
+    if not BRANCH_HEARTBEAT_DB_AVAILABLE:
+        branch_targets.update(item['name'] for item in CONNECTED_BRANCHES.values())
+    if branch:
+        branch_targets.add(branch)
+
+    branches_by_key = {}
+    for target in branch_targets:
+        target = str(target).strip()
+        if target and target.casefold() != 'main':
+            branches_by_key.setdefault(target.casefold(), target)
+    branches = sorted(branches_by_key.values(), key=str.casefold)
+    if not branches:
+        return JsonResponse({'status': 'error', 'message': 'No branches are registered to receive this product.'}, status=400)
 
     with transaction.atomic():
         if requested_product_id:
@@ -1162,17 +1184,21 @@ def create_branch_product(request):
         if ProductCatalog.objects.filter(product_id=product_id).exists():
             return JsonResponse({'status': 'error', 'message': f'Product ID {product_id} is already queued. Enter another unique Product ID.'}, status=409)
         product_code = str(product_id + 1)
-        product = ProductCatalog.objects.create(
-            branch=branch,
-            product_id=product_id,
-            product_name=product_name,
-            product_code=product_code,
-            barcode=barcode,
-            pending_stock_quantity=initial_quantity,
-            selling_price=selling_price,
-            branch_confirmed=False,
-            pending_product_creation=True,
-        )
+        products = ProductCatalog.objects.bulk_create([
+            ProductCatalog(
+                branch=target,
+                product_id=product_id,
+                product_name=product_name,
+                product_code=product_code,
+                barcode=barcode,
+                pending_stock_quantity=initial_quantity,
+                selling_price=selling_price,
+                branch_confirmed=False,
+                pending_product_creation=True,
+            )
+            for target in branches
+        ])
+        product = products[0]
     invalidate_product_catalog_cache()
 
     return JsonResponse({
@@ -1184,6 +1210,7 @@ def create_branch_product(request):
         'barcode': product.barcode,
         'initial_quantity': str(product.pending_stock_quantity),
         'selling_price': str(product.selling_price),
+        'branches': branches,
     }, status=202)
 
 

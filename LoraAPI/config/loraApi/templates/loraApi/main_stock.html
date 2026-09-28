@@ -180,7 +180,7 @@
         <div id="transfer-notice" class="notice" role="status"></div>
         <div id="transfer-queue" class="transfer-queue" aria-live="polite" aria-label="Transfers waiting to be sent"></div>
         <div class="toggle-row">
-          <span class="toggle-label">New branch product fields</span>
+          <span class="toggle-label">New product fields</span>
           <button id="branch-product-toggle" class="toggle-button" type="button" aria-pressed="false">Turn on new product fields</button>
         </div>
         <div id="branch-product-form-wrap" class="branch-product-form-wrap">
@@ -191,7 +191,7 @@
             <label>Barcode<input id="branch-product-barcode" type="text" maxlength="100" placeholder="Optional barcode"></label>
             <label>Opening quantity<input id="branch-product-quantity" type="number" min="0" step="1" required placeholder="0"></label>
             <label>Selling price<input id="branch-product-price" type="number" min="0" step="0.01" required placeholder="0.00"></label>
-            <button id="branch-product-submit" type="submit">Create branch product</button>
+            <button id="branch-product-submit" type="submit">Create product in all branches</button>
           </form>
           <div id="branch-product-notice" class="notice" role="status"></div>
         </div>
@@ -891,11 +891,11 @@
   branchProductForm.addEventListener('submit', async event => {
     event.preventDefault(); branchProductSubmit.disabled = true; branchProductNotice.className = 'notice'; branchProductNotice.textContent = '';
     try {
-      if (!selectedBranch.value) throw new Error('Select a connected branch first.');
       const response = await fetch('/api/products/create/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch:selectedBranch.value, product_id:document.querySelector('#branch-product-id').value, product_name:document.querySelector('#branch-product-name').value, product_code:document.querySelector('#branch-product-code').value, barcode:document.querySelector('#branch-product-barcode').value, initial_quantity:document.querySelector('#branch-product-quantity').value, selling_price:document.querySelector('#branch-product-price').value }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || 'Branch product could not be queued.');
-      branchProductNotice.className = 'notice ok'; branchProductNotice.textContent = `${data.product_name} queued for ${data.branch}. The branch will create it on its next sync.`; branchProductForm.reset(); setNextBranchProductId(data.product_id);
+      if (!response.ok) throw new Error(data.message || 'Product could not be queued.');
+      const branchCount = data.branches?.length ?? 1;
+      branchProductNotice.className = 'notice ok'; branchProductNotice.textContent = `${data.product_name} queued for ${branchCount} branch${branchCount === 1 ? '' : 'es'}. Offline branches will create it on their next sync.`; branchProductForm.reset(); setNextBranchProductId(data.product_id);
     } catch (error) { branchProductNotice.className = 'notice error'; branchProductNotice.textContent = error.message; }
     finally { branchProductSubmit.disabled = false; }
   });
