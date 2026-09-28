@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import (
-    branch_status, branch_sync, cancel_sale, clear_sales_report_queue, health_check, main_sync,
+    branch_status, branch_sync, cancel_sale, clear_sales_report_queue, dashboard_branches, dashboard_main_sync, health_check, main_sync,
     index, favicon, confirm_deletion, cancellation_history_api, request_sales_report, complete_sales_report, request_invoice_reprint, complete_invoice_reprint,
     adjust_main_stock, create_stock_transfer, complete_stock_transfer, request_branch_price_update, update_product_tax_rate, complete_branch_price_update, create_branch_product, complete_branch_product_creation, delete_branch_product, complete_branch_product_deletion, product_catalog, deleted_products, shared_product_catalog, sync_product_catalog,
     product_sync_inbox, publish_product_catalog, stock_summary, stock_movements, product_movement_history_api, stock_transfer_logs, stock_transfer_device_logs, stock_movement_device_logs, cancellation_device_logs, record_branch_sales, sales_report_schedules,
@@ -11,8 +11,10 @@ urlpatterns = [
     path('health/', health_check, name='health_check'),
     path('cancel-sale/', cancel_sale, name='cancel_sale'),
     path('branches/', branch_status, name='branch_status'),
+    path('dashboard/branches/', dashboard_branches, name='dashboard_branches'),
     path('branch-sync/', branch_sync, name='branch_sync'),
     path('main-sync/', main_sync, name='main_sync'),
+    path('dashboard/main-sync/', dashboard_main_sync, name='dashboard_main_sync'),
     path('confirm-deletion/', confirm_deletion, name='confirm_deletion'),
     path('cancellation-history/', cancellation_history_api, name='cancellation_history_api'),
     path('sales-report/', request_sales_report, name='request_sales_report'),
