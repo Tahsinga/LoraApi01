@@ -12,7 +12,7 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.forms import SetPasswordForm, UserCreationForm
 from django.core.cache import cache
 from django.db import OperationalError, ProgrammingError, close_old_connections, transaction
-from django.db.models import IntegerField, Max, Q, Sum
+from django.db.models import Case, F, IntegerField, Max, OuterRef, Q, Subquery, Sum, When
 from django.db.models.functions import Cast
 from django.http import JsonResponse, HttpResponse
 from django.shortcuts import render
@@ -717,8 +717,41 @@ def stock_summary(request):
             status__in=['pending', 'processing', 'completed'],
         ).values('product_id').annotate(total=Sum(Cast('quantity', IntegerField())))
     }
+    latest_adjustments = StockMovement.objects.filter(
+        branch__iexact=branch,
+        product_id=OuterRef('product_id'),
+        movement_type='adjusted',
+    ).order_by('-created_at', '-id')
+    latest_adjustment_by_product = {}
+    for product_id, quantity in StockMovement.objects.filter(
+        branch__iexact=branch,
+        product_id__in=product_ids,
+        movement_type='adjusted',
+    ).order_by('product_id', '-created_at', '-id').values_list('product_id', 'quantity'):
+        latest_adjustment_by_product.setdefault(product_id, quantity)
+    movement_deltas = dict(
+        StockMovement.objects.filter(
+            branch__iexact=branch,
+            product_id__in=product_ids,
+        ).annotate(
+            latest_adjustment_at=Subquery(latest_adjustments.values('created_at')[:1]),
+            latest_adjustment_id=Subquery(latest_adjustments.values('id')[:1]),
+        ).filter(
+            Q(latest_adjustment_id__isnull=True, movement_type__in=['received', 'sold'])
+            | Q(created_at__gt=F('latest_adjustment_at'))
+            | Q(created_at=F('latest_adjustment_at'), id__gt=F('latest_adjustment_id')),
+        ).values('product_id').annotate(
+            total=Sum(Case(
+                When(movement_type='received', then=Cast('quantity', IntegerField())),
+                When(movement_type='sold', then=-Cast('quantity', IntegerField())),
+                default=0,
+                output_field=IntegerField(),
+            )),
+        ).values_list('product_id', 'total')
+    )
     summary = []
     for product in products:
+        movement_balance = latest_adjustment_by_product.get(product.product_id, 0) + movement_deltas.get(product.product_id, 0)
         summary.append({
             **product_payload(product),
             'main_quantity': str(balance_by_product.get(product.product_id, Decimal('0'))),
@@ -726,6 +759,7 @@ def stock_summary(request):
             'sent_quantity': str(sent_by_product.get(product.product_id, 0)),
             'sold_quantity': str(sold_by_product.get(product.product_id, 0)),
             'available_quantity': str(product.available_quantity),
+            'movement_balance': str(movement_balance),
         })
     return JsonResponse({
         'status': 'ok',

@@ -678,6 +678,48 @@ class StockTransferTests(TestCase):
 		self.assertEqual(product['received_quantity'], '5')
 		self.assertEqual(product['sold_quantity'], '3')
 
+	def test_stock_summary_movement_balance_matches_running_movement_history(self):
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=1001, product_name='Negative movement product', available_quantity=4,
+		)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=1001, product_name='Negative movement product',
+			movement_type='received', quantity=5, source='opening stock',
+		)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=1001, product_name='Negative movement product',
+			movement_type='sold', quantity=8, source='sale',
+		)
+
+		response = self.client.get('/api/stock/summary/?branch=BranchA')
+
+		self.assertEqual(response.status_code, 200)
+		product = response.json()['products'][0]
+		self.assertEqual(product['available_quantity'], '4')
+		self.assertEqual(product['movement_balance'], '-3')
+
+	def test_stock_summary_movement_balance_uses_latest_adjustment_as_reset(self):
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=1002, product_name='Adjusted movement product', available_quantity=6,
+		)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=1002, product_name='Adjusted movement product',
+			movement_type='received', quantity=20, source='opening stock',
+		)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=1002, product_name='Adjusted movement product',
+			movement_type='adjusted', quantity=7, source='stock take',
+		)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=1002, product_name='Adjusted movement product',
+			movement_type='sold', quantity=9, source='sale',
+		)
+
+		response = self.client.get('/api/stock/summary/?branch=BranchA')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()['products'][0]['movement_balance'], '-2')
+
 	def test_stock_movements_are_newest_first_with_current_timestamps(self):
 		from django.utils import timezone
 		from datetime import timedelta
