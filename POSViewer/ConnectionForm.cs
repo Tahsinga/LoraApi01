@@ -81,6 +81,11 @@ public sealed class ConnectionForm : Form
     {
         base.OnShown(e);
 
+        if (StartHidden)
+        {
+            Hide();
+        }
+
         if (_autoLoginAttempted)
         {
             return;
@@ -217,7 +222,9 @@ public sealed class ConnectionForm : Form
         _saveAndConnectButton.Click += async (_, _) =>
         {
             _autoLoginRetryCts?.Cancel();
-            await TryConnectAsync(BuildSettingsFromForm(), showSuccessMessage: true, showDashboardAfterSuccess: true);
+            var settings = BuildSettingsFromForm();
+            ConnectionSettings.Save(settings);
+            await TryConnectAsync(settings, showSuccessMessage: true, showDashboardAfterSuccess: true);
         };
 
         _statusLabel.AutoSize = true;

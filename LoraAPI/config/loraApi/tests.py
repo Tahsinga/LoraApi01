@@ -1,5 +1,5 @@
 import gzip
-from datetime import datetime, timezone as datetime_timezone
+from datetime import datetime, timedelta, timezone as datetime_timezone
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -368,6 +368,70 @@ class StockTransferTests(TestCase):
 
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(response.json()['products'][0]['sent_quantity'], '5')
+
+	def test_stock_summary_returns_full_then_only_changed_products(self):
+		ProductCatalog.objects.create(branch='BranchA', product_id=1001, product_name='Old Product')
+		ProductCatalog.objects.filter(product_id=1001).update(updated_at=timezone.now() - timedelta(minutes=10))
+		initial = self.client.get('/api/stock/summary/?branch=BranchA')
+		self.assertTrue(initial.json()['full'])
+		self.assertEqual(len(initial.json()['products']), 1)
+
+		no_changes = self.client.get('/api/stock/summary/', {
+			'branch': 'BranchA',
+			'since': (timezone.now() - timedelta(minutes=1)).isoformat(),
+		})
+		self.assertFalse(no_changes.json()['changed'])
+		self.assertEqual(no_changes.json()['products'], [])
+
+		change_start = timezone.now()
+		product = ProductCatalog.objects.get(product_id=1001)
+		product.available_quantity = 7
+		product.save()
+		MainStockBalance.objects.create(product_id=1002, product_name='Main Stock Change', quantity=4)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=1003, product_name='Movement Change', movement_type='sold', quantity=2,
+		)
+		StockTransfer.objects.create(
+			transfer_id='TRANSFER_BRANCHA_1004_DELTA', branch='BranchA', product_id=1004,
+			product_name='Transfer Change', quantity=3,
+		)
+		ProductCatalog.objects.bulk_create([
+			ProductCatalog(branch='BranchA', product_id=1002, product_name='Main Stock Change'),
+			ProductCatalog(branch='BranchA', product_id=1003, product_name='Movement Change'),
+			ProductCatalog(branch='BranchA', product_id=1004, product_name='Transfer Change'),
+		])
+
+		changed = self.client.get('/api/stock/summary/', {
+			'branch': 'BranchA',
+			'since': change_start.isoformat(),
+		})
+		self.assertFalse(changed.json()['full'])
+		self.assertTrue(changed.json()['changed'])
+		self.assertEqual(
+			{item['product_id'] for item in changed.json()['products']},
+			{1001, 1002, 1003, 1004},
+		)
+
+	def test_product_sync_inbox_returns_only_catalog_changes(self):
+		ProductCatalog.objects.create(branch='BranchA', product_id=1101, product_name='Old Product')
+		ProductCatalog.objects.filter(product_id=1101).update(updated_at=timezone.now() - timedelta(minutes=10))
+		initial = self.client.get('/api/products/inbox/')
+		self.assertTrue(initial.json()['full'])
+		self.assertEqual([item['product_id'] for item in initial.json()['products']], [1101])
+
+		no_changes = self.client.get('/api/products/inbox/', {
+			'since': (timezone.now() - timedelta(minutes=1)).isoformat(),
+		})
+		self.assertFalse(no_changes.json()['changed'])
+		self.assertEqual(no_changes.json()['products'], [])
+
+		change_start = timezone.now()
+		product = ProductCatalog.objects.get(product_id=1101)
+		product.available_quantity = 12
+		product.save()
+		changed = self.client.get('/api/products/inbox/', {'since': change_start.isoformat()})
+		self.assertFalse(changed.json()['full'])
+		self.assertEqual([item['product_id'] for item in changed.json()['products']], [1101])
 
 	def test_branch_list_excludes_catalog_branch_without_heartbeat(self):
 		ProductCatalog.objects.create(

@@ -37,7 +37,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private static void RegisterStartup()
     {
         using var startupKey = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
-        startupKey?.SetValue("LoraPOSViewer", $"\"{Application.ExecutablePath}\"");
+        var startupCommand = $"\"{Application.ExecutablePath}\"";
+        if (ConnectionSettings.ProfileName != "default")
+        {
+            startupCommand += $" --profile=\"{ConnectionSettings.ProfileName}\"";
+        }
+
+        startupKey?.SetValue("LoraPOSViewer", startupCommand);
     }
 
     private void ShowApplication()
