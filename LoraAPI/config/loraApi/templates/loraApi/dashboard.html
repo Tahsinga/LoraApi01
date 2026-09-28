@@ -411,5 +411,6 @@
   document.querySelector('#refresh').addEventListener('click', refreshQueue);
   refreshQueue(); refreshBranches(); setInterval(refreshQueue, 8000); setInterval(refreshBranches, 5000);
 </script>
+{% include 'loraApi/_bandwidth_meter.html' %}
 </body>
 </html>
