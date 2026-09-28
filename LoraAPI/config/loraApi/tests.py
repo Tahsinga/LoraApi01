@@ -2,7 +2,7 @@ import gzip
 from datetime import datetime, timedelta, timezone as datetime_timezone
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.contrib.auth import authenticate, get_user_model
 from django.core.management import call_command
 from django.utils import timezone
@@ -411,6 +411,18 @@ class StockTransferTests(TestCase):
 			{item['product_id'] for item in changed.json()['products']},
 			{1001, 1002, 1003, 1004},
 		)
+
+	@override_settings(STORAGES={
+		'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+		'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+	})
+	def test_bandwidth_page_requires_login_and_renders(self):
+		self.client.logout()
+		self.assertEqual(self.client.get('/bandwidth/').status_code, 302)
+		self.client.force_login(self.admin)
+		response = self.client.get('/bandwidth/')
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, 'API data received today')
 
 	def test_product_sync_inbox_returns_only_catalog_changes(self):
 		ProductCatalog.objects.create(branch='BranchA', product_id=1101, product_name='Old Product')
