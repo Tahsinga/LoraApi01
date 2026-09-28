@@ -425,19 +425,26 @@ class StockTransferTests(TestCase):
 		self.assertEqual(product.available_quantity, 8)
 
 	def test_web_can_queue_branch_product_and_branch_can_acknowledge_it(self):
+		BranchHeartbeat.objects.create(branch='BranchA', last_seen=timezone.now())
+		BranchHeartbeat.objects.create(
+			branch='Offline Branch',
+			last_seen=timezone.now() - timedelta(days=1),
+		)
 		response = self.client.post(
 			'/api/products/create/',
 			data=json.dumps({
-				'branch': 'BranchA', 'product_name': 'New Branch Product',
+				'product_name': 'New Branch Product',
 				'product_id': '12100001', 'product_code': 'NEW-001', 'barcode': '990001', 'initial_quantity': '8', 'selling_price': '4.25',
 			}),
 			content_type='application/json',
 		)
 
 		self.assertEqual(response.status_code, 202)
+		self.assertEqual(set(response.json()['branches']), {'BranchA', 'Offline Branch'})
 		product_id = response.json()['product_id']
 		self.assertEqual(product_id, 12_100_001)
 		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).product_code, '12100002')
+		self.assertTrue(ProductCatalog.objects.get(branch='Offline Branch', product_id=product_id).pending_product_creation)
 		self.assertFalse(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).branch_confirmed)
 		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).pending_stock_quantity, 8)
 		not_visible = self.client.get('/api/products/?branch=BranchA&q=New%20Branch%20Product')
