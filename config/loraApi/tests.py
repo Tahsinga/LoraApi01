@@ -275,6 +275,25 @@ class StockTransferTests(TestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(response.json()['products'][0]['sent_quantity'], '5')
 
+	def test_stock_transfer_log_filters_by_creation_date(self):
+		transfer = StockTransfer.objects.create(
+			transfer_id='TRANSFER_DATE_FILTER', branch='BranchA', product_id=1001,
+			product_name='Date Filter Product', quantity=3,
+		)
+		selected_date = timezone.localdate() - timedelta(days=1)
+		created_at = timezone.make_aware(datetime.combine(selected_date, datetime.min.time()))
+		StockTransfer.objects.filter(pk=transfer.pk).update(created_at=created_at)
+		StockTransfer.objects.create(
+			transfer_id='TRANSFER_DATE_OTHER', branch='BranchA', product_id=1002,
+			product_name='Other Date Product', quantity=2,
+		)
+
+		response = self.client.get('/api/stock/transfers/log/', {'date': selected_date.isoformat()})
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()['date'], selected_date.isoformat())
+		self.assertEqual([item['transfer_id'] for item in response.json()['transfers']], ['TRANSFER_DATE_FILTER'])
+
 	def test_stock_summary_returns_only_changed_products(self):
 		ProductCatalog.objects.create(branch='BranchA', product_id=1001, product_name='Test Product')
 		ProductCatalog.objects.filter(product_id=1001).update(updated_at=timezone.now() - timedelta(minutes=10))
