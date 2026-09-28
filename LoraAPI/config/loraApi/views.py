@@ -19,6 +19,7 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime, parse_time
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.gzip import gzip_page
 
 from .models import BranchHeartbeat, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
 from .state_store import sync_users_to_state
@@ -227,6 +228,7 @@ def stock_summary_payload(product, branch):
 
 @login_required(login_url='/login/')
 @csrf_exempt
+@gzip_page
 def index(request):
     """Browser dashboard for managing branch sale cancellations."""
     cleanup_queues()
@@ -234,6 +236,22 @@ def index(request):
         'pending_count': DeletionRecord.objects.filter(status__in=['pending', 'processing']).count(),
         'processed_count': DeletionRecord.objects.filter(status='processed').count(),
     })
+
+
+@login_required(login_url='/login/')
+@gzip_page
+def dashboard_main_sync(request):
+    if request.method != 'GET':
+        return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
+    return main_sync(request)
+
+
+@login_required(login_url='/login/')
+@gzip_page
+def dashboard_branches(request):
+    if request.method != 'GET':
+        return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
+    return branch_status(request)
 
 
 @login_required(login_url='/login/')

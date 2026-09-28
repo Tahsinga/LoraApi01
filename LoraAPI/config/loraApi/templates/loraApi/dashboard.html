@@ -196,7 +196,7 @@
   }
   async function refreshQueue() {
     try {
-      const response = await fetch('/api/main-sync/');
+      const response = await fetch('/api/dashboard/main-sync/');
       const data = await response.json();
       document.querySelector('#pending').textContent = data.pending_count ?? 0;
       document.querySelector('#processed').textContent = data.processed_count ?? 0;
@@ -231,7 +231,7 @@
   }
   async function refreshBranches() {
     try {
-      const response = await fetch('/api/branches/');
+      const response = await fetch('/api/dashboard/branches/');
       const data = await response.json();
       connectedBranches = data.branches?.map(branch => branch.name) ?? [];
       const selected = branchSelect.value;

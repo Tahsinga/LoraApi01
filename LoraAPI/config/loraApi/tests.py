@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone as datetime_timezone
+import gzip
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
@@ -6,8 +7,67 @@ from django.contrib.auth import authenticate, get_user_model
 from django.core.management import call_command
 from django.utils import timezone
 from loraApi.state_store import load_state
-from loraApi.models import InvoiceReprintRequest, MainStockBalance, ProductCatalog, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
+from loraApi.models import BranchHeartbeat, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
 import json
+
+
+class DashboardCompressionTests(TestCase):
+	def setUp(self):
+		admin = get_user_model().objects.create_superuser(username='compression-admin', password='CompressionPass4182!')
+		self.client.force_login(admin)
+
+	@override_settings(STORAGES={
+		'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+		'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+	})
+	def test_dashboard_page_is_gzipped_for_browser(self):
+		response = self.client.get('/', HTTP_ACCEPT_ENCODING='gzip')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.headers['Content-Encoding'], 'gzip')
+		self.assertIn(b'Sale control', gzip.decompress(response.content))
+
+	def test_dashboard_branch_poll_is_compressed_without_changing_payload(self):
+		for index in range(12):
+			BranchHeartbeat.objects.create(
+				branch=f'Branch {index} - bandwidth compression test',
+				last_seen=timezone.now(),
+			)
+
+		response = self.client.get('/api/dashboard/branches/', HTTP_ACCEPT_ENCODING='gzip')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.headers['Content-Encoding'], 'gzip')
+		payload = json.loads(gzip.decompress(response.content))
+		self.assertEqual(payload['count'], 12)
+		self.assertEqual(payload['branches'][0]['name'], 'Branch 0 - bandwidth compression test')
+
+	def test_dashboard_queue_poll_is_compressed_without_changing_payload(self):
+		for index in range(8):
+			DeletionRecord.objects.create(
+				deletion_id=f'WEB_COMPRESSION_{index}',
+				branch=f'Branch {index} - bandwidth compression test',
+				invoice=f'INVOICE-{index}',
+				status='pending',
+			)
+
+		response = self.client.get('/api/dashboard/main-sync/', HTTP_ACCEPT_ENCODING='gzip')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.headers['Content-Encoding'], 'gzip')
+		payload = json.loads(gzip.decompress(response.content))
+		self.assertEqual(payload['status'], 'ok')
+		self.assertEqual(len(payload['queue']), 8)
+
+	def test_existing_branch_heartbeat_endpoint_stays_uncompressed(self):
+		response = self.client.get('/api/branches/', HTTP_ACCEPT_ENCODING='gzip')
+
+		self.assertNotIn('Content-Encoding', response.headers)
+
+	def test_existing_main_sync_endpoint_stays_uncompressed(self):
+		response = self.client.get('/api/main-sync/', HTTP_ACCEPT_ENCODING='gzip')
+
+		self.assertNotIn('Content-Encoding', response.headers)
 
 
 class StockTransferTests(TestCase):
