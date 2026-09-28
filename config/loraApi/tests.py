@@ -48,7 +48,10 @@ class StockTransferTests(TestCase):
 		self.assertEqual(self.client.get('/bandwidth/').status_code, 302)
 		self.client.force_login(self.admin)
 		self.assertContains(self.client.get('/'), 'id="api-bandwidth-meter" href="/bandwidth/"')
-		self.assertContains(self.client.get('/bandwidth/'), 'API data received today')
+		page = self.client.get('/bandwidth/')
+		self.assertContains(page, 'API data received today')
+		self.assertContains(page, 'Daily log')
+		self.assertContains(page, 'data-bandwidth-month-log')
 
 	def test_main_stock_update_sets_stock_take_value(self):
 		ProductCatalog.objects.create(
