@@ -140,7 +140,7 @@
 <div class="shell">
   <header>
     <div class="page-title"><p class="eyebrow">Lora operations</p><h1>Main stock</h1></div>
-    <nav class="nav"><a class="nav-link" href="/products/deleted/">Deleted products</a><a class="nav-link" href="/stock/movements/history/">Product movements</a><a class="nav-link" href="/">Sale control</a><a class="nav-link" href="/history/">Cancellation history</a>{% if user.is_superuser %}<a class="nav-link" href="/users/">User accounts</a>{% endif %}<form method="post" action="/logout/" class="logout-form"><button type="submit" class="logout-button">Sign out</button></form></nav>
+  <nav class="nav"><a class="nav-link" href="/products/deleted/">Deleted products</a><a class="nav-link" href="/stock/movements/history/">Product movements</a><a class="nav-link" href="/">Sale control</a><a class="nav-link" href="/history/">Cancellation history</a>{% if user.is_superuser %}<a class="nav-link" href="/users/">User accounts</a>{% endif %}<form method="post" action="/logout/" class="logout-form">{% csrf_token %}<button type="submit" class="logout-button">Sign out</button></form></nav>
   </header>
   <main>
     <p class="intro">Update central stock or send stock to a connected branch.</p>

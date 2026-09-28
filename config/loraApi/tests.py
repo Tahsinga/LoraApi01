@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone as datetime_timezone
+import re
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
@@ -17,6 +18,26 @@ class StockTransferTests(TestCase):
 		)
 		self.client.force_login(self.admin)
 		MainStockBalance.objects.create(product_id=999, product_name='Test Product', quantity=10)
+
+	def test_sign_out_works_from_each_page_with_csrf_enforced(self):
+		client = self.client_class(enforce_csrf_checks=True)
+		for page in ('/', '/stock/', '/history/', '/stock/movements/history/', '/users/'):
+			client.force_login(self.admin)
+			page_response = client.get(page)
+			self.assertEqual(page_response.status_code, 200, page)
+			logout_form = re.search(
+				r'<form[^>]*action="/logout/"[^>]*>(.*?)</form>',
+				page_response.content.decode(),
+				re.DOTALL,
+			)
+			self.assertIsNotNone(logout_form, page)
+			csrf_token = re.search(
+				r'name="csrfmiddlewaretoken" value="([^"]+)"',
+				logout_form.group(1),
+			)
+			self.assertIsNotNone(csrf_token, page)
+			logout_response = client.post('/logout/', {'csrfmiddlewaretoken': csrf_token.group(1)})
+			self.assertRedirects(logout_response, '/login/', fetch_redirect_response=False)
 
 	@override_settings(STORAGES={
 		'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
