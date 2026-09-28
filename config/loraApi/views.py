@@ -266,6 +266,12 @@ def product_movement_history(request):
 
 
 @login_required(login_url='/login/')
+def bandwidth_usage(request):
+    """Show browser-local API response bandwidth totals."""
+    return render(request, 'loraApi/bandwidth.html')
+
+
+@login_required(login_url='/login/')
 @csrf_exempt
 def cancellation_history(request):
     """Show the saved cancellation history page."""
@@ -659,13 +665,55 @@ def stock_summary(request):
     branch = str(request.GET.get('branch', '')).strip()
     if not branch:
         return JsonResponse({'status': 'error', 'message': 'Branch is required.'}, status=400)
-    products = list(ProductCatalog.objects.filter(branch__iexact=branch, branch_confirmed=True))
+
+    catalog = ProductCatalog.objects.filter(branch__iexact=branch, branch_confirmed=True)
+    since = parse_datetime(str(request.GET.get('since', '')).strip())
+    if since is not None and timezone.is_naive(since):
+        since = timezone.make_aware(since, timezone.get_current_timezone())
+    today_start = timezone.localtime().replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow_start = today_start + timedelta(days=1)
+    full_snapshot = since is None or timezone.localtime(since).date() != today_start.date()
+
+    if full_snapshot:
+        products = list(catalog)
+    else:
+        changed_since = since - timedelta(seconds=3)
+        catalog_product_ids = catalog.values_list('product_id', flat=True)
+        changed_product_ids = set(catalog.filter(
+            updated_at__gte=changed_since,
+        ).values_list('product_id', flat=True))
+        changed_product_ids.update(MainStockBalance.objects.filter(
+            product_id__in=catalog_product_ids,
+            updated_at__gte=changed_since,
+        ).values_list('product_id', flat=True))
+        changed_product_ids.update(StockMovement.objects.filter(
+            branch__iexact=branch,
+            product_id__in=catalog_product_ids,
+            created_at__gte=changed_since,
+            created_at__lt=tomorrow_start,
+        ).values_list('product_id', flat=True))
+        changed_product_ids.update(StockTransfer.objects.filter(
+            branch__iexact=branch,
+            product_id__in=catalog_product_ids,
+        ).filter(
+            Q(created_at__gte=changed_since)
+            | Q(claimed_at__gte=changed_since)
+            | Q(completed_at__gte=changed_since),
+        ).values_list('product_id', flat=True))
+        if not changed_product_ids:
+            return JsonResponse({
+                'status': 'ok',
+                'branch': branch,
+                'changed': False,
+                'full': False,
+                'products': [],
+            })
+        products = list(catalog.filter(product_id__in=changed_product_ids))
+
     product_ids = [product.product_id for product in products]
     balance_by_product = dict(MainStockBalance.objects.filter(
         product_id__in=product_ids,
     ).values_list('product_id', 'quantity'))
-    today_start = timezone.localtime().replace(hour=0, minute=0, second=0, microsecond=0)
-    tomorrow_start = today_start + timedelta(days=1)
 
     movement_totals = StockMovement.objects.filter(
         branch__iexact=branch,
@@ -697,7 +745,13 @@ def stock_summary(request):
             'sold_quantity': str(sold_by_product.get(product.product_id, 0)),
             'available_quantity': str(product.available_quantity),
         })
-    return JsonResponse({'status': 'ok', 'branch': branch, 'products': summary})
+    return JsonResponse({
+        'status': 'ok',
+        'branch': branch,
+        'changed': True,
+        'full': full_snapshot,
+        'products': summary,
+    })
 
 
 @login_required(login_url='/login/')
@@ -1296,7 +1350,19 @@ def product_sync_inbox(request):
         return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
 
     products = ProductCatalog.objects.exclude(branch__iexact='MAIN').filter(branch_confirmed=True)
-    return JsonResponse({'status': 'ok', 'products': [product_payload(product) for product in products]})
+    since = parse_datetime(str(request.GET.get('since', '')).strip())
+    full_snapshot = since is None
+    if not full_snapshot:
+        if timezone.is_naive(since):
+            since = timezone.make_aware(since, timezone.get_current_timezone())
+        products = products.filter(updated_at__gte=since - timedelta(seconds=3))
+    changed_products = [product_payload(product) for product in products]
+    return JsonResponse({
+        'status': 'ok',
+        'changed': bool(changed_products),
+        'full': full_snapshot,
+        'products': changed_products,
+    })
 
 
 @csrf_exempt
