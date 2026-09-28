@@ -252,6 +252,12 @@ def product_movement_history(request):
 
 
 @login_required(login_url='/login/')
+def bandwidth_usage(request):
+    """Show browser-local API response bandwidth totals."""
+    return render(request, 'loraApi/bandwidth.html')
+
+
+@login_required(login_url='/login/')
 @csrf_exempt
 def cancellation_history(request):
     """Show the saved cancellation history page."""

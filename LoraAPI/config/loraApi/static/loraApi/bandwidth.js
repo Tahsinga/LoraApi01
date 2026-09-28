@@ -1,9 +1,12 @@
 (() => {
   const meter = document.querySelector('#api-bandwidth-meter');
-  if (!meter || !('PerformanceObserver' in window)) return;
+  const details = document.querySelector('#bandwidth-details');
+  if ((!meter && !details) || !('PerformanceObserver' in window)) return;
 
-  const bytesLabel = meter.querySelector('[data-bandwidth-bytes]');
-  const countLabel = meter.querySelector('[data-bandwidth-count]');
+  const bytesLabel = meter?.querySelector('[data-bandwidth-bytes]');
+  const countLabel = meter?.querySelector('[data-bandwidth-count]');
+  const detailsBytesLabel = details?.querySelector('[data-bandwidth-bytes]');
+  const detailsCountLabel = details?.querySelector('[data-bandwidth-count]');
   const today = () => {
     const date = new Date();
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -32,8 +35,12 @@
 
   const render = () => {
     if (usage.date !== today()) usage = { date: today(), bytes: 0, responses: 0 };
-    bytesLabel.textContent = formatBytes(usage.bytes);
-    countLabel.textContent = `${usage.responses} ${usage.responses === 1 ? 'response' : 'responses'}`;
+    const bytes = formatBytes(usage.bytes);
+    const responses = `${usage.responses} ${usage.responses === 1 ? 'response' : 'responses'}`;
+    if (bytesLabel) bytesLabel.textContent = bytes;
+    if (countLabel) countLabel.textContent = responses;
+    if (detailsBytesLabel) detailsBytesLabel.textContent = bytes;
+    if (detailsCountLabel) detailsCountLabel.textContent = responses;
   };
 
   const observer = new PerformanceObserver(entries => {
