@@ -856,9 +856,23 @@ def stock_transfer_logs(request):
     if request.method != 'GET':
         return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
 
-    transfers = StockTransfer.objects.order_by('-created_at')[:200]
+    date_value = request.GET.get('date', '').strip()
+    transfers = StockTransfer.objects.order_by('-created_at')
+    selected_date = None
+    if date_value:
+        selected_date = parse_date(date_value)
+        if selected_date is None:
+            return JsonResponse({'status': 'error', 'message': 'Use a valid transfer date.'}, status=400)
+        day_start = timezone.make_aware(datetime.combine(selected_date, datetime.min.time()))
+        day_end = day_start + timedelta(days=1)
+        transfers = transfers.filter(created_at__gte=day_start, created_at__lt=day_end)[:200]
+    else:
+        transfers = transfers[:200]
+
+    transfer_rows = list(transfers)
     return JsonResponse({
         'status': 'ok',
+        'date': selected_date.isoformat() if selected_date else None,
         'transfers': [
             {
                 'transfer_id': transfer.transfer_id,
@@ -871,7 +885,7 @@ def stock_transfer_logs(request):
                 'created_at': transfer.created_at.isoformat(),
                 'completed_at': transfer.completed_at.isoformat() if transfer.completed_at else None,
             }
-            for transfer in transfers
+            for transfer in transfer_rows
         ],
     })
 

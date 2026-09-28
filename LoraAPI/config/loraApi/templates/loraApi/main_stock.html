@@ -209,7 +209,7 @@
         <div id="stock-movements" class="stock-table-wrap"><p class="empty">Loading stock activity...</p></div>
       </div>
       <div class="panel panel-wide">
-        <div class="browser-heading"><div><h2>Stock transfer log</h2><p class="sub">Every transfer sent from main stock to a branch.</p></div><span id="transfer-status" class="catalog-status">Loading transfers...</span></div>
+        <div class="browser-heading"><div><h2>Stock transfer log</h2><p class="sub">Every transfer sent from main stock to a branch.</p></div><div class="browser-actions"><label class="activity-date-label">Date<input id="transfer-log-date" type="date"></label><button id="clear-transfer-date" class="refresh-stock-button" type="button">Clear date</button><span id="transfer-status" class="catalog-status">Loading transfers...</span></div></div>
         <div id="stock-transfers" class="stock-table-wrap"><p class="empty">Loading transfer log...</p></div>
       </div>
     </section>
@@ -249,6 +249,7 @@
   const movementStatus = document.querySelector('#movement-status');
   const stockTransfers = document.querySelector('#stock-transfers');
   const transferStatus = document.querySelector('#transfer-status');
+  const transferLogDate = document.querySelector('#transfer-log-date');
   const mainStockForm = document.querySelector('#main-stock-form');
   const mainStockProductOptions = document.querySelector('#main-stock-product-options');
   const mainStockNotice = document.querySelector('#main-stock-notice');
@@ -285,7 +286,8 @@
   let stockMovementsLoading = false;
   let stockMovementsRequestId = 0;
   let stockMovementsController = null;
-  let stockTransfersLoading = false;
+  let stockTransfersRequestId = 0;
+  let stockTransfersController = null;
   let refreshAllLoading = false;
   const transferQueue = [];
   let transferQueueProcessing = false;
@@ -499,24 +501,37 @@
     }
   }
   async function loadStockTransfers() {
-    if (stockTransfersLoading) return;
-    stockTransfersLoading = true;
+    const requestId = ++stockTransfersRequestId;
+    stockTransfersController?.abort();
+    const controller = new AbortController();
+    stockTransfersController = controller;
     try {
-      const response = await fetch(`/api/stock/transfers/log/?_=${Date.now()}`, { cache: 'no-store' });
+      const params = new URLSearchParams();
+      if (transferLogDate.value) params.set('date', transferLogDate.value);
+      const response = await fetch(`/api/stock/transfers/log/?${params}`, { cache: 'no-store', signal: controller.signal });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Transfer log unavailable.');
+      if (requestId !== stockTransfersRequestId) return;
       const transfers = data.transfers || [];
-      transferStatus.textContent = `${transfers.length} transfer${transfers.length === 1 ? '' : 's'}`;
+      transferStatus.textContent = data.date
+        ? `${transfers.length} transfer${transfers.length === 1 ? '' : 's'} on ${data.date}`
+        : `${transfers.length} recent transfer${transfers.length === 1 ? '' : 's'}`;
       stockTransfers.innerHTML = transfers.length
         ? `<table class="transfer-table"><thead><tr><th>Branch</th><th>Product</th><th>Quantity</th><th>Status</th><th>Sent by</th><th>Created</th><th>Completed</th></tr></thead><tbody>${transfers.map(transfer => `<tr><td>${escapeHtml(transfer.branch)}</td><td>${escapeHtml(transfer.product_name)}<small>ID ${escapeHtml(transfer.product_id)}</small></td><td>${escapeHtml(transfer.quantity)}</td><td><span class="transfer-status ${escapeHtml(transfer.status)}">${escapeHtml(transfer.status)}</span></td><td>${escapeHtml(transfer.created_by)}</td><td>${escapeHtml(new Intl.DateTimeFormat(undefined, {dateStyle:'medium', timeStyle:'short'}).format(new Date(transfer.created_at)))}</td><td>${transfer.completed_at ? escapeHtml(new Intl.DateTimeFormat(undefined, {dateStyle:'medium', timeStyle:'short'}).format(new Date(transfer.completed_at))) : '-'}</td></tr>`).join('')}</tbody></table>`
         : '<p class="empty">No stock transfers recorded yet.</p>';
     } catch (error) {
+      if (requestId !== stockTransfersRequestId || error.name === 'AbortError') return;
       transferStatus.textContent = 'Log unavailable.';
       stockTransfers.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
     } finally {
-      stockTransfersLoading = false;
+      if (requestId === stockTransfersRequestId) stockTransfersController = null;
     }
   }
+  transferLogDate.addEventListener('change', loadStockTransfers);
+  document.querySelector('#clear-transfer-date').addEventListener('click', () => {
+    transferLogDate.value = '';
+    loadStockTransfers();
+  });
   async function refreshBranches() {
     try {
       const previousBranch = selectedBranch.value;
@@ -893,6 +908,7 @@
   productSearches.forEach(setupProductSearch);
   const today = new Date();
   activityDate.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  transferLogDate.value = activityDate.value;
   refreshAll();
   setInterval(refreshBranches, 5000);
   setInterval(() => {
