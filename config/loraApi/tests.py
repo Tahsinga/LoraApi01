@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone as datetime_timezone
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.contrib.auth import authenticate, get_user_model
 from django.core.management import call_command
 from loraApi.state_store import load_state
@@ -17,6 +17,17 @@ class StockTransferTests(TestCase):
 		)
 		self.client.force_login(self.admin)
 		MainStockBalance.objects.create(product_id=999, product_name='Test Product', quantity=10)
+
+	@override_settings(STORAGES={
+		'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+		'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+	})
+	def test_bandwidth_page_and_dashboard_link(self):
+		self.client.logout()
+		self.assertEqual(self.client.get('/bandwidth/').status_code, 302)
+		self.client.force_login(self.admin)
+		self.assertContains(self.client.get('/'), 'id="api-bandwidth-meter" href="/bandwidth/"')
+		self.assertContains(self.client.get('/bandwidth/'), 'API data received today')
 
 	def test_main_stock_update_sets_stock_take_value(self):
 		ProductCatalog.objects.create(
@@ -242,6 +253,44 @@ class StockTransferTests(TestCase):
 
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(response.json()['products'][0]['sent_quantity'], '5')
+
+	def test_stock_summary_returns_only_changed_products(self):
+		ProductCatalog.objects.create(branch='BranchA', product_id=1001, product_name='Test Product')
+		ProductCatalog.objects.filter(product_id=1001).update(updated_at=timezone.now() - timedelta(minutes=10))
+		no_changes = self.client.get('/api/stock/summary/', {
+			'branch': 'BranchA',
+			'since': (timezone.now() - timedelta(minutes=1)).isoformat(),
+		})
+		self.assertFalse(no_changes.json()['changed'])
+		self.assertEqual(no_changes.json()['products'], [])
+
+		change_start = timezone.now()
+		product = ProductCatalog.objects.get(product_id=1001)
+		product.available_quantity = 7
+		product.save()
+		changed = self.client.get('/api/stock/summary/', {
+			'branch': 'BranchA',
+			'since': change_start.isoformat(),
+		})
+		self.assertFalse(changed.json()['full'])
+		self.assertEqual([item['product_id'] for item in changed.json()['products']], [1001])
+
+	def test_product_sync_inbox_returns_only_changed_products(self):
+		ProductCatalog.objects.create(branch='BranchA', product_id=1101, product_name='Test Product')
+		ProductCatalog.objects.filter(product_id=1101).update(updated_at=timezone.now() - timedelta(minutes=10))
+		no_changes = self.client.get('/api/products/inbox/', {
+			'since': (timezone.now() - timedelta(minutes=1)).isoformat(),
+		})
+		self.assertFalse(no_changes.json()['changed'])
+		self.assertEqual(no_changes.json()['products'], [])
+
+		change_start = timezone.now()
+		product = ProductCatalog.objects.get(product_id=1101)
+		product.available_quantity = 8
+		product.save()
+		changed = self.client.get('/api/products/inbox/', {'since': change_start.isoformat()})
+		self.assertFalse(changed.json()['full'])
+		self.assertEqual([item['product_id'] for item in changed.json()['products']], [1101])
 
 	def test_branch_list_excludes_catalog_branch_without_heartbeat(self):
 		ProductCatalog.objects.create(

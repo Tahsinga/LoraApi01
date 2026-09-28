@@ -294,6 +294,8 @@ class StockTransferTests(TestCase):
 		self.client.logout()
 		self.assertEqual(self.client.get('/bandwidth/').status_code, 302)
 		self.client.force_login(self.admin)
+		dashboard = self.client.get('/')
+		self.assertContains(dashboard, 'id="api-bandwidth-meter" href="/bandwidth/"')
 		response = self.client.get('/bandwidth/')
 		self.assertEqual(response.status_code, 200)
 		self.assertContains(response, 'API data received today')
