@@ -1094,6 +1094,8 @@ def create_branch_product(request):
 
     if requested_product_id and requested_product_id < 12_100_000:
         return JsonResponse({'status': 'error', 'message': 'Product ID must be at least 12100000.'}, status=400)
+    if requested_product_id > 2_147_483_647:
+        return JsonResponse({'status': 'error', 'message': 'Product ID cannot exceed 2147483647.'}, status=400)
     if branch.casefold() == 'main' or not product_name or len(product_name) > 250:
         return JsonResponse({'status': 'error', 'message': 'A product name is required; Main cannot be selected as a branch.'}, status=400)
     if len(product_code) > 50 or len(barcode) > 100 or initial_quantity < 0 or initial_quantity != whole_quantity(initial_quantity) or selling_price < 0:
