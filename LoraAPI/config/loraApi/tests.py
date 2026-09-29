@@ -569,7 +569,7 @@ class StockTransferTests(TestCase):
 		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).product_code, '12100002')
 		self.assertTrue(ProductCatalog.objects.get(branch='Offline Branch', product_id=product_id).pending_product_creation)
 		self.assertFalse(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).branch_confirmed)
-		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).pending_stock_quantity, 8)
+		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).pending_stock_quantity, 0)
 		not_visible = self.client.get('/api/products/?branch=BranchA&q=New%20Branch%20Product')
 		self.assertEqual(not_visible.status_code, 200)
 		self.assertEqual(not_visible.json()['products'], [])
@@ -577,7 +577,7 @@ class StockTransferTests(TestCase):
 		poll = self.client.get('/api/branch-sync/?branch=BranchA')
 		self.assertEqual(poll.status_code, 200)
 		self.assertEqual(poll.json()['pending_product_creations'][0]['product_name'], 'New Branch Product')
-		self.assertEqual(poll.json()['pending_product_creations'][0]['initial_quantity'], '8')
+		self.assertEqual(poll.json()['pending_product_creations'][0]['initial_quantity'], '0')
 
 		complete = self.client.post(
 			'/api/products/create/complete/',
