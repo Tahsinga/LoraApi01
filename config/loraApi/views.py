@@ -1089,7 +1089,7 @@ def create_branch_product(request):
         product_name = str(payload.get('product_name', '')).strip()
         product_code = str(payload.get('product_code', '')).strip()
         barcode = str(payload.get('barcode', '')).strip()
-        initial_quantity = Decimal(str(payload.get('initial_quantity', 0) or 0))
+        initial_quantity = Decimal('0')
         selling_price = Decimal(str(payload.get('selling_price', 0) or 0))
     except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
         return JsonResponse({'status': 'error', 'message': 'Branch, product name, and a valid price are required.'}, status=400)
