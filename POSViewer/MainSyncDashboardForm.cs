@@ -19,6 +19,8 @@ public sealed class MainSyncDashboardForm : Form
     private readonly Dictionary<string, string> _transferStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _publishedCatalogStates = new(StringComparer.OrdinalIgnoreCase);
     private DateTimeOffset? _productInboxSince;
+    private DateTimeOffset? _stockMovementLogSince;
+    private DateTimeOffset? _cancellationLogSince;
 
     public MainSyncDashboardForm(ConnectionSettings settings, ConnectionForm connectionForm)
     {
@@ -157,7 +159,14 @@ public sealed class MainSyncDashboardForm : Form
 
     private async Task StoreStockMovementsAsync(HttpClient client)
     {
-        var response = await client.GetAsync($"{_settings.GetApiBaseUrl()}/api/stock/movements/device-log/");
+        var syncStartedAt = DateTimeOffset.UtcNow;
+        var logUrl = $"{_settings.GetApiBaseUrl()}/api/stock/movements/device-log/";
+        if (_stockMovementLogSince.HasValue)
+        {
+            logUrl += $"?since={Uri.EscapeDataString(_stockMovementLogSince.Value.ToString("O", CultureInfo.InvariantCulture))}";
+        }
+
+        var response = await client.GetAsync(logUrl);
         if (!response.IsSuccessStatusCode)
         {
             AddLog($"[ERROR] Stock movement sync returned {response.StatusCode}.");
@@ -168,6 +177,7 @@ public sealed class MainSyncDashboardForm : Form
         var movements = payload?.movements ?? new List<StockMovementLog>();
         if (movements.Count == 0)
         {
+            _stockMovementLogSince = syncStartedAt;
             return;
         }
 
@@ -222,6 +232,7 @@ public sealed class MainSyncDashboardForm : Form
         }
 
         AddLog($"[MOVEMENTS] Stored {stored} new movement record(s) in CloudPOS.dbo.BranchStockMovements.");
+        _stockMovementLogSince = syncStartedAt;
     }
 
     private async Task EnsureCancellationTableAsync()
@@ -252,7 +263,14 @@ public sealed class MainSyncDashboardForm : Form
 
     private async Task StoreCancellationRecordsAsync(HttpClient client)
     {
-        var response = await client.GetAsync($"{_settings.GetApiBaseUrl()}/api/cancellations/device-log/");
+        var syncStartedAt = DateTimeOffset.UtcNow;
+        var logUrl = $"{_settings.GetApiBaseUrl()}/api/cancellations/device-log/";
+        if (_cancellationLogSince.HasValue)
+        {
+            logUrl += $"?since={Uri.EscapeDataString(_cancellationLogSince.Value.ToString("O", CultureInfo.InvariantCulture))}";
+        }
+
+        var response = await client.GetAsync(logUrl);
         if (!response.IsSuccessStatusCode)
         {
             AddLog($"[ERROR] Cancellation history sync returned {response.StatusCode}.");
@@ -263,6 +281,7 @@ public sealed class MainSyncDashboardForm : Form
         var cancellations = payload?.cancellations ?? new List<CancellationLog>();
         if (cancellations.Count == 0)
         {
+            _cancellationLogSince = syncStartedAt;
             return;
         }
 
@@ -301,6 +320,7 @@ public sealed class MainSyncDashboardForm : Form
         }
 
         AddLog($"[CANCELLATIONS] Stored {stored} cancellation record(s) in CloudPOS.dbo.InvoiceCancellations.");
+        _cancellationLogSince = syncStartedAt;
     }
 
     private async Task PollStockTransfersAsync(HttpClient client)

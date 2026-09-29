@@ -22,6 +22,8 @@ public sealed class DashboardForm : Form
     private readonly RichTextBox _logTextBox = new();
     private readonly DateTimePicker _dateFilterPicker = new();
     private readonly Label _statusLabel = new();
+    private readonly Dictionary<int, string> _publishedCatalogStates = new();
+    private DateTimeOffset? _productInboxSince;
 
     public DashboardForm(ConnectionSettings settings, ConnectionForm connectionForm)
     {
@@ -245,7 +247,14 @@ public sealed class DashboardForm : Form
         try
         {
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
-            var response = await client.GetAsync($"{_settings.GetApiBaseUrl()}/api/products/inbox/");
+            var inboxStartedAt = DateTimeOffset.UtcNow;
+            var inboxUrl = $"{_settings.GetApiBaseUrl()}/api/products/inbox/";
+            if (_productInboxSince.HasValue)
+            {
+                inboxUrl += $"?since={Uri.EscapeDataString(_productInboxSince.Value.ToString("O", CultureInfo.InvariantCulture))}";
+            }
+
+            var response = await client.GetAsync(inboxUrl);
             if (!response.IsSuccessStatusCode)
             {
                 AddLog($"[WARNING] Branch product inbox request failed: {response.StatusCode}", Color.Orange);
@@ -301,6 +310,7 @@ public sealed class DashboardForm : Form
                 await command.ExecuteNonQueryAsync();
             }
 
+            _productInboxSince = inboxStartedAt;
             AddLog($"[SUCCESS] Main received {products.Count} product(s) from branch inbox and stored them in dbo.BranchProductCatalog.", Color.LightGreen);
         }
         catch (Exception ex)
@@ -369,7 +379,7 @@ public sealed class DashboardForm : Form
         {
             using var connection = new SqlConnection(_settings.BuildConnectionString());
             await connection.OpenAsync();
-                        const string query = @"
+            const string query = @"
                                 SELECT ProductID, ProductDesc, ProductCode, BarCode, SellingPrice
                                 FROM [dbo].[BranchProductCatalog]
                                 WHERE ProductID IS NOT NULL
@@ -377,17 +387,42 @@ public sealed class DashboardForm : Form
                                     AND LTRIM(RTRIM(ProductDesc)) <> '';";
             using var command = new SqlCommand(query, connection);
             using var reader = await command.ExecuteReaderAsync();
-            var products = new List<object>();
+            var productRows = new Dictionary<int, object>();
+            var productStates = new Dictionary<int, string>();
             while (await reader.ReadAsync())
             {
-                products.Add(new
+                var productId = Convert.ToInt32(reader["ProductID"], CultureInfo.InvariantCulture);
+                var productName = reader["ProductDesc"]?.ToString()?.Trim() ?? string.Empty;
+                var productCode = reader["ProductCode"]?.ToString()?.Trim() ?? string.Empty;
+                var barcode = reader["BarCode"]?.ToString()?.Trim() ?? string.Empty;
+                var sellingPrice = Convert.ToDecimal(reader["SellingPrice"], CultureInfo.InvariantCulture);
+                productStates[productId] = string.Join("\u001f", productName, productCode, barcode,
+                    sellingPrice.ToString(CultureInfo.InvariantCulture));
+                productRows[productId] = new
                 {
-                    product_id = Convert.ToInt32(reader["ProductID"]),
-                    product_name = reader["ProductDesc"]?.ToString()?.Trim() ?? string.Empty,
-                    product_code = reader["ProductCode"]?.ToString()?.Trim() ?? string.Empty,
-                    barcode = reader["BarCode"]?.ToString()?.Trim() ?? string.Empty,
-                    selling_price = Convert.ToDecimal(reader["SellingPrice"], CultureInfo.InvariantCulture),
-                });
+                    product_id = productId,
+                    product_name = productName,
+                    product_code = productCode,
+                    barcode,
+                    selling_price = sellingPrice,
+                };
+            }
+
+            var products = productRows
+                .Where(item => !_publishedCatalogStates.TryGetValue(item.Key, out var previousState)
+                    || previousState != productStates[item.Key])
+                .Select(item => item.Value)
+                .ToList();
+            if (products.Count == 0)
+            {
+                _publishedCatalogStates.Clear();
+                foreach (var item in productStates)
+                {
+                    _publishedCatalogStates[item.Key] = item.Value;
+                }
+
+                AddLog("[SUCCESS] No product catalog changes; skipped web publish.", Color.LightGreen);
+                return;
             }
 
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
@@ -409,11 +444,19 @@ public sealed class DashboardForm : Form
             }
 
             AddLog(syncSucceeded
-                ? $"[SUCCESS] Synced {publishedCount} products to the web catalog in batches."
+                ? $"[SUCCESS] Published {publishedCount} changed product(s) to the web catalog."
                 : "[WARNING] Product catalog sync failed.", syncSucceeded ? Color.LightGreen : Color.Orange);
             _statusLabel.Text = syncSucceeded
-                ? $"Main PC catalog synced: {publishedCount} products."
+                ? $"Main PC catalog synced: {publishedCount} changed products."
                 : "Main PC catalog sync failed.";
+            if (syncSucceeded)
+            {
+                _publishedCatalogStates.Clear();
+                foreach (var item in productStates)
+                {
+                    _publishedCatalogStates[item.Key] = item.Value;
+                }
+            }
         }
         catch (Exception ex)
         {
