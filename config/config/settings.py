@@ -39,7 +39,7 @@ else:
         ).split(',')
         if host.strip()
     ]
-    ALLOWED_HOSTS = sorted(set(configured_hosts + ['loraapi01.onrender.com', 'loraapi.onrender.com', 'lora-api.onrender.com']))
+    ALLOWED_HOSTS = sorted(set(configured_hosts + ['loraapi01.onrender.com', 'loraapi.onrender.com', 'lora-api.onrender.com', 'laxdomloraapi.onrender.com']))
 
 CSRF_TRUSTED_ORIGINS = [
     origin.strip()
@@ -48,7 +48,7 @@ CSRF_TRUSTED_ORIGINS = [
         'https://loraapi.onrender.com,https://lora-api.onrender.com',
     ).split(',')
     if origin.strip()
-]
+] + ['https://laxdomloraapi.onrender.com']
 
 
 # Application definition
