@@ -450,6 +450,21 @@ class StockTransferTests(TestCase):
 
 		self.assertEqual(response.status_code, 400)
 
+	def test_web_rejects_product_id_above_sql_integer_limit(self):
+		response = self.client.post(
+			'/api/products/create/',
+			data=json.dumps({
+				'branch': 'BranchA', 'product_id': '12100000324',
+				'product_name': 'TEST FOR ALL BRANCHIES', 'product_code': '12100000325',
+				'initial_quantity': '0', 'selling_price': '1',
+			}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 400)
+		self.assertEqual(response.json()['message'], 'Product ID cannot exceed 2147483647.')
+		self.assertFalse(ProductCatalog.objects.filter(product_id=12100000324).exists())
+
 	def test_web_rejects_duplicate_product_id_with_clear_message(self):
 		ProductCatalog.objects.create(branch='BranchA', product_id=12100002, product_name='Existing Product')
 		response = self.client.post(
