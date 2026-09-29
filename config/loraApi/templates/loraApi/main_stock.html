@@ -803,7 +803,8 @@
       const response = await fetch('/api/products/create/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch:selectedBranch.value, product_id:document.querySelector('#branch-product-id').value, product_name:document.querySelector('#branch-product-name').value, product_code:document.querySelector('#branch-product-code').value, barcode:document.querySelector('#branch-product-barcode').value, initial_quantity:document.querySelector('#branch-product-quantity').value, selling_price:document.querySelector('#branch-product-price').value }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || 'Branch product could not be queued.');
-      branchProductNotice.className = 'notice ok'; branchProductNotice.textContent = `${data.product_name} queued for ${data.branch}. The branch will create it on its next sync.`; branchProductForm.reset(); setNextBranchProductId(data.product_id);
+      const branchCount = data.branches?.length ?? 1;
+      branchProductNotice.className = 'notice ok'; branchProductNotice.textContent = `${data.product_name} queued for ${branchCount} branch${branchCount === 1 ? '' : 'es'}. Offline branches will create it on their next sync.`; branchProductForm.reset(); setNextBranchProductId(data.product_id);
     } catch (error) { branchProductNotice.className = 'notice error'; branchProductNotice.textContent = error.message; }
     finally { branchProductSubmit.disabled = false; }
   });
