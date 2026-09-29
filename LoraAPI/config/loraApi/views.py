@@ -898,7 +898,14 @@ def stock_movement_device_logs(request):
     if request.method != 'GET':
         return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
 
-    movements = StockMovement.objects.order_by('-created_at', '-id')[:2000]
+    movements = StockMovement.objects.order_by('-created_at', '-id')
+    since = parse_datetime(str(request.GET.get('since', '')).strip())
+    if since is not None:
+        if timezone.is_naive(since):
+            since = timezone.make_aware(since, timezone.get_current_timezone())
+        movements = movements.filter(created_at__gte=since - timedelta(seconds=3))
+    else:
+        movements = movements[:2000]
     return JsonResponse({
         'status': 'ok',
         'movements': [
@@ -950,7 +957,18 @@ def cancellation_device_logs(request):
     cancellations = DeletionRecord.objects.filter(
         status='processed',
         action='cancel_invoice',
-    ).order_by('-confirmation_timestamp', '-timestamp')[:2000]
+    ).order_by('-confirmation_timestamp', '-timestamp')
+    since = parse_datetime(str(request.GET.get('since', '')).strip())
+    if since is not None:
+        if timezone.is_naive(since):
+            since = timezone.make_aware(since, timezone.get_current_timezone())
+        since -= timedelta(seconds=3)
+        cancellations = cancellations.filter(
+            Q(confirmation_timestamp__gte=since)
+            | Q(confirmation_timestamp__isnull=True, timestamp__gte=since)
+        )
+    else:
+        cancellations = cancellations[:2000]
     return JsonResponse({
         'status': 'ok',
         'cancellations': [
@@ -1415,6 +1433,46 @@ def product_sync_inbox(request):
         'changed': bool(changed_products),
         'full': full_snapshot,
         'products': changed_products,
+    })
+
+
+@csrf_exempt
+def shared_product_catalog(request):
+    if request.method != 'GET':
+        return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
+
+    since = parse_datetime(str(request.GET.get('since', '')).strip())
+    full_snapshot = since is None
+    products = ProductCatalog.objects.filter(branch_confirmed=True).order_by(
+        Case(When(branch__iexact='MAIN', then=0), default=1, output_field=IntegerField()),
+        'product_id',
+        '-updated_at',
+        'branch',
+    )
+    if not full_snapshot:
+        if timezone.is_naive(since):
+            since = timezone.make_aware(since, timezone.get_current_timezone())
+        changed_product_ids = ProductCatalog.objects.filter(
+            branch_confirmed=True,
+            updated_at__gte=since - timedelta(seconds=3),
+        ).values_list('product_id', flat=True).distinct()
+        products = products.filter(product_id__in=changed_product_ids)
+
+    shared_products = {}
+    for product in products.iterator():
+        shared_products.setdefault(product.product_id, {
+            'product_id': product.product_id,
+            'product_name': product.product_name,
+            'product_code': product.product_code,
+            'barcode': product.barcode,
+            'selling_price': str(product.selling_price),
+        })
+
+    return JsonResponse({
+        'status': 'ok',
+        'changed': bool(shared_products),
+        'full': full_snapshot,
+        'products': list(shared_products.values()),
     })
 
 

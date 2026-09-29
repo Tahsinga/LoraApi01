@@ -20,6 +20,7 @@ public sealed class BranchSyncDashboardForm : Form
     private string? _branchName;
     private bool _productCatalogSynced;
     private DateTime _lastProductCatalogSyncUtc = DateTime.MinValue;
+    private DateTimeOffset? _sharedProductCatalogSince;
     private readonly Dictionary<string, string> _productCatalogStates = new(StringComparer.OrdinalIgnoreCase);
 
     public BranchSyncDashboardForm(ConnectionSettings settings, ConnectionForm connectionForm)
@@ -95,7 +96,7 @@ public sealed class BranchSyncDashboardForm : Form
 
         LoadSyncQueue();
 
-        _autoPollTimer.Interval = 5000;
+        _autoPollTimer.Interval = 30000;
         _autoPollTimer.Tick += async (_, _) => await SyncNowAsync();
         _autoPollTimer.Start();
         _ = SyncNowAsync();
@@ -149,6 +150,11 @@ public sealed class BranchSyncDashboardForm : Form
                 {
                     _lastProductCatalogSyncUtc = DateTime.UtcNow;
                 }
+            }
+
+            if (!_sharedProductCatalogSince.HasValue || DateTimeOffset.UtcNow - _sharedProductCatalogSince.Value >= TimeSpan.FromMinutes(1))
+            {
+                await ApplySharedProductCatalogAsync(client, branchName);
             }
             
             // Poll for pending deletions specific to this branch
@@ -439,6 +445,157 @@ public sealed class BranchSyncDashboardForm : Form
             _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Product sync unavailable: {ex.Message}");
             return false;
         }
+    }
+
+    private async Task<bool> ApplySharedProductCatalogAsync(HttpClient client, string branchName)
+    {
+        try
+        {
+            var syncStartedAt = DateTimeOffset.UtcNow;
+            var catalogUrl = $"{_settings.GetApiBaseUrl()}/api/products/shared/";
+            if (_sharedProductCatalogSince.HasValue)
+            {
+                catalogUrl += $"?since={Uri.EscapeDataString(_sharedProductCatalogSince.Value.ToString("O", CultureInfo.InvariantCulture))}";
+            }
+
+            using var response = await client.GetAsync(catalogUrl);
+            if (!response.IsSuccessStatusCode)
+            {
+                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Shared product catalog request failed: {response.StatusCode}");
+                return false;
+            }
+
+            var payload = await response.Content.ReadFromJsonAsync<SharedProductCatalogResponse>();
+            var products = payload?.products ?? new List<SharedProduct>();
+            if (products.Count == 0)
+            {
+                _sharedProductCatalogSince = syncStartedAt;
+                return true;
+            }
+
+            using var connection = new SqlConnection(_settings.BuildConnectionString());
+            await connection.OpenAsync();
+            const string companySql = @"
+                SELECT TOP (1) Coid
+                FROM [dbo].[Branches]
+                WHERE UPPER(LTRIM(RTRIM(CAST(Branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)));";
+            using var companyCommand = new SqlCommand(companySql, connection);
+            companyCommand.Parameters.AddWithValue("@branch", branchName);
+            var companyIdValue = await companyCommand.ExecuteScalarAsync();
+            if (companyIdValue is null || companyIdValue == DBNull.Value)
+            {
+                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Cannot add shared products; branch {branchName} has no company ID.");
+                return false;
+            }
+
+            var companyId = Convert.ToInt32(companyIdValue, CultureInfo.InvariantCulture);
+            var productIds = new HashSet<int>();
+            using (var idsCommand = new SqlCommand("SELECT ProductID FROM [dbo].[Products] WHERE ProductID IS NOT NULL;", connection))
+            using (var reader = await idsCommand.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                {
+                    productIds.Add(Convert.ToInt32(reader[0], CultureInfo.InvariantCulture));
+                }
+            }
+
+            var added = 0;
+            foreach (var product in products)
+            {
+                if (product.product_id <= 0 || string.IsNullOrWhiteSpace(product.product_name) || !productIds.Add(product.product_id))
+                {
+                    continue;
+                }
+
+                using var transaction = connection.BeginTransaction();
+                try
+                {
+                    const string insertProductSql = @"
+                        SET IDENTITY_INSERT [dbo].[Products] ON;
+                        INSERT INTO [dbo].[Products](
+                            ProductID, CatID, ProductDesc, Cost, SellingPrice, SellingPriceWholesale, WholesaleQTY,
+                            UnitsPerPack, ReorderLevel, DoneBy, DoneWhen, ProductCode, BarCode, Uploaded,
+                            TaxRate, Imported, UOM, BinLocation, IsActive, ProductDesc2, coid, SpecialPrice,
+                            ProductExpires, DifferentPricesPerBranch, IsIngridientOnly, PharmacyIsPrescription,
+                            IsUnlimitedStockItem, IsVoucher, isfavourite, isweighed, approval_audit, iseditable,
+                            RecordSerialNumber
+                        )
+                        VALUES (
+                            @productId, 1, @productName, 0, @sellingPrice, 0, 0,
+                            0, 0, @doneBy, CONVERT(varchar(50), GETDATE(), 112), @productCode, @barcode, 1,
+                            0, 0, 'EA', '0', 1, '', @coid, NULL,
+                            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+                        );
+                        SET IDENTITY_INSERT [dbo].[Products] OFF;";
+                    using (var productCommand = new SqlCommand(insertProductSql, connection, transaction))
+                    {
+                        productCommand.Parameters.AddWithValue("@productId", product.product_id);
+                        productCommand.Parameters.AddWithValue("@productName", product.product_name.Trim());
+                        productCommand.Parameters.AddWithValue("@productCode", product.product_code ?? string.Empty);
+                        productCommand.Parameters.AddWithValue("@barcode", product.barcode ?? string.Empty);
+                        productCommand.Parameters.AddWithValue("@sellingPrice", product.selling_price);
+                        productCommand.Parameters.AddWithValue("@doneBy", Environment.UserName);
+                        productCommand.Parameters.AddWithValue("@coid", companyId);
+                        await productCommand.ExecuteNonQueryAsync();
+                    }
+
+                    const string insertBalanceSql = @"
+                        IF NOT EXISTS (
+                            SELECT 1 FROM [dbo].[ProductStockBalances]
+                            WHERE ProductID = @productId AND branch = @branch
+                        )
+                        INSERT INTO [dbo].[ProductStockBalances]
+                            (ProductID, StockBal, MvtEntryNo, coid, branch, batchnumber, expirydate)
+                        VALUES (
+                            @productId, 0,
+                            ISNULL((SELECT MAX(MvtEntryNo) FROM [dbo].[ProductStockBalances] WHERE ProductID = @productId), 0) + 1,
+                            @coid, @branch, NULL, NULL
+                        );";
+                    using (var balanceCommand = new SqlCommand(insertBalanceSql, connection, transaction))
+                    {
+                        balanceCommand.Parameters.AddWithValue("@productId", product.product_id);
+                        balanceCommand.Parameters.AddWithValue("@branch", branchName);
+                        balanceCommand.Parameters.AddWithValue("@coid", companyId);
+                        await balanceCommand.ExecuteNonQueryAsync();
+                    }
+
+                    transaction.Commit();
+                    added++;
+                }
+                catch
+                {
+                    try { transaction.Rollback(); } catch { }
+                    throw;
+                }
+            }
+
+            if (added > 0)
+            {
+                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✓ Added {added} shared product(s) to {branchName} with zero opening stock.");
+            }
+
+            _sharedProductCatalogSince = syncStartedAt;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Shared product sync failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    private sealed class SharedProductCatalogResponse
+    {
+        public List<SharedProduct>? products { get; set; }
+    }
+
+    private sealed class SharedProduct
+    {
+        public int product_id { get; set; }
+        public string? product_name { get; set; }
+        public string? product_code { get; set; }
+        public string? barcode { get; set; }
+        public decimal selling_price { get; set; }
     }
 
     private static async Task<string> ResolveSellingPriceExpressionAsync(SqlConnection connection)

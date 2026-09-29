@@ -400,6 +400,69 @@ class StockTransferTests(TestCase):
 		self.assertFalse(changed.json()['full'])
 		self.assertEqual([item['product_id'] for item in changed.json()['products']], [1101])
 
+	def test_shared_product_catalog_unions_branch_products_and_prefers_main_metadata(self):
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=1101, product_name='Branch Name', product_code='A1',
+			barcode='111', selling_price='8.00', available_quantity=7,
+		)
+		ProductCatalog.objects.create(
+			branch='BranchB', product_id=1102, product_name='Branch-only Product', product_code='B2',
+			barcode='222', selling_price='9.00', available_quantity=4,
+		)
+		ProductCatalog.objects.create(
+			branch='MAIN', product_id=1101, product_name='Main Name', product_code='M1',
+			barcode='333', selling_price='10.00', available_quantity=0,
+		)
+
+		response = self.client.get('/api/products/shared/')
+
+		self.assertEqual(response.status_code, 200)
+		products = {item['product_id']: item for item in response.json()['products']}
+		self.assertEqual(set(products), {1101, 1102})
+		self.assertEqual(products[1101]['product_name'], 'Main Name')
+		self.assertEqual(products[1101]['product_code'], 'M1')
+		self.assertNotIn('available_quantity', products[1101])
+
+	def test_shared_product_catalog_since_returns_only_changed_products(self):
+		ProductCatalog.objects.create(branch='BranchA', product_id=1101, product_name='Changed Product')
+		ProductCatalog.objects.create(branch='BranchA', product_id=1102, product_name='Unchanged Product')
+		ProductCatalog.objects.filter(product_id=1102).update(updated_at=timezone.now() - timedelta(minutes=10))
+
+		response = self.client.get('/api/products/shared/', {
+			'since': (timezone.now() - timedelta(minutes=1)).isoformat(),
+		})
+
+		self.assertFalse(response.json()['full'])
+		self.assertTrue(response.json()['changed'])
+		self.assertEqual([item['product_id'] for item in response.json()['products']], [1101])
+
+	def test_stock_movement_device_log_since_returns_only_new_movements(self):
+		StockMovement.objects.create(branch='BranchA', product_id=1101, movement_type='received', quantity=1)
+		StockMovement.objects.create(branch='BranchA', product_id=1102, movement_type='received', quantity=1)
+		StockMovement.objects.filter(product_id=1102).update(created_at=timezone.now() - timedelta(minutes=10))
+
+		response = self.client.get('/api/stock/movements/device-log/', {
+			'since': (timezone.now() - timedelta(minutes=1)).isoformat(),
+		})
+
+		self.assertEqual([item['product_id'] for item in response.json()['movements']], [1101])
+
+	def test_cancellation_device_log_since_returns_only_new_cancellations(self):
+		DeletionRecord.objects.create(
+			deletion_id='OLD-CANCEL', branch='BranchA', invoice='OLD', action='cancel_invoice', status='processed',
+			confirmation_timestamp=timezone.now() - timedelta(minutes=10),
+		)
+		DeletionRecord.objects.create(
+			deletion_id='NEW-CANCEL', branch='BranchA', invoice='NEW', action='cancel_invoice', status='processed',
+			confirmation_timestamp=timezone.now(),
+		)
+
+		response = self.client.get('/api/cancellations/device-log/', {
+			'since': (timezone.now() - timedelta(minutes=1)).isoformat(),
+		})
+
+		self.assertEqual([item['id'] for item in response.json()['cancellations']], ['NEW-CANCEL'])
+
 	def test_branch_list_excludes_catalog_branch_without_heartbeat(self):
 		ProductCatalog.objects.create(
 			branch='Offline Branch', product_id=1000, product_name='Offline Product',
