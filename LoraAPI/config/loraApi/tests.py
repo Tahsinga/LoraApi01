@@ -267,6 +267,16 @@ class StockTransferTests(TestCase):
 		ProductCatalog.objects.create(
 			branch='BranchA', product_id=999, product_name='Test Product', selling_price='10.00',
 		)
+		ProductCatalog.objects.create(
+			branch='BranchB', product_id=999, product_name='Test Product', selling_price='10.00',
+		)
+		ProductCatalog.objects.create(
+			branch='BranchPending', product_id=999, product_name='Test Product', selling_price='10.00',
+			branch_confirmed=False,
+		)
+		ProductCatalog.objects.create(
+			branch='MAIN', product_id=999, product_name='Test Product', selling_price='10.00',
+		)
 		queued = self.client.post(
 			'/api/stock/prices/',
 			data=json.dumps({'branch': 'BranchA', 'product_id': 999, 'product_name': 'Test Product', 'selling_price': '12.50'}),
@@ -274,9 +284,13 @@ class StockTransferTests(TestCase):
 		)
 
 		self.assertEqual(queued.status_code, 202)
-		catalog = ProductCatalog.objects.get(branch='BranchA', product_id=999)
-		self.assertEqual(catalog.selling_price, 10)
-		self.assertTrue(catalog.pending_price_update)
+		self.assertEqual(queued.json()['branch_count'], 2)
+		self.assertCountEqual(queued.json()['branches'], ['BranchA', 'BranchB'])
+		for branch in ['BranchA', 'BranchB']:
+			catalog = ProductCatalog.objects.get(branch=branch, product_id=999)
+			self.assertEqual(catalog.selling_price, 10)
+			self.assertTrue(catalog.pending_price_update)
+			self.assertEqual(catalog.pending_selling_price, 12.5)
 
 		confirmed = self.client.post(
 			'/api/stock/prices/complete/',
@@ -285,9 +299,14 @@ class StockTransferTests(TestCase):
 		)
 
 		self.assertEqual(confirmed.status_code, 200)
-		catalog.refresh_from_db()
-		self.assertEqual(catalog.selling_price, 12.5)
-		self.assertFalse(catalog.pending_price_update)
+		branch_a = ProductCatalog.objects.get(branch='BranchA', product_id=999)
+		branch_b = ProductCatalog.objects.get(branch='BranchB', product_id=999)
+		self.assertEqual(branch_a.selling_price, 12.5)
+		self.assertFalse(branch_a.pending_price_update)
+		self.assertEqual(branch_b.selling_price, 10)
+		self.assertTrue(branch_b.pending_price_update)
+		self.assertFalse(ProductCatalog.objects.get(branch='BranchPending', product_id=999).pending_price_update)
+		self.assertFalse(ProductCatalog.objects.get(branch='MAIN', product_id=999).pending_price_update)
 
 	def test_stock_summary_counts_queued_transfer_as_sent(self):
 		ProductCatalog.objects.create(

@@ -811,7 +811,8 @@
       const response = await fetch('/api/stock/prices/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch:selectedBranch.value, product_id:branchPriceProduct.value, product_name:branchPriceName.value, selling_price:branchPriceInput.value }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || 'Branch price update could not be queued.');
-      branchPriceNotice.className = 'notice ok'; branchPriceNotice.textContent = `${data.product_name} price saved for ${data.branch}. The branch will apply it on its next sync; Main will mirror it after confirmation.`;
+      const branchCount = data.branch_count ?? data.branches?.length ?? 1;
+      branchPriceNotice.className = 'notice ok'; branchPriceNotice.textContent = `${data.product_name} price queued for ${branchCount} branch${branchCount === 1 ? '' : 'es'}. Each branch will apply it on its next sync.`;
     } catch (error) { branchPriceNotice.className = 'notice error'; branchPriceNotice.textContent = error.message; }
     finally { branchPriceSubmit.disabled = false; }
   });

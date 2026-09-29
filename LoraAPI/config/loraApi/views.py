@@ -1062,14 +1062,23 @@ def request_branch_price_update(request):
     except ProductCatalog.DoesNotExist:
         return JsonResponse({'status': 'error', 'message': 'The product was not found for the selected branch.'}, status=404)
 
-    catalog.product_name = product_name
-    catalog.pending_selling_price = selling_price
-    catalog.pending_price_update = True
-    catalog.save(update_fields=['product_name', 'pending_selling_price', 'pending_price_update', 'updated_at'])
+    branch_catalogs = ProductCatalog.objects.filter(
+        product_id=product_id,
+        branch_confirmed=True,
+    ).exclude(branch__iexact='MAIN')
+    branches = list(branch_catalogs.order_by('branch').values_list('branch', flat=True))
+    branch_catalogs.update(
+        product_name=product_name,
+        pending_selling_price=selling_price,
+        pending_price_update=True,
+        updated_at=timezone.now(),
+    )
     invalidate_product_catalog_cache()
     return JsonResponse({
         'status': 'accepted',
         'branch': catalog.branch,
+        'branches': branches,
+        'branch_count': len(branches),
         'product_id': catalog.product_id,
         'product_name': catalog.product_name,
         'selling_price': str(selling_price),
