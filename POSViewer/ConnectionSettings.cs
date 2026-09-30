@@ -7,7 +7,7 @@ namespace POSViewer;
 
 public sealed class ConnectionSettings
 {
-    public const string DefaultApiBaseUrl = "https://loraapi.onrender.com";
+    public const string DefaultApiBaseUrl = "https://loraapi01.onrender.com";
 
     public string Server { get; set; } = "";
     public string Database { get; set; } = "";
@@ -39,12 +39,15 @@ public sealed class ConnectionSettings
         if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
         {
             var path = uri.AbsolutePath.TrimEnd('/');
+            var host = uri.Host.Equals("loraapi.onrender.com", StringComparison.OrdinalIgnoreCase)
+                ? "loraapi01.onrender.com"
+                : uri.Host;
             if (path.Equals("/api", StringComparison.OrdinalIgnoreCase))
             {
                 path = string.Empty;
             }
 
-            return new UriBuilder(uri.Scheme, uri.Host, uri.Port)
+            return new UriBuilder(uri.Scheme, host, uri.Port)
             {
                 Path = path
             }.Uri.ToString().TrimEnd('/');
@@ -109,7 +112,7 @@ public sealed class ConnectionSettings
             BranchName = settings.BranchName?.Trim() ?? string.Empty,
             ApiBaseUrl = string.IsNullOrWhiteSpace(settings.ApiBaseUrl)
                 ? DefaultApiBaseUrl
-                : settings.ApiBaseUrl.TrimEnd('/'),
+                : NormalizeApiBaseUrl(settings.ApiBaseUrl),
             PrinterName = settings.PrinterName?.Trim() ?? string.Empty
         };
 
@@ -141,6 +144,10 @@ public sealed class ConnectionSettings
             if (string.IsNullOrWhiteSpace(settings.ApiBaseUrl))
             {
                 settings.ApiBaseUrl = DefaultApiBaseUrl;
+            }
+            else
+            {
+                settings.ApiBaseUrl = NormalizeApiBaseUrl(settings.ApiBaseUrl);
             }
 
             if (string.IsNullOrWhiteSpace(settings.DeviceRole))
