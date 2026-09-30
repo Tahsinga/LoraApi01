@@ -9,6 +9,7 @@ namespace POSViewer;
 
 public sealed class BranchSyncDashboardForm : Form
 {
+    private const int BranchCompanyId = 412;
     private readonly ConnectionForm _connectionForm;
     private readonly ConnectionSettings _settings;
     private readonly ListBox _syncQueueListBox = new();
@@ -460,20 +461,6 @@ public sealed class BranchSyncDashboardForm : Form
 
             using var connection = new SqlConnection(_settings.BuildConnectionString());
             await connection.OpenAsync();
-            const string companySql = @"
-                SELECT TOP (1) Coid
-                FROM [dbo].[Branches]
-                WHERE UPPER(LTRIM(RTRIM(CAST(Branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)));";
-            using var companyCommand = new SqlCommand(companySql, connection);
-            companyCommand.Parameters.AddWithValue("@branch", branchName);
-            var companyIdValue = await companyCommand.ExecuteScalarAsync();
-            if (companyIdValue is null || companyIdValue == DBNull.Value)
-            {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Cannot add shared products; branch {branchName} has no company ID.");
-                return false;
-            }
-
-            var companyId = Convert.ToInt32(companyIdValue, CultureInfo.InvariantCulture);
             var productIds = new HashSet<int>();
             using (var idsCommand = new SqlCommand("SELECT ProductID FROM [dbo].[Products] WHERE ProductID IS NOT NULL;", connection))
             using (var reader = await idsCommand.ExecuteReaderAsync())
@@ -525,7 +512,7 @@ public sealed class BranchSyncDashboardForm : Form
                     {
                         balanceCommand.Parameters.AddWithValue("@productId", product.product_id);
                         balanceCommand.Parameters.AddWithValue("@branch", branchName);
-                        balanceCommand.Parameters.AddWithValue("@coid", companyId);
+                        balanceCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
                         await balanceCommand.ExecuteNonQueryAsync();
                     }
 
@@ -560,7 +547,7 @@ public sealed class BranchSyncDashboardForm : Form
                         productCommand.Parameters.AddWithValue("@barcode", product.barcode ?? string.Empty);
                         productCommand.Parameters.AddWithValue("@sellingPrice", product.selling_price);
                         productCommand.Parameters.AddWithValue("@doneBy", Environment.UserName);
-                        productCommand.Parameters.AddWithValue("@coid", companyId);
+                        productCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
                         await productCommand.ExecuteNonQueryAsync();
                     }
 
@@ -580,7 +567,7 @@ public sealed class BranchSyncDashboardForm : Form
                     {
                         balanceCommand.Parameters.AddWithValue("@productId", product.product_id);
                         balanceCommand.Parameters.AddWithValue("@branch", branchName);
-                        balanceCommand.Parameters.AddWithValue("@coid", companyId);
+                        balanceCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
                         await balanceCommand.ExecuteNonQueryAsync();
                     }
 
@@ -950,18 +937,7 @@ public sealed class BranchSyncDashboardForm : Form
 
             using var connection = new SqlConnection(_settings.BuildConnectionString());
             await connection.OpenAsync();
-            const string branchCompanySql = @"
-                SELECT CASE WHEN COUNT(DISTINCT Coid) = 1 THEN MIN(Coid) END
-                FROM [dbo].[Branches]
-                WHERE UPPER(LTRIM(RTRIM(CAST(Branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)));";
-            using var branchCompanyCommand = new SqlCommand(branchCompanySql, connection);
-            branchCompanyCommand.Parameters.AddWithValue("@branch", branchName);
-            var branchCompanyValue = await branchCompanyCommand.ExecuteScalarAsync();
-            if (branchCompanyValue is null || branchCompanyValue == DBNull.Value)
-            {
-                throw new InvalidOperationException($"Branch {branchName} was not found or maps to multiple companies in dbo.Branches.");
-            }
-            var branchCoid = Convert.ToInt32(branchCompanyValue, CultureInfo.InvariantCulture);
+            var branchCoid = BranchCompanyId;
                         const string updateSql = @"
                                 IF @isStockTake = 1
                                 BEGIN
