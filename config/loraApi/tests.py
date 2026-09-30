@@ -357,11 +357,11 @@ class StockTransferTests(TestCase):
 	def test_shared_product_catalog_exposes_products_for_branch_sync(self):
 		ProductCatalog.objects.create(
 			branch='BranchA', product_id=1101, product_name='Branch Product',
-			product_code='B-1101', barcode='111', selling_price='8.00',
+			product_code='B-1101', barcode='111', selling_price='8.00', tax_rate='5.00',
 		)
 		ProductCatalog.objects.create(
 			branch='MAIN', product_id=1101, product_name='Canonical Product',
-			product_code='M-1101', barcode='222', selling_price='10.00',
+			product_code='M-1101', barcode='222', selling_price='10.00', tax_rate='7.50',
 		)
 
 		response = self.client.get('/api/products/shared/')
@@ -374,7 +374,32 @@ class StockTransferTests(TestCase):
 			'product_code': 'M-1101',
 			'barcode': '222',
 			'selling_price': '10.00',
+			'tax_rate': '7.50',
 		}])
+
+	def test_branch_tax_rate_sync_updates_shared_catalog(self):
+		ProductCatalog.objects.create(
+			branch='MAIN', product_id=1301, product_name='Taxed Product', tax_rate='0.00',
+		)
+		response = self.client.post(
+			'/api/products/sync/',
+			data=json.dumps({'branch': 'BranchA', 'products': [{
+				'product_id': 1301,
+				'product_name': 'Taxed Product',
+				'available_quantity': 4,
+				'selling_price': '10.00',
+				'tax_rate': '7.50',
+			}]}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(str(ProductCatalog.objects.get(branch='BranchA', product_id=1301).tax_rate), '7.50')
+		self.assertEqual(str(ProductCatalog.objects.get(branch='MAIN', product_id=1301).tax_rate), '7.50')
+		shared = self.client.get('/api/products/shared/')
+		self.assertEqual(shared.status_code, 200)
+		product = next(item for item in shared.json()['products'] if item['product_id'] == 1301)
+		self.assertEqual(product['tax_rate'], '7.50')
 
 	def test_branch_price_update_refreshes_shared_catalog_price(self):
 		for branch in ('BranchA', 'BranchB', 'MAIN'):
@@ -452,6 +477,7 @@ class StockTransferTests(TestCase):
 		product = ProductCatalog.objects.get(branch='BranchA', product_id=1002)
 		self.assertEqual(product.product_name, 'Published Product')
 		self.assertEqual(product.available_quantity, 8)
+		self.assertEqual(str(product.tax_rate), '5.00')
 
 	def test_web_can_queue_branch_product_and_branch_can_acknowledge_it(self):
 		BranchHeartbeat.objects.create(branch='BranchB', last_seen=timezone.now())
@@ -460,7 +486,7 @@ class StockTransferTests(TestCase):
 			'/api/products/create/',
 			data=json.dumps({
 				'branch': 'BranchA', 'product_name': 'New Branch Product',
-				'product_id': '12100001', 'product_code': 'NEW-001', 'barcode': '990001', 'initial_quantity': '8', 'selling_price': '4.25',
+				'product_id': '12100001', 'product_code': 'NEW-001', 'barcode': '990001', 'initial_quantity': '8', 'selling_price': '4.25', 'tax_rate': '7.50',
 			}),
 			content_type='application/json',
 		)
@@ -474,6 +500,7 @@ class StockTransferTests(TestCase):
 		self.assertTrue(ProductCatalog.objects.get(branch='Offline Branch', product_id=product_id).pending_product_creation)
 		self.assertFalse(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).branch_confirmed)
 		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).pending_stock_quantity, 0)
+		self.assertEqual(str(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).tax_rate), '7.50')
 		not_visible = self.client.get('/api/products/?branch=BranchA&q=New%20Branch%20Product')
 		self.assertEqual(not_visible.status_code, 200)
 		self.assertEqual(not_visible.json()['products'], [])
@@ -482,6 +509,7 @@ class StockTransferTests(TestCase):
 		self.assertEqual(poll.status_code, 200)
 		self.assertEqual(poll.json()['pending_product_creations'][0]['product_name'], 'New Branch Product')
 		self.assertEqual(poll.json()['pending_product_creations'][0]['initial_quantity'], '0')
+		self.assertEqual(poll.json()['pending_product_creations'][0]['tax_rate'], '7.50')
 
 		complete = self.client.post(
 			'/api/products/create/complete/',
@@ -492,6 +520,8 @@ class StockTransferTests(TestCase):
 		product = ProductCatalog.objects.get(branch='BranchA', product_id=2001)
 		self.assertFalse(product.pending_product_creation)
 		self.assertTrue(product.branch_confirmed)
+		self.assertEqual(str(product.tax_rate), '7.50')
+		self.assertEqual(str(ProductCatalog.objects.get(branch='MAIN', product_id=2001).tax_rate), '7.50')
 		visible = self.client.get('/api/products/?branch=BranchA&q=New%20Branch%20Product')
 		self.assertEqual([item['product_id'] for item in visible.json()['products']], [2001])
 		main_products = self.client.get('/api/products/?branch=MAIN&q=New%20Branch%20Product')

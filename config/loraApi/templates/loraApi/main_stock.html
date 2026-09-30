@@ -212,6 +212,7 @@
             <label>Barcode<input id="branch-product-barcode" type="text" maxlength="100" placeholder="Optional barcode"></label>
             <label>Opening quantity<input id="branch-product-quantity" type="number" value="0" disabled></label>
             <label>Selling price<input id="branch-product-price" type="number" min="0" step="0.01" required placeholder="0.00"></label>
+            <label>Tax rate (%)<input id="branch-product-tax-rate" type="number" min="0" max="100" step="0.01" value="0"></label>
             <button id="branch-product-submit" type="submit">Create branch product</button>
           </form>
           <div id="branch-product-notice" class="notice" role="status"></div>
@@ -800,7 +801,7 @@
     event.preventDefault(); branchProductSubmit.disabled = true; branchProductNotice.className = 'notice'; branchProductNotice.textContent = '';
     try {
       if (!selectedBranch.value) throw new Error('Select a connected branch first.');
-      const response = await fetch('/api/products/create/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch:selectedBranch.value, product_id:document.querySelector('#branch-product-id').value, product_name:document.querySelector('#branch-product-name').value, product_code:document.querySelector('#branch-product-code').value, barcode:document.querySelector('#branch-product-barcode').value, initial_quantity:document.querySelector('#branch-product-quantity').value, selling_price:document.querySelector('#branch-product-price').value }) });
+      const response = await fetch('/api/products/create/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch:selectedBranch.value, product_id:document.querySelector('#branch-product-id').value, product_name:document.querySelector('#branch-product-name').value, product_code:document.querySelector('#branch-product-code').value, barcode:document.querySelector('#branch-product-barcode').value, initial_quantity:document.querySelector('#branch-product-quantity').value, selling_price:document.querySelector('#branch-product-price').value, tax_rate:document.querySelector('#branch-product-tax-rate').value }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || 'Branch product could not be queued.');
       const branchCount = data.branches?.length ?? 1;
