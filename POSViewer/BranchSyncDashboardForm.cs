@@ -500,10 +500,50 @@ public sealed class BranchSyncDashboardForm : Form
             }
 
             var added = 0;
+            var updated = 0;
             foreach (var product in products)
             {
-                if (product.product_id <= 0 || string.IsNullOrWhiteSpace(product.product_name) || !productIds.Add(product.product_id))
+                if (product.product_id <= 0 || string.IsNullOrWhiteSpace(product.product_name))
                 {
+                    continue;
+                }
+
+                if (!productIds.Add(product.product_id))
+                {
+                    const string updateProductSql = @"
+                        UPDATE [dbo].[Products]
+                        SET ProductDesc = @productName, ProductCode = @productCode, BarCode = @barcode, SellingPrice = @sellingPrice
+                        WHERE ProductID = @productId;";
+                    using (var productCommand = new SqlCommand(updateProductSql, connection))
+                    {
+                        productCommand.Parameters.AddWithValue("@productId", product.product_id);
+                        productCommand.Parameters.AddWithValue("@productName", product.product_name.Trim());
+                        productCommand.Parameters.AddWithValue("@productCode", product.product_code ?? string.Empty);
+                        productCommand.Parameters.AddWithValue("@barcode", product.barcode ?? string.Empty);
+                        productCommand.Parameters.AddWithValue("@sellingPrice", product.selling_price);
+                        updated += await productCommand.ExecuteNonQueryAsync();
+                    }
+
+                    const string ensureZeroBalanceSql = @"
+                        IF NOT EXISTS (
+                            SELECT 1 FROM [dbo].[ProductStockBalances]
+                            WHERE ProductID = @productId AND branch = @branch
+                        )
+                        INSERT INTO [dbo].[ProductStockBalances]
+                            (ProductID, StockBal, MvtEntryNo, coid, branch, batchnumber, expirydate)
+                        VALUES (
+                            @productId, 0,
+                            ISNULL((SELECT MAX(MvtEntryNo) FROM [dbo].[ProductStockBalances] WHERE ProductID = @productId), 0) + 1,
+                            @coid, @branch, NULL, NULL
+                        );";
+                    using (var balanceCommand = new SqlCommand(ensureZeroBalanceSql, connection))
+                    {
+                        balanceCommand.Parameters.AddWithValue("@productId", product.product_id);
+                        balanceCommand.Parameters.AddWithValue("@branch", branchName);
+                        balanceCommand.Parameters.AddWithValue("@coid", companyId);
+                        await balanceCommand.ExecuteNonQueryAsync();
+                    }
+
                     continue;
                 }
 
@@ -569,9 +609,9 @@ public sealed class BranchSyncDashboardForm : Form
                 }
             }
 
-            if (added > 0)
+            if (added > 0 || updated > 0)
             {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✓ Added {added} shared product(s) to {branchName} with zero opening stock.");
+                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✓ Synced {updated} shared product price/metadata row(s) and added {added} product(s) to {branchName} with zero opening stock.");
             }
 
             _sharedProductCatalogSince = syncStartedAt;
