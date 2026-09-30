@@ -148,6 +148,24 @@ class ProductCatalog(models.Model):
 		]
 
 
+class ProductDeletionRequest(models.Model):
+	STATUS_CHOICES = [('pending', 'Pending'), ('completed', 'Completed'), ('failed', 'Failed')]
+	branch = models.CharField(max_length=255)
+	product_id = models.IntegerField()
+	product_name = models.CharField(max_length=250, blank=True, default='')
+	requested_by = models.CharField(max_length=255, blank=True, default='')
+	status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+	error = models.TextField(blank=True, default='')
+	requested_at = models.DateTimeField(auto_now_add=True)
+	updated_at = models.DateTimeField(auto_now=True)
+
+	class Meta:
+		ordering = ['requested_at']
+		indexes = [
+			models.Index(fields=['branch', 'status', 'updated_at'], name='proddelete_branch_status_idx'),
+		]
+
+
 class BranchHeartbeat(models.Model):
 	branch = models.CharField(max_length=255, unique=True)
 	device_role = models.CharField(max_length=50, default='Branch PC')
