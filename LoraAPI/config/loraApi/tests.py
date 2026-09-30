@@ -7,8 +7,130 @@ from django.contrib.auth import authenticate, get_user_model
 from django.core.management import call_command
 from django.utils import timezone
 from loraApi.state_store import load_state
-from loraApi.models import BranchHeartbeat, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
+from loraApi.models import BranchHeartbeat, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
+
 import json
+
+
+class ProductDeletionTests(TestCase):
+	def setUp(self):
+		admin = get_user_model().objects.create_superuser(username='product-delete-admin', password='ProductDeletePass4182!')
+		self.client.force_login(admin)
+		ProductCatalog.objects.create(branch='BranchA', product_id=3001, product_name='Branch Product')
+		ProductCatalog.objects.create(branch='BranchB', product_id=3001, product_name='Branch Product')
+		ProductCatalog.objects.create(branch='MAIN', product_id=3001, product_name='Branch Product')
+
+	def test_web_queues_branch_deletion_and_branch_confirmation_removes_only_that_branch(self):
+		since = timezone.now().isoformat()
+		response = self.client.post(
+			'/api/products/delete/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': 3001}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 202)
+		request_id = response.json()['request_id']
+		self.assertEqual(response.json()['product_name'], 'Branch Product')
+		self.assertEqual(self.client.get('/api/products/?branch=BranchA').json()['products'], [])
+		self.assertEqual(self.client.get('/api/stock/summary/?branch=BranchA').json()['products'], [])
+		self.assertEqual(
+			self.client.get(f'/api/stock/summary/?branch=BranchA&since={since.replace("+", "%2B")}').json()['removed_product_ids'],
+			[3001],
+		)
+
+		branch_poll = self.client.get('/api/branch-sync/?branch=BranchA').json()
+		self.assertEqual(branch_poll['pending_product_deletions'], [{
+			'request_id': request_id,
+			'branch': 'BranchA',
+			'product_id': 3001,
+			'product_name': 'Branch Product',
+		}])
+		self.assertEqual(self.client.get('/api/branch-sync/?branch=BranchB').json()['pending_product_deletions'], [])
+
+		complete = self.client.post(
+			'/api/products/delete/complete/',
+			data=json.dumps({'request_id': request_id, 'branch': 'BranchA', 'success': True}),
+			content_type='application/json',
+		)
+		self.assertEqual(complete.status_code, 200)
+		self.assertEqual(ProductDeletionRequest.objects.get(pk=request_id).status, 'completed')
+		self.assertFalse(ProductCatalog.objects.filter(branch='BranchA', product_id=3001).exists())
+		self.assertTrue(ProductCatalog.objects.filter(branch='BranchB', product_id=3001).exists())
+		self.assertTrue(ProductCatalog.objects.filter(branch='MAIN', product_id=3001).exists())
+
+	def test_failed_branch_deletion_restores_product_to_web_catalog(self):
+		response = self.client.post(
+			'/api/products/delete/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': 3001}),
+			content_type='application/json',
+		)
+		request_id = response.json()['request_id']
+		complete = self.client.post(
+			'/api/products/delete/complete/',
+			data=json.dumps({
+				'request_id': request_id,
+				'branch': 'BranchA',
+				'success': False,
+				'error': 'Product table update failed',
+			}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(complete.status_code, 200)
+		self.assertEqual(ProductDeletionRequest.objects.get(pk=request_id).status, 'failed')
+		self.assertEqual(ProductDeletionRequest.objects.get(pk=request_id).error, 'Product table update failed')
+		self.assertEqual(
+			[item['product_id'] for item in self.client.get('/api/products/?branch=BranchA').json()['products']],
+			[3001],
+		)
+
+	def test_main_or_in_flight_transfer_product_cannot_be_deleted(self):
+		main_response = self.client.post(
+			'/api/products/delete/',
+			data=json.dumps({'branch': 'MAIN', 'product_id': 3001}),
+			content_type='application/json',
+		)
+		self.assertEqual(main_response.status_code, 400)
+
+		StockTransfer.objects.create(
+			transfer_id='DELETE_GUARD', branch='BranchA', product_id=3001,
+			product_name='Branch Product', quantity=1,
+		)
+		transfer_response = self.client.post(
+			'/api/products/delete/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': 3001}),
+			content_type='application/json',
+		)
+		self.assertEqual(transfer_response.status_code, 409)
+
+	def test_stock_transfer_is_rejected_after_branch_deletion_is_queued(self):
+		deletion = self.client.post(
+			'/api/products/delete/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': 3001}),
+			content_type='application/json',
+		)
+		self.assertEqual(deletion.status_code, 202)
+
+		transfer = self.client.post(
+			'/api/stock/transfers/',
+			data=json.dumps({
+				'branch': 'BranchA',
+				'product_id': 3001,
+				'product_name': 'Branch Product',
+				'quantity': 2,
+			}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(transfer.status_code, 409)
+		self.assertFalse(StockTransfer.objects.exists())
+
+	def test_stock_page_displays_branch_delete_action(self):
+		response = self.client.get('/stock/')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, 'Delete at branch')
+		self.assertContains(response, '/api/products/delete/')
 
 
 class DashboardCompressionTests(TestCase):
@@ -286,6 +408,9 @@ class StockTransferTests(TestCase):
 		self.assertEqual(queued.status_code, 202)
 		self.assertEqual(queued.json()['branch_count'], 2)
 		self.assertCountEqual(queued.json()['branches'], ['BranchA', 'BranchB'])
+		shared_catalog = self.client.get('/api/products/shared/')
+		shared_product = next(item for item in shared_catalog.json()['products'] if item['product_id'] == 999)
+		self.assertEqual(shared_product['selling_price'], '12.50')
 		for branch in ['BranchA', 'BranchB']:
 			catalog = ProductCatalog.objects.get(branch=branch, product_id=999)
 			self.assertEqual(catalog.selling_price, 10)
@@ -547,6 +672,11 @@ class StockTransferTests(TestCase):
 		product = ProductCatalog.objects.get(branch='BranchA', product_id=2001)
 		self.assertFalse(product.pending_product_creation)
 		self.assertTrue(product.branch_confirmed)
+		shared_catalog = self.client.get('/api/products/shared/')
+		self.assertTrue(shared_catalog.json()['full'])
+		shared_product = next(item for item in shared_catalog.json()['products'] if item['product_id'] == 2001)
+		self.assertEqual(shared_product['product_name'], 'New Branch Product')
+		self.assertEqual(shared_product['selling_price'], '4.25')
 		visible = self.client.get('/api/products/?branch=BranchA&q=New%20Branch%20Product')
 		self.assertEqual([item['product_id'] for item in visible.json()['products']], [2001])
 		main_products = self.client.get('/api/products/?branch=MAIN&q=New%20Branch%20Product')
@@ -936,6 +1066,10 @@ class DeletionQueueTests(TestCase):
 		self.assertEqual(response.json()['cancellations'][0]['deleted_by'], 'operator')
 
 
+@override_settings(STORAGES={
+	'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+	'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+})
 class AuthenticationTests(TestCase):
 	def setUp(self):
 		self.admin = get_user_model().objects.create_superuser(
@@ -1024,6 +1158,10 @@ class AuthenticationTests(TestCase):
 		self.assertRedirects(self.client.get('/'), '/login/?next=/')
 
 
+@override_settings(STORAGES={
+	'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+	'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+})
 class DailySalesReportScheduleTests(TestCase):
 	def setUp(self):
 		admin = get_user_model().objects.create_superuser(username='schedule-admin', password='SchedulePass4182!')

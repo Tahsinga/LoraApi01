@@ -34,6 +34,7 @@ public static class ReceiptPrinter
             var cashierColumn = table.Columns.IndexOf("Cashier");
             var paymentMethodColumn = table.Columns.IndexOf("PaymentMethod");
             var currencyColumn = table.Columns.IndexOf("Currency");
+            var rateColumn = table.Columns.IndexOf("Rate");
             var totalColumn = table.Columns.IndexOf("Total");
             var taxTotalColumn = table.Columns.IndexOf("TaxTotal");
             var invoiceColumn = table.Columns.IndexOf("InvoiceNumber");
@@ -87,6 +88,7 @@ public static class ReceiptPrinter
                 var allInvoices = new HashSet<string>(StringComparer.Ordinal);
                 var totalReceiptCount = 0L;
                 decimal totalSales = 0m;
+                decimal totalUsdSales = 0m;
                 decimal totalTax = 0m;
                 if (invoiceColumn >= 0)
                 {
@@ -123,6 +125,12 @@ public static class ReceiptPrinter
                     var paymentKey = $"{paymentMethod} ({currency})";
                     if (totalColumn >= 0 && decimal.TryParse(tableRow[totalColumn]?.ToString(), out var rowTotal))
                     {
+                        var rate = rateColumn >= 0 && decimal.TryParse(tableRow[rateColumn]?.ToString(), out var parsedRate) && parsedRate > 0m
+                            ? parsedRate
+                            : 1m;
+                        totalUsdSales += string.Equals(currency.Trim(), "USD", StringComparison.OrdinalIgnoreCase)
+                            ? rowTotal
+                            : rowTotal / rate;
                         totalSales += rowTotal;
                         totalsByPaymentMethod[paymentKey] = totalsByPaymentMethod.GetValueOrDefault(paymentKey) + rowTotal;
                         if (!totalsByCashier.TryGetValue(rowCashier, out var cashierTotals))
@@ -170,6 +178,8 @@ public static class ReceiptPrinter
                 eventArgs.Graphics.DrawString($"Total receipts: {totalReceiptCount}", bodyFont, Brushes.Black, bounds.Left, y);
                 y += 18;
                 eventArgs.Graphics.DrawString($"Total sales (all users): {totalSalesFromPaymentMethods:0.00}", boldFont, Brushes.Black, bounds.Left, y);
+                y += 22;
+                eventArgs.Graphics.DrawString($"Total USD sales (all users): {totalUsdSales:0.00}", boldFont, Brushes.Black, bounds.Left, y);
                 y += 22;
                 eventArgs.Graphics.DrawString($"Total tax: {totalTax:0.00}", bodyFont, Brushes.Black, bounds.Left, y);
                 y += 22;

@@ -2,7 +2,7 @@ from django.urls import path
 from .views import (
     branch_status, branch_sync, cancel_sale, clear_sales_report_queue, dashboard_branches, dashboard_main_sync, health_check, main_sync,
     index, favicon, confirm_deletion, cancellation_history_api, request_sales_report, complete_sales_report, request_invoice_reprint, complete_invoice_reprint,
-    adjust_main_stock, create_stock_transfer, complete_stock_transfer, request_branch_price_update, complete_branch_price_update, create_branch_product, complete_branch_product_creation, product_catalog, sync_product_catalog,
+    adjust_main_stock, create_stock_transfer, complete_stock_transfer, request_branch_price_update, complete_branch_price_update, create_branch_product, complete_branch_product_creation, delete_branch_product, complete_branch_product_deletion, product_catalog, sync_product_catalog,
     product_sync_inbox, shared_product_catalog, publish_product_catalog, stock_summary, stock_movements, product_movement_history_api, stock_transfer_logs, stock_transfer_device_logs, stock_movement_device_logs, cancellation_device_logs, record_branch_sales, sales_report_schedules,
 )
 
@@ -30,6 +30,8 @@ urlpatterns = [
     path('stock/prices/complete/', complete_branch_price_update, name='complete_branch_price_update'),
     path('products/create/', create_branch_product, name='create_branch_product'),
     path('products/create/complete/', complete_branch_product_creation, name='complete_branch_product_creation'),
+    path('products/delete/', delete_branch_product, name='delete_branch_product'),
+    path('products/delete/complete/', complete_branch_product_deletion, name='complete_branch_product_deletion'),
     path('stock/summary/', stock_summary, name='stock_summary'),
     path('stock/movements/', stock_movements, name='stock_movements'),
     path('stock/movements/history/', product_movement_history_api, name='product_movement_history_api'),

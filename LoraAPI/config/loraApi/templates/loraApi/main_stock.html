@@ -96,6 +96,8 @@
     .stock-table .negative-stock .product-name, .stock-table .negative-stock td strong { color:#9c352b; }
     .negative-stock-label { display:inline-block; margin-left:8px; padding:3px 6px; color:#8b2d20; background:#f7d9d3; font:700 10px Arial,sans-serif; text-transform:uppercase; }
     .stock-table button { margin:0; padding:8px 10px; font-size:10px; }
+    .stock-table .delete-product-button { margin-left:6px; color:#fff; background:#9c352b; }
+    .stock-table .delete-product-button:hover { background:#76271f; }
     .empty { margin:0; padding:18px 0 4px; color:var(--muted); font:14px Arial,sans-serif; }
     .movement-table { width:100%; border-collapse:collapse; min-width:620px; }
     .movement-table th { padding:11px 13px; color:var(--muted); border-bottom:1px solid var(--line); text-align:left; font:700 10px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; }
@@ -359,7 +361,7 @@
     const query = branchProductSearch.value.trim().toLowerCase();
     const products = branchCatalogProducts.filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
     branchProducts.innerHTML = products.length
-      ? `<table class="stock-table"><thead><tr><th>Product</th><th>Selling price</th><th>Branch available</th><th>Sent</th><th>Sold</th><th></th></tr></thead><tbody>${products.map(product => { const isNegative = Number(product.available_quantity) < 0; return `<tr class="${isNegative ? 'negative-stock' : ''}" data-product-id="${escapeHtml(product.product_id)}"><td class="product-name">${escapeHtml(product.product_name)}</td><td>${escapeHtml(product.selling_price)}</td><td><strong>${escapeHtml(product.available_quantity)}</strong>${isNegative ? '<span class="negative-stock-label">Negative stock</span>' : ''}</td><td>${escapeHtml(product.sent_quantity)}</td><td>${escapeHtml(product.sold_quantity)}</td><td><button type="button" data-product-id="${escapeHtml(product.product_id)}">Select</button></td></tr>`; }).join('')}</tbody></table>`
+      ? `<table class="stock-table"><thead><tr><th>Product</th><th>Selling price</th><th>Branch available</th><th>Sent</th><th>Sold</th><th>Actions</th></tr></thead><tbody>${products.map(product => { const isNegative = Number(product.available_quantity) < 0; const productId = escapeHtml(product.product_id); return `<tr class="${isNegative ? 'negative-stock' : ''}" data-product-id="${productId}"><td class="product-name">${escapeHtml(product.product_name)}</td><td>${escapeHtml(product.selling_price)}</td><td><strong>${escapeHtml(product.available_quantity)}</strong>${isNegative ? '<span class="negative-stock-label">Negative stock</span>' : ''}</td><td>${escapeHtml(product.sent_quantity)}</td><td>${escapeHtml(product.sold_quantity)}</td><td><button type="button" data-product-select="${productId}">Select</button><button type="button" class="delete-product-button" data-product-delete="${productId}" aria-label="Delete ${escapeHtml(product.product_name)} at branch">Delete at branch</button></td></tr>`; }).join('')}</tbody></table>`
       : '<p class="empty">No products match your search.</p>';
   }
   async function loadBranchProducts(showLoading = true) {
@@ -398,16 +400,21 @@
       if (requestId !== branchProductsRequestId) return;
       const products = data.products || [];
       const fullSnapshot = data.full !== false;
+      const removedProductIds = (data.removed_product_ids || []).map(String);
       if (fullSnapshot) {
         branchCatalogProducts = products;
       } else if (data.changed) {
         const productsById = new Map(branchCatalogProducts.map(product => [String(product.product_id), product]));
         products.forEach(product => productsById.set(String(product.product_id), product));
+        removedProductIds.forEach(productId => productsById.delete(productId));
         branchCatalogProducts = [...productsById.values()];
+      } else if (removedProductIds.length) {
+        const removedIds = new Set(removedProductIds);
+        branchCatalogProducts = branchCatalogProducts.filter(product => !removedIds.has(String(product.product_id)));
       }
       branchCatalogSince = startedAt;
       branchCatalogSinceBranch = branch;
-      if (!fullSnapshot && !data.changed) {
+      if (!fullSnapshot && !data.changed && !removedProductIds.length) {
         productCatalogStatus.textContent = `${branchCatalogProducts.length} products up to date for ${branch}.`;
         return;
       }
@@ -568,7 +575,31 @@
     control.input.addEventListener('change', applySelectedProduct);
   }
   branchProductSearch.addEventListener('input', renderBranchProducts);
-  branchProducts.addEventListener('click', event => {
+  branchProducts.addEventListener('click', async event => {
+    const deleteButton = event.target.closest('[data-product-delete]');
+    if (deleteButton) {
+      event.stopPropagation();
+      const product = branchCatalogProducts.find(item => String(item.product_id) === deleteButton.dataset.productDelete);
+      const branch = selectedBranch.value;
+      if (!product || !branch) return;
+      if (!window.confirm(`Delete ${product.product_name} from ${branch}? It will be deactivated at the branch on its next sync. Historical sales will be kept.`)) return;
+      deleteButton.disabled = true;
+      productCatalogStatus.textContent = `Queueing deletion for ${product.product_name}...`;
+      try {
+        const response = await fetch('/api/products/delete/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch, product_id:product.product_id }) });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.message || 'Product deletion could not be queued.');
+        branchCatalogSince = '';
+        branchCatalogSinceBranch = '';
+        await loadBranchProducts(false);
+        productCatalogStatus.textContent = `Deletion queued for ${product.product_name}; it will be deactivated at ${branch} on the next sync.`;
+      } catch (error) {
+        productCatalogStatus.textContent = error.message;
+        deleteButton.disabled = false;
+      }
+      return;
+    }
+    if (!event.target.closest('[data-product-select]')) return;
     const row = event.target.closest('[data-product-id]');
     if (!row) return;
     const product = branchCatalogProducts.find(item => String(item.product_id) === row.dataset.productId);
