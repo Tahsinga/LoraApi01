@@ -354,6 +354,50 @@ class StockTransferTests(TestCase):
 		self.assertFalse(changed.json()['full'])
 		self.assertEqual([item['product_id'] for item in changed.json()['products']], [1101])
 
+	def test_shared_product_catalog_exposes_products_for_branch_sync(self):
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=1101, product_name='Branch Product',
+			product_code='B-1101', barcode='111', selling_price='8.00',
+		)
+		ProductCatalog.objects.create(
+			branch='MAIN', product_id=1101, product_name='Canonical Product',
+			product_code='M-1101', barcode='222', selling_price='10.00',
+		)
+
+		response = self.client.get('/api/products/shared/')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertTrue(response.json()['full'])
+		self.assertEqual(response.json()['products'], [{
+			'product_id': 1101,
+			'product_name': 'Canonical Product',
+			'product_code': 'M-1101',
+			'barcode': '222',
+			'selling_price': '10.00',
+		}])
+
+	def test_branch_price_update_refreshes_shared_catalog_price(self):
+		for branch in ('BranchA', 'BranchB', 'MAIN'):
+			ProductCatalog.objects.create(
+				branch=branch, product_id=1201, product_name='Priced Product', selling_price='10.00',
+			)
+
+		queued = self.client.post(
+			'/api/stock/prices/',
+			data=json.dumps({
+				'branch': 'BranchA', 'product_id': 1201,
+				'product_name': 'Priced Product', 'selling_price': '12.50',
+			}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(queued.status_code, 202)
+		self.assertEqual(str(ProductCatalog.objects.get(branch='MAIN', product_id=1201).selling_price), '12.50')
+		shared = self.client.get('/api/products/shared/')
+		self.assertEqual(shared.status_code, 200)
+		product = next(item for item in shared.json()['products'] if item['product_id'] == 1201)
+		self.assertEqual(product['selling_price'], '12.50')
+
 	def test_branch_list_excludes_catalog_branch_without_heartbeat(self):
 		ProductCatalog.objects.create(
 			branch='Offline Branch', product_id=1000, product_name='Offline Product',
