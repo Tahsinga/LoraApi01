@@ -3,7 +3,7 @@ from .views import (
     branch_status, branch_sync, cancel_sale, health_check, main_sync,
     index, favicon, confirm_deletion, cancellation_history_api, request_sales_report, complete_sales_report, request_invoice_reprint, complete_invoice_reprint,
     adjust_main_stock, create_stock_transfer, complete_stock_transfer, request_branch_price_update, complete_branch_price_update, create_branch_product, complete_branch_product_creation, product_catalog, sync_product_catalog,
-    product_sync_inbox, publish_product_catalog, stock_summary, stock_movements, product_movement_history_api, stock_transfer_logs, stock_transfer_device_logs, stock_movement_device_logs, cancellation_device_logs, record_branch_sales, sales_report_schedules,
+    product_sync_inbox, shared_product_catalog, publish_product_catalog, stock_summary, stock_movements, product_movement_history_api, stock_transfer_logs, stock_transfer_device_logs, stock_movement_device_logs, cancellation_device_logs, record_branch_sales, sales_report_schedules,
 )
 
 urlpatterns = [
@@ -38,5 +38,6 @@ urlpatterns = [
     path('products/', product_catalog, name='product_catalog'),
     path('products/sync/', sync_product_catalog, name='sync_product_catalog'),
     path('products/inbox/', product_sync_inbox, name='product_sync_inbox'),
+    path('products/shared/', shared_product_catalog, name='shared_product_catalog'),
     path('products/publish/', publish_product_catalog, name='publish_product_catalog'),
 ]

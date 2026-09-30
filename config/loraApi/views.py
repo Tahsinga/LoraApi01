@@ -13,7 +13,7 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.forms import SetPasswordForm, UserCreationForm
 from django.core.cache import cache
 from django.db import OperationalError, ProgrammingError, close_old_connections, connection, transaction
-from django.db.models import IntegerField, Max, Q, Sum
+from django.db.models import Case, IntegerField, Max, Q, Sum, When
 from django.db.models.functions import Cast
 from django.http import JsonResponse, HttpResponse
 from django.shortcuts import render
@@ -1062,12 +1062,27 @@ def request_branch_price_update(request):
         branch_confirmed=True,
     ).exclude(branch__iexact='MAIN')
     branches = list(branch_catalogs.order_by('branch').values_list('branch', flat=True))
-    branch_catalogs.update(
-        product_name=product_name,
-        pending_selling_price=selling_price,
-        pending_price_update=True,
-        updated_at=timezone.now(),
-    )
+    with transaction.atomic():
+        branch_catalogs.update(
+            product_name=product_name,
+            pending_selling_price=selling_price,
+            pending_price_update=True,
+            updated_at=timezone.now(),
+        )
+        ProductCatalog.objects.update_or_create(
+            branch='MAIN',
+            product_id=product_id,
+            defaults={
+                'product_name': product_name,
+                'product_code': catalog.product_code,
+                'barcode': catalog.barcode,
+                'selling_price': selling_price,
+                'branch_confirmed': True,
+                'pending_selling_price': None,
+                'pending_price_update': False,
+                'pending_product_creation': False,
+            },
+        )
     invalidate_product_catalog_cache()
     return JsonResponse({
         'status': 'accepted',
@@ -1412,6 +1427,46 @@ def product_sync_inbox(request):
         'changed': bool(changed_products),
         'full': full_snapshot,
         'products': changed_products,
+    })
+
+
+@csrf_exempt
+def shared_product_catalog(request):
+    if request.method != 'GET':
+        return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
+
+    since = parse_datetime(str(request.GET.get('since', '')).strip())
+    full_snapshot = since is None
+    products = ProductCatalog.objects.filter(branch_confirmed=True).order_by(
+        Case(When(branch__iexact='MAIN', then=0), default=1, output_field=IntegerField()),
+        'product_id',
+        '-updated_at',
+        'branch',
+    )
+    if not full_snapshot:
+        if timezone.is_naive(since):
+            since = timezone.make_aware(since, timezone.get_current_timezone())
+        changed_product_ids = ProductCatalog.objects.filter(
+            branch_confirmed=True,
+            updated_at__gte=since - timedelta(seconds=3),
+        ).values_list('product_id', flat=True).distinct()
+        products = products.filter(product_id__in=changed_product_ids)
+
+    shared_products = {}
+    for product in products.iterator():
+        shared_products.setdefault(product.product_id, {
+            'product_id': product.product_id,
+            'product_name': product.product_name,
+            'product_code': product.product_code,
+            'barcode': product.barcode,
+            'selling_price': str(product.selling_price),
+        })
+
+    return JsonResponse({
+        'status': 'ok',
+        'changed': bool(shared_products),
+        'full': full_snapshot,
+        'products': list(shared_products.values()),
     })
 
 
