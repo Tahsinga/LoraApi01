@@ -526,35 +526,15 @@ public sealed class BranchSyncDashboardForm : Form
                 using var transaction = connection.BeginTransaction();
                 try
                 {
-                    const string insertProductSql = @"
-                        SET IDENTITY_INSERT [dbo].[Products] ON;
-                        INSERT INTO [dbo].[Products](
-                            ProductID, CatID, ProductDesc, Cost, SellingPrice, SellingPriceWholesale, WholesaleQTY,
-                            UnitsPerPack, ReorderLevel, DoneBy, DoneWhen, ProductCode, BarCode, Uploaded,
-                            TaxRate, Imported, UOM, BinLocation, IsActive, ProductDesc2, coid, SpecialPrice,
-                            ProductExpires, DifferentPricesPerBranch, IsIngridientOnly, PharmacyIsPrescription,
-                            IsUnlimitedStockItem, IsVoucher, isfavourite, isweighed, approval_audit, iseditable,
-                            RecordSerialNumber
-                        )
-                        VALUES (
-                            @productId, 1, @productName, 0, @sellingPrice, 0, 0,
-                            0, 0, @doneBy, CONVERT(varchar(50), GETDATE(), 112), @productCode, @barcode, 1,
-                            @taxRate, 0, 'EA', '0', 1, '', @coid, NULL,
-                            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-                        );
-                        SET IDENTITY_INSERT [dbo].[Products] OFF;";
-                    using (var productCommand = new SqlCommand(insertProductSql, connection, transaction))
-                    {
-                        productCommand.Parameters.AddWithValue("@productId", product.product_id);
-                        productCommand.Parameters.AddWithValue("@productName", product.product_name.Trim());
-                        productCommand.Parameters.AddWithValue("@productCode", product.product_code ?? string.Empty);
-                        productCommand.Parameters.AddWithValue("@barcode", product.barcode ?? string.Empty);
-                        productCommand.Parameters.AddWithValue("@sellingPrice", product.selling_price);
-                        productCommand.Parameters.AddWithValue("@taxRate", product.tax_rate);
-                        productCommand.Parameters.AddWithValue("@doneBy", Environment.UserName);
-                        productCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
-                        await productCommand.ExecuteNonQueryAsync();
-                    }
+                    await InsertPosProductAsync(
+                        connection,
+                        transaction,
+                        product.product_id,
+                        product.product_name.Trim(),
+                        product.product_code ?? string.Empty,
+                        product.barcode ?? string.Empty,
+                        product.selling_price,
+                        product.tax_rate);
 
                     const string insertBalanceSql = @"
                         IF NOT EXISTS (
@@ -614,6 +594,58 @@ public sealed class BranchSyncDashboardForm : Form
         public string? barcode { get; set; }
         public decimal selling_price { get; set; }
         public decimal tax_rate { get; set; }
+    }
+
+    private static async Task<int> InsertPosProductAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int productId,
+        string productName,
+        string productCode,
+        string barcode,
+        decimal sellingPrice,
+        decimal taxRate)
+    {
+        const string insertProductSql = @"
+            INSERT INTO [dbo].[Products](
+                ProductID, CatID, ProductDesc, Cost, SellingPrice, SellingPriceWholesale, WholesaleQTY,
+                UnitsPerPack, ReorderLevel, DoneBy, DoneWhen, ProductCode, BarCode, Uploaded,
+                TaxRate, Imported, UOM, BinLocation, IsActive, ProductDesc2, coid, SpecialPrice,
+                ProductExpires, DifferentPricesPerBranch, IsIngridientOnly, PharmacyIsPrescription,
+                IsUnlimitedStockItem, IsVoucher, isfavourite, isweighed, approval_audit, iseditable,
+                RecordSerialNumber
+            )
+            OUTPUT INSERTED.ProductID
+            VALUES (
+                @productId, 1, @productName, 0, @sellingPrice, 0, 0,
+                0, 0, @doneBy, CONVERT(varchar(50), GETDATE(), 112), @productCode, @barcode, 1,
+                @taxRate, 0, 'EA', '0', 1, '', @coid, NULL,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            );";
+
+        using (var identityOnCommand = new SqlCommand("SET IDENTITY_INSERT [dbo].[Products] ON;", connection, transaction))
+        {
+            await identityOnCommand.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            using var productCommand = new SqlCommand(insertProductSql, connection, transaction);
+            productCommand.Parameters.AddWithValue("@productId", productId);
+            productCommand.Parameters.AddWithValue("@productName", productName);
+            productCommand.Parameters.AddWithValue("@productCode", productCode);
+            productCommand.Parameters.AddWithValue("@barcode", barcode);
+            productCommand.Parameters.AddWithValue("@sellingPrice", sellingPrice);
+            productCommand.Parameters.AddWithValue("@taxRate", taxRate);
+            productCommand.Parameters.AddWithValue("@doneBy", Environment.UserName);
+            productCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
+            return Convert.ToInt32(await productCommand.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
+        }
+        finally
+        {
+            using var identityOffCommand = new SqlCommand("SET IDENTITY_INSERT [dbo].[Products] OFF;", connection, transaction);
+            await identityOffCommand.ExecuteNonQueryAsync();
+        }
     }
 
     private static async Task<string> ResolveSellingPriceExpressionAsync(SqlConnection connection)
@@ -1127,44 +1159,15 @@ public sealed class BranchSyncDashboardForm : Form
                 }
             }
 
-            const string insertProductSql = @"
-                INSERT INTO [dbo].[Products](
-                    ProductID, CatID, ProductDesc, Cost, SellingPrice, SellingPriceWholesale, WholesaleQTY,
-                    UnitsPerPack, ReorderLevel, DoneBy, DoneWhen, ProductCode, BarCode, Uploaded,
-                    TaxRate, Imported, UOM, BinLocation, IsActive, ProductDesc2, coid, SpecialPrice,
-                    ProductExpires, DifferentPricesPerBranch, IsIngridientOnly, PharmacyIsPrescription,
-                    IsUnlimitedStockItem, IsVoucher, isfavourite, isweighed, approval_audit, iseditable,
-                    RecordSerialNumber
-                )
-                OUTPUT INSERTED.ProductID
-                VALUES (
-                    @productId, 1, @productName, 0, @sellingPrice, 0, 0,
-                    0, 0, @doneBy, CONVERT(varchar(50), GETDATE(), 112), @productCode, @barcode, 1,
-                    @taxRate, 0, 'EA', '0', 1, '', @coid, NULL,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-                );";
-            using (var identityOnCommand = new SqlCommand("SET IDENTITY_INSERT [dbo].[Products] ON;", connection, transaction))
-            {
-                await identityOnCommand.ExecuteNonQueryAsync();
-            }
-
-            using (var productCommand = new SqlCommand(insertProductSql, connection, transaction))
-            {
-                productCommand.Parameters.AddWithValue("@productId", productCreation.product_id);
-                productCommand.Parameters.AddWithValue("@productName", productCreation.product_name.Trim());
-                productCommand.Parameters.AddWithValue("@productCode", (actualProductId + 1).ToString(CultureInfo.InvariantCulture));
-                productCommand.Parameters.AddWithValue("@barcode", productCreation.barcode?.Trim() ?? string.Empty);
-                productCommand.Parameters.AddWithValue("@sellingPrice", sellingPrice);
-                productCommand.Parameters.AddWithValue("@taxRate", taxRate);
-                productCommand.Parameters.AddWithValue("@doneBy", Environment.UserName);
-                productCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
-                actualProductId = Convert.ToInt32(await productCommand.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
-            }
-
-            using (var identityOffCommand = new SqlCommand("SET IDENTITY_INSERT [dbo].[Products] OFF;", connection, transaction))
-            {
-                await identityOffCommand.ExecuteNonQueryAsync();
-            }
+            actualProductId = await InsertPosProductAsync(
+                connection,
+                transaction,
+                productCreation.product_id,
+                productCreation.product_name.Trim(),
+                (actualProductId + 1).ToString(CultureInfo.InvariantCulture),
+                productCreation.barcode?.Trim() ?? string.Empty,
+                sellingPrice,
+                taxRate);
 
             const string insertBalanceSql = @"
                 INSERT INTO [dbo].[ProductStockBalances]

@@ -1,5 +1,5 @@
 #define MyAppName "Lora POS Returns"
-#define MyAppVersion "1.0.26"
+#define MyAppVersion "1.0.27"
 #define MyAppPublisher "Tahsinga"
 #define MyAppExeName "POSViewer.exe"
 
@@ -11,7 +11,7 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\Programs\Lora POS Returns
 DefaultGroupName={#MyAppName}
 OutputDir=..\..\installer-output
-OutputBaseFilename=LoraPOSReturns-Setup-1.0.26
+OutputBaseFilename=LoraPOSReturns-Setup-1.0.27
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
