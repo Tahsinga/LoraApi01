@@ -32,6 +32,7 @@ class ProductDeletionTests(TestCase):
 		self.assertFalse(ProductDeletionRequest.objects.exists())
 
 	def test_deletion_is_queued_polled_and_completed_for_only_one_branch(self):
+		since = (timezone.now() - timedelta(seconds=1)).isoformat()
 		response = self.client.post(
 			'/api/products/delete/',
 			data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': self.password}),
@@ -40,12 +41,16 @@ class ProductDeletionTests(TestCase):
 		self.assertEqual(response.status_code, 202)
 		request_id = response.json()['request_id']
 		self.assertEqual(self.client.get('/api/products/?branch=BranchA').json()['products'], [])
-		self.assertEqual(self.client.get('/api/branch-sync/?branch=BranchA').json()['pending_product_deletions'], [{
+		stock_summary = self.client.get('/api/stock/summary/', {'branch': 'BranchA', 'since': since}).json()
+		self.assertEqual(stock_summary['removed_product_ids'], [3001])
+		branch_poll = self.client.get('/api/branch-sync/?branch=BranchA').json()
+		self.assertEqual(branch_poll['pending_product_deletions'], [{
 			'request_id': request_id,
 			'branch': 'BranchA',
 			'product_id': 3001,
 			'product_name': 'Branch Product',
 		}])
+		self.assertEqual(self.client.get('/api/branch-sync/?branch=BranchB').json()['pending_product_deletions'], [])
 		complete = self.client.post(
 			'/api/products/delete/complete/',
 			data=json.dumps({'request_id': request_id, 'branch': 'BranchA', 'success': True}),

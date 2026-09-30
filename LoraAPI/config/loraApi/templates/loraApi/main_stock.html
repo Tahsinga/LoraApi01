@@ -95,9 +95,6 @@
     .stock-table .negative-stock { background:#fff0ed; }
     .stock-table .negative-stock .product-name, .stock-table .negative-stock td strong { color:#9c352b; }
     .negative-stock-label { display:inline-block; margin-left:8px; padding:3px 6px; color:#8b2d20; background:#f7d9d3; font:700 10px Arial,sans-serif; text-transform:uppercase; }
-    .stock-table .negative-stock { background:#fff0ed; }
-    .stock-table .negative-stock .product-name, .stock-table .negative-stock td strong { color:#9c352b; }
-    .negative-stock-label { display:inline-block; margin-left:8px; padding:3px 6px; color:#8b2d20; background:#f7d9d3; font:700 10px Arial,sans-serif; text-transform:uppercase; }
     .stock-table button { margin:0; padding:8px 10px; font-size:10px; }
     .stock-table .delete-product-button { margin-left:6px; color:#fff; background:#9c352b; }
     .stock-table .delete-product-button:hover { background:#76271f; }
@@ -429,16 +426,21 @@
       if (requestId !== branchProductsRequestId) return;
       const products = data.products || [];
       const fullSnapshot = data.full !== false;
+      const removedProductIds = (data.removed_product_ids || []).map(String);
       if (fullSnapshot) {
         branchCatalogProducts = products;
       } else if (data.changed) {
         const productsById = new Map(branchCatalogProducts.map(product => [String(product.product_id), product]));
         products.forEach(product => productsById.set(String(product.product_id), product));
+        removedProductIds.forEach(productId => productsById.delete(productId));
         branchCatalogProducts = [...productsById.values()];
+      } else if (removedProductIds.length) {
+        const removedIds = new Set(removedProductIds);
+        branchCatalogProducts = branchCatalogProducts.filter(product => !removedIds.has(String(product.product_id)));
       }
       branchCatalogSince = startedAt;
       branchCatalogSinceBranch = branch;
-      if (!fullSnapshot && !data.changed) {
+      if (!fullSnapshot && !data.changed && !removedProductIds.length) {
         productCatalogStatus.textContent = `${branchCatalogProducts.length} products up to date for ${branch}.`;
         return;
       }
@@ -658,6 +660,8 @@
       if (!response.ok) throw new Error(data.message || 'Product deletion could not be queued.');
       productDeleteDialog.close();
       pendingProductDeletion = null;
+      branchCatalogSince = '';
+      branchCatalogSinceBranch = '';
       await loadBranchProducts(false);
       productCatalogStatus.textContent = `Deletion queued for ${product.product_name}; it will be deactivated at ${branch} on the next sync.`;
     } catch (error) {

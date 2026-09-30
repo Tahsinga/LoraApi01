@@ -17,7 +17,6 @@ public sealed class BranchSyncDashboardForm : Form
     private readonly Button _backButton = new();
     private readonly System.Windows.Forms.Timer _autoPollTimer = new();
     private readonly SemaphoreSlim _syncGate = new(1, 1);
-    private string? _branchName;
     private bool _productCatalogSynced;
     private DateTime _lastProductCatalogSyncUtc = DateTime.MinValue;
     private DateTimeOffset? _sharedProductCatalogSince;
@@ -190,10 +189,11 @@ public sealed class BranchSyncDashboardForm : Form
             var pendingTransfers = result.pending_transfers ?? new List<StockTransfer>();
             var pendingPriceUpdates = result.pending_price_updates ?? new List<BranchPriceUpdate>();
             var pendingProductCreations = result.pending_product_creations ?? new List<BranchProductCreation>();
+            var pendingProductDeletions = result.pending_product_deletions ?? new List<BranchProductDeletion>();
             var pendingInvoiceReprints = result.pending_invoice_reprints ?? new List<InvoiceReprintRequest>();
             _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [CONNECTION] Transfer poll succeeded for {branchName}: {pendingTransfers.Count} command(s).");
             
-            if (pendingDeletions.Count > 0 || pendingReports.Count > 0 || pendingTransfers.Count > 0 || pendingPriceUpdates.Count > 0 || pendingProductCreations.Count > 0 || pendingInvoiceReprints.Count > 0)
+            if (pendingDeletions.Count > 0 || pendingReports.Count > 0 || pendingTransfers.Count > 0 || pendingPriceUpdates.Count > 0 || pendingProductCreations.Count > 0 || pendingProductDeletions.Count > 0 || pendingInvoiceReprints.Count > 0)
             {
                 _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] RECEIVED {pendingDeletions.Count} cancellation command(s) from API for branch {branchName}.");
                 _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] RECEIVED {pendingTransfers.Count} stock transfer(s) for branch {branchName}.");
@@ -257,6 +257,17 @@ public sealed class BranchSyncDashboardForm : Form
                     await ApplyBranchProductCreationAsync(productCreation, client, branchName);
                 }
 
+                foreach (var productDeletion in pendingProductDeletions)
+                {
+                    if (!string.Equals(productDeletion.branch?.Trim(), branchName.Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ SAFETY CHECK: Ignored product deletion for branch {productDeletion.branch}; this app is {branchName}.");
+                        continue;
+                    }
+
+                    await ApplyBranchProductDeletionAsync(productDeletion, client, branchName);
+                }
+
                 foreach (var transfer in pendingTransfers.Take(1))
                 {
                     if (!string.Equals(transfer.branch?.Trim(), branchName.Trim(), StringComparison.OrdinalIgnoreCase))
@@ -291,41 +302,15 @@ public sealed class BranchSyncDashboardForm : Form
         }
     }
 
-    private async Task<string> GetBranchNameAsync()
+    private Task<string> GetBranchNameAsync()
     {
-        if (!string.IsNullOrWhiteSpace(_branchName))
+        var configuredBranch = _settings.BranchName?.Trim();
+        if (string.IsNullOrWhiteSpace(configuredBranch))
         {
-            return _branchName;
+            throw new InvalidOperationException("Assign this installation to a branch in Connection Settings before starting branch sync.");
         }
 
-        if (!string.IsNullOrWhiteSpace(_settings.BranchName))
-        {
-            _branchName = _settings.BranchName.Trim();
-            return _branchName;
-        }
-
-        try
-        {
-            using var connection = new SqlConnection(_settings.BuildConnectionString());
-            await connection.OpenAsync();
-
-            const string query = @"
-                SELECT TOP (1) CAST(Branch AS nvarchar(50))
-                FROM [dbo].[Branches]
-                WHERE Branch IS NOT NULL
-                  AND LTRIM(RTRIM(CAST(Branch AS nvarchar(50)))) <> ''
-                ORDER BY CASE WHEN ISNULL(Visible, 1) = 1 THEN 0 ELSE 1 END, Branch;";
-
-            using var command = new SqlCommand(query, connection);
-            var value = await command.ExecuteScalarAsync();
-            _branchName = value?.ToString()?.Trim();
-        }
-        catch (Exception ex)
-        {
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] Could not read Branches.Branch: {ex.Message}");
-        }
-
-        return string.IsNullOrWhiteSpace(_branchName) ? _settings.Database : _branchName;
+        return Task.FromResult(configuredBranch);
     }
 
     private async Task<bool> SyncProductCatalogAsync(HttpClient client, string branchName)
@@ -943,6 +928,15 @@ public sealed class BranchSyncDashboardForm : Form
         var error = string.Empty;
         try
         {
+            var configuredBranch = _settings.BranchName?.Trim();
+            if (string.IsNullOrWhiteSpace(configuredBranch)
+                || !string.Equals(branchName.Trim(), configuredBranch, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(transfer.branch?.Trim(), configuredBranch, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"Transfer recipient {transfer.branch ?? "(missing)"} does not match this installation's configured branch.");
+            }
+
+            branchName = configuredBranch;
             var isStockTake = decimal.TryParse(transfer.target_quantity, NumberStyles.Number, CultureInfo.InvariantCulture, out var targetQuantity);
             if (!decimal.TryParse(transfer.quantity, NumberStyles.Number, CultureInfo.InvariantCulture, out var quantity) || quantity < 0 || (isStockTake && targetQuantity < 0))
             {
@@ -957,15 +951,15 @@ public sealed class BranchSyncDashboardForm : Form
             using var connection = new SqlConnection(_settings.BuildConnectionString());
             await connection.OpenAsync();
             const string branchCompanySql = @"
-                SELECT TOP (1) Coid
+                SELECT CASE WHEN COUNT(DISTINCT Coid) = 1 THEN MIN(Coid) END
                 FROM [dbo].[Branches]
-                WHERE UPPER(LTRIM(RTRIM(Branch))) = UPPER(LTRIM(RTRIM(@branch)));";
+                WHERE UPPER(LTRIM(RTRIM(CAST(Branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)));";
             using var branchCompanyCommand = new SqlCommand(branchCompanySql, connection);
             branchCompanyCommand.Parameters.AddWithValue("@branch", branchName);
             var branchCompanyValue = await branchCompanyCommand.ExecuteScalarAsync();
             if (branchCompanyValue is null || branchCompanyValue == DBNull.Value)
             {
-                throw new InvalidOperationException($"Branch {branchName} was not found in dbo.Branches.");
+                throw new InvalidOperationException($"Branch {branchName} was not found or maps to multiple companies in dbo.Branches.");
             }
             var branchCoid = Convert.ToInt32(branchCompanyValue, CultureInfo.InvariantCulture);
                         const string updateSql = @"
@@ -974,11 +968,13 @@ public sealed class BranchSyncDashboardForm : Form
                                     UPDATE [dbo].[ProductStockBalances]
                                     SET StockBal = 0, coid = @coid
                                     WHERE UPPER(LTRIM(RTRIM(CAST(branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
+                                        AND coid = @coid
                                         AND ProductID = @productId;
 
                                     UPDATE TOP (1) [dbo].[ProductStockBalances]
                                     SET StockBal = @quantity, coid = @coid
                                     WHERE UPPER(LTRIM(RTRIM(CAST(branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
+                                        AND coid = @coid
                                         AND ProductID = @productId;
                                 END
                                 ELSE
@@ -986,6 +982,7 @@ public sealed class BranchSyncDashboardForm : Form
                                     UPDATE [dbo].[ProductStockBalances]
                                     SET StockBal = StockBal + @quantity, coid = @coid
                                     WHERE UPPER(LTRIM(RTRIM(CAST(branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
+                                        AND coid = @coid
                                         AND ProductID = @productId;
                                 END";
 
@@ -1237,6 +1234,45 @@ public sealed class BranchSyncDashboardForm : Form
         using var content = new StringContent(JsonSerializer.Serialize(completion), Encoding.UTF8, "application/json");
         var completionResponse = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/products/create/complete/", content);
         _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [PRODUCT] API acknowledgement: {(completionResponse.IsSuccessStatusCode ? "accepted" : completionResponse.StatusCode)}");
+    }
+
+    private async Task ApplyBranchProductDeletionAsync(BranchProductDeletion productDeletion, HttpClient client, string branchName)
+    {
+        var success = false;
+        var error = string.Empty;
+
+        try
+        {
+            using var connection = new SqlConnection(_settings.BuildConnectionString());
+            await connection.OpenAsync();
+            const string deactivateSql = "UPDATE [dbo].[Products] SET IsActive = 0 WHERE ProductID = @productId;";
+            using var command = new SqlCommand(deactivateSql, connection);
+            command.Parameters.AddWithValue("@productId", productDeletion.product_id);
+            var affectedRows = await command.ExecuteNonQueryAsync();
+            if (affectedRows == 0)
+            {
+                throw new InvalidOperationException($"Product {productDeletion.product_id} was not found in dbo.Products.");
+            }
+
+            success = true;
+            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✓ PRODUCT DEACTIVATED: {productDeletion.product_name} (Product {productDeletion.product_id}) at {branchName}; sales history retained.");
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ PRODUCT DELETION FAILED: {productDeletion.product_name} | {error}");
+        }
+
+        var completion = new
+        {
+            request_id = productDeletion.request_id,
+            branch = branchName,
+            success,
+            error,
+        };
+        using var content = new StringContent(JsonSerializer.Serialize(completion), Encoding.UTF8, "application/json");
+        var response = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/products/delete/complete/", content);
+        _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [PRODUCT] Deletion acknowledgement: {(response.IsSuccessStatusCode ? "accepted" : response.StatusCode)}");
     }
 
     private async Task<int> DeleteLocalInvoiceAsync(string invoiceNum, string branchName, int productId = 0)
@@ -1499,11 +1535,12 @@ public sealed class BranchSyncDashboardForm : Form
                                 Cashier,
                                 PaymentMethod,
                                 Currency,
+                                Rate,
                                 CAST(SUM(SaleTotal) AS decimal(28, 2)) AS Total,
                                 CAST(SUM(TaxTotal) AS decimal(28, 2)) AS TaxTotal
                                 FROM Sales
-                                    GROUP BY InvoiceNumber, Cashier, PaymentMethod, Currency
-                                    ORDER BY Cashier, InvoiceNumber, PaymentMethod, Currency;";
+                                    GROUP BY InvoiceNumber, Cashier, PaymentMethod, Currency, Rate
+                                    ORDER BY Cashier, InvoiceNumber, PaymentMethod, Currency, Rate;";
 
             using var command = new SqlCommand(query, connection);
             command.Parameters.Add("@reportDate", SqlDbType.Int).Value = int.Parse(reportDate.ToString("yyyyMMdd"));
@@ -1554,6 +1591,7 @@ public sealed class BranchSyncDashboardForm : Form
         public List<StockTransfer>? pending_transfers { get; set; }
         public List<BranchPriceUpdate>? pending_price_updates { get; set; }
         public List<BranchProductCreation>? pending_product_creations { get; set; }
+        public List<BranchProductDeletion>? pending_product_deletions { get; set; }
         public List<InvoiceReprintRequest>? pending_invoice_reprints { get; set; }
         public int count { get; set; }
         public string? message { get; set; }
@@ -1617,5 +1655,13 @@ public sealed class BranchSyncDashboardForm : Form
         public string? barcode { get; set; }
         public string? initial_quantity { get; set; }
         public string? selling_price { get; set; }
+    }
+
+    private sealed class BranchProductDeletion
+    {
+        public int request_id { get; set; }
+        public string? branch { get; set; }
+        public int product_id { get; set; }
+        public string? product_name { get; set; }
     }
 }

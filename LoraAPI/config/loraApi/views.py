@@ -648,7 +648,10 @@ def stock_summary(request):
     if not branch:
         return JsonResponse({'status': 'error', 'message': 'Branch is required.'}, status=400)
 
-    catalog = ProductCatalog.objects.filter(branch__iexact=branch, branch_confirmed=True)
+    pending_deletions = ProductDeletionRequest.objects.filter(branch__iexact=branch, status='pending')
+    catalog = ProductCatalog.objects.filter(branch__iexact=branch, branch_confirmed=True).exclude(
+        product_id__in=pending_deletions.values('product_id'),
+    )
     since = parse_datetime(str(request.GET.get('since', '')).strip())
     if since is not None and timezone.is_naive(since):
         since = timezone.make_aware(since, timezone.get_current_timezone())
@@ -658,8 +661,15 @@ def stock_summary(request):
 
     if full_snapshot:
         products = list(catalog)
+        removed_product_ids = []
     else:
         changed_since = since - timedelta(seconds=3)
+        removed_product_ids = list(ProductDeletionRequest.objects.filter(
+            branch__iexact=branch,
+            status__in=['pending', 'completed'],
+        ).filter(
+            Q(status='pending') | Q(updated_at__gte=changed_since),
+        ).values_list('product_id', flat=True).distinct())
         catalog_product_ids = catalog.values_list('product_id', flat=True)
         changed_product_ids = set(catalog.filter(
             updated_at__gte=changed_since,
@@ -682,13 +692,14 @@ def stock_summary(request):
             | Q(claimed_at__gte=changed_since)
             | Q(completed_at__gte=changed_since),
         ).values_list('product_id', flat=True))
-        if not changed_product_ids:
+        if not changed_product_ids and not removed_product_ids:
             return JsonResponse({
                 'status': 'ok',
                 'branch': branch,
                 'changed': False,
                 'full': False,
                 'products': [],
+                'removed_product_ids': [],
             })
         products = list(catalog.filter(product_id__in=changed_product_ids))
 
@@ -767,6 +778,7 @@ def stock_summary(request):
         'changed': True,
         'full': full_snapshot,
         'products': summary,
+        'removed_product_ids': removed_product_ids,
     })
 
 
@@ -1033,6 +1045,12 @@ def create_stock_transfer(request):
     for attempt in range(3):
         try:
             with transaction.atomic():
+                if ProductDeletionRequest.objects.filter(
+                    branch__iexact=branch,
+                    product_id=product_id,
+                    status='pending',
+                ).exists():
+                    return JsonResponse({'status': 'error', 'message': 'This product is being deleted at the selected branch.'}, status=409)
                 balance, _ = MainStockBalance.objects.select_for_update().get_or_create(product_id=product_id)
                 balance.product_name = product_name
                 balance.quantity += quantity
@@ -1090,12 +1108,27 @@ def request_branch_price_update(request):
         branch_confirmed=True,
     ).exclude(branch__iexact='MAIN')
     branches = list(branch_catalogs.order_by('branch').values_list('branch', flat=True))
-    branch_catalogs.update(
-        product_name=product_name,
-        pending_selling_price=selling_price,
-        pending_price_update=True,
-        updated_at=timezone.now(),
-    )
+    with transaction.atomic():
+        branch_catalogs.update(
+            product_name=product_name,
+            pending_selling_price=selling_price,
+            pending_price_update=True,
+            updated_at=timezone.now(),
+        )
+        ProductCatalog.objects.update_or_create(
+            branch='MAIN',
+            product_id=product_id,
+            defaults={
+                'product_name': product_name,
+                'product_code': catalog.product_code,
+                'barcode': catalog.barcode,
+                'selling_price': selling_price,
+                'branch_confirmed': True,
+                'pending_selling_price': None,
+                'pending_price_update': False,
+                'pending_product_creation': False,
+            },
+        )
     invalidate_product_catalog_cache()
     return JsonResponse({
         'status': 'accepted',
@@ -1380,9 +1413,21 @@ def complete_branch_product_deletion(request):
                 branch__iexact=deletion.branch,
                 product_id=deletion.product_id,
             ).delete()
+        else:
+            ProductCatalog.objects.filter(
+                branch__iexact=deletion.branch,
+                product_id=deletion.product_id,
+            ).update(updated_at=timezone.now())
 
     invalidate_product_catalog_cache()
-    return JsonResponse({'status': 'ok', 'request_id': deletion.pk, 'deletion_status': deletion.status})
+    return JsonResponse({
+        'status': 'ok',
+        'request_id': deletion.pk,
+        'branch': deletion.branch,
+        'product_id': deletion.product_id,
+        'success': success,
+        'deletion_status': deletion.status,
+    })
 
 
 @csrf_exempt

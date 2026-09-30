@@ -223,6 +223,13 @@ public sealed class ConnectionForm : Form
         {
             _autoLoginRetryCts?.Cancel();
             var settings = BuildSettingsFromForm();
+            if (settings.DeviceRole == "Branch PC" && string.IsNullOrWhiteSpace(settings.BranchName))
+            {
+                _statusLabel.ForeColor = Color.DarkRed;
+                _statusLabel.Text = "A branch name is required for a Branch PC.";
+                return;
+            }
+
             ConnectionSettings.Save(settings);
             await TryConnectAsync(settings, showSuccessMessage: true, showDashboardAfterSuccess: true);
         };
