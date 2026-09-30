@@ -629,10 +629,11 @@ public sealed class BranchSyncDashboardForm : Form
 
         try
         {
+            var uniqueProductCode = await ResolveUniqueProductCodeAsync(connection, transaction, productCode, BranchCompanyId);
             using var productCommand = new SqlCommand(insertProductSql, connection, transaction);
             productCommand.Parameters.AddWithValue("@productId", productId);
             productCommand.Parameters.AddWithValue("@productName", productName);
-            productCommand.Parameters.AddWithValue("@productCode", productCode);
+            productCommand.Parameters.AddWithValue("@productCode", uniqueProductCode);
             productCommand.Parameters.AddWithValue("@barcode", barcode);
             productCommand.Parameters.AddWithValue("@sellingPrice", sellingPrice);
             productCommand.Parameters.AddWithValue("@taxRate", taxRate);
@@ -644,6 +645,30 @@ public sealed class BranchSyncDashboardForm : Form
         {
             using var identityOffCommand = new SqlCommand("SET IDENTITY_INSERT [dbo].[Products] OFF;", connection, transaction);
             await identityOffCommand.ExecuteNonQueryAsync();
+        }
+    }
+
+    private static async Task<string> ResolveUniqueProductCodeAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        string preferredCode,
+        int companyId)
+    {
+        const string productCodeExistsSql = @"
+            SELECT TOP 1 1
+            FROM [dbo].[Products] WITH (UPDLOCK, HOLDLOCK)
+            WHERE ProductCode = @productCode AND coid = @coid;";
+
+        for (var suffix = 0; ; suffix++)
+        {
+            var candidate = suffix == 0 ? preferredCode : $"{preferredCode}-{suffix}";
+            using var command = new SqlCommand(productCodeExistsSql, connection, transaction);
+            command.Parameters.AddWithValue("@productCode", candidate);
+            command.Parameters.AddWithValue("@coid", companyId);
+            if (await command.ExecuteScalarAsync() is null)
+            {
+                return candidate;
+            }
         }
     }
 
