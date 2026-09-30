@@ -265,6 +265,11 @@ def main_stock(request):
 
 
 @login_required(login_url='/login/')
+def deleted_products_page(request):
+    return render(request, 'loraApi/deleted_products.html')
+
+
+@login_required(login_url='/login/')
 def product_movement_history(request):
     """Show the searchable, date-filtered stock movement audit page."""
     return render(request, 'loraApi/product_movements.html')
@@ -1140,6 +1145,52 @@ def request_branch_price_update(request):
 @login_required(login_url='/login/')
 @csrf_exempt
 @retry_on_database_lock
+def update_product_tax_rate(request):
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+
+    try:
+        payload = json.loads(request.body or '{}')
+        branch = str(payload.get('branch', '')).strip()
+        product_id = int(payload.get('product_id'))
+        tax_rate = Decimal(str(payload.get('tax_rate')))
+    except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
+        return JsonResponse({'status': 'error', 'message': 'Branch, product, and a valid tax rate are required.'}, status=400)
+
+    if not branch or branch.casefold() == 'main' or product_id <= 0 or tax_rate < 0 or tax_rate > 100:
+        return JsonResponse({'status': 'error', 'message': 'Select a branch product and enter a tax rate from 0 to 100.'}, status=400)
+
+    catalog = ProductCatalog.objects.filter(
+        branch__iexact=branch,
+        product_id=product_id,
+        branch_confirmed=True,
+    ).first()
+    if catalog is None:
+        return JsonResponse({'status': 'error', 'message': 'The product was not found for the selected branch.'}, status=404)
+
+    with transaction.atomic():
+        branch_count = ProductCatalog.objects.filter(
+            product_id=product_id,
+            branch_confirmed=True,
+        ).exclude(branch__iexact='MAIN').update(tax_rate=tax_rate, updated_at=timezone.now())
+        ProductCatalog.objects.filter(branch__iexact='MAIN', product_id=product_id).update(
+            tax_rate=tax_rate,
+            updated_at=timezone.now(),
+        )
+
+    invalidate_product_catalog_cache()
+    return JsonResponse({
+        'status': 'ok',
+        'product_id': product_id,
+        'product_name': catalog.product_name,
+        'tax_rate': str(tax_rate),
+        'branch_count': branch_count,
+    })
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
+@retry_on_database_lock
 def create_branch_product(request):
     global BRANCH_HEARTBEAT_DB_AVAILABLE
 
@@ -1282,8 +1333,12 @@ def delete_branch_product(request):
         payload = json.loads(request.body or '{}')
         branch = str(payload.get('branch', '')).strip()
         product_id = int(payload.get('product_id') or 0)
+        password = str(payload.get('password', ''))
     except (TypeError, ValueError, json.JSONDecodeError):
         return JsonResponse({'status': 'error', 'message': 'Branch and product are required.'}, status=400)
+
+    if not password or not request.user.check_password(password):
+        return JsonResponse({'status': 'error', 'message': 'Enter your account password to confirm product deletion.'}, status=403)
 
     if not branch or branch.casefold() == 'main' or product_id <= 0:
         return JsonResponse({'status': 'error', 'message': 'Select a branch product to delete.'}, status=400)
@@ -1440,6 +1495,27 @@ def product_catalog(request):
     product_rows = [product_payload(product) for product in products]
     cache.set(cache_key, product_rows, PRODUCT_CACHE_SECONDS)
     return JsonResponse({'status': 'ok', 'products': product_rows})
+
+
+@login_required(login_url='/login/')
+def deleted_products(request):
+    if request.method != 'GET':
+        return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
+
+    deletions = ProductDeletionRequest.objects.filter(status='completed').order_by('-updated_at')[:500]
+    return JsonResponse({
+        'status': 'ok',
+        'products': [
+            {
+                'branch': item.branch,
+                'product_id': item.product_id,
+                'product_name': item.product_name,
+                'deleted_by': item.requested_by,
+                'deleted_at': item.updated_at.isoformat(),
+            }
+            for item in deletions
+        ],
+    })
 
 
 @csrf_exempt
@@ -1609,6 +1685,7 @@ def shared_product_catalog(request):
             'product_code': product.product_code,
             'barcode': product.barcode,
             'selling_price': str(product.selling_price),
+            'tax_rate': str(product.tax_rate),
         })
 
     return JsonResponse({

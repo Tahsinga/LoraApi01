@@ -24,7 +24,7 @@ class ProductDeletionTests(TestCase):
 		since = timezone.now().isoformat()
 		response = self.client.post(
 			'/api/products/delete/',
-			data=json.dumps({'branch': 'BranchA', 'product_id': 3001}),
+			data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': 'ProductDeletePass4182!'}),
 			content_type='application/json',
 		)
 
@@ -61,7 +61,7 @@ class ProductDeletionTests(TestCase):
 	def test_failed_branch_deletion_restores_product_to_web_catalog(self):
 		response = self.client.post(
 			'/api/products/delete/',
-			data=json.dumps({'branch': 'BranchA', 'product_id': 3001}),
+			data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': 'ProductDeletePass4182!'}),
 			content_type='application/json',
 		)
 		request_id = response.json()['request_id']
@@ -87,7 +87,7 @@ class ProductDeletionTests(TestCase):
 	def test_main_or_in_flight_transfer_product_cannot_be_deleted(self):
 		main_response = self.client.post(
 			'/api/products/delete/',
-			data=json.dumps({'branch': 'MAIN', 'product_id': 3001}),
+			data=json.dumps({'branch': 'MAIN', 'product_id': 3001, 'password': 'ProductDeletePass4182!'}),
 			content_type='application/json',
 		)
 		self.assertEqual(main_response.status_code, 400)
@@ -98,7 +98,7 @@ class ProductDeletionTests(TestCase):
 		)
 		transfer_response = self.client.post(
 			'/api/products/delete/',
-			data=json.dumps({'branch': 'BranchA', 'product_id': 3001}),
+			data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': 'ProductDeletePass4182!'}),
 			content_type='application/json',
 		)
 		self.assertEqual(transfer_response.status_code, 409)
@@ -106,7 +106,7 @@ class ProductDeletionTests(TestCase):
 	def test_stock_transfer_is_rejected_after_branch_deletion_is_queued(self):
 		deletion = self.client.post(
 			'/api/products/delete/',
-			data=json.dumps({'branch': 'BranchA', 'product_id': 3001}),
+			data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': 'ProductDeletePass4182!'}),
 			content_type='application/json',
 		)
 		self.assertEqual(deletion.status_code, 202)
@@ -125,13 +125,93 @@ class ProductDeletionTests(TestCase):
 		self.assertEqual(transfer.status_code, 409)
 		self.assertFalse(StockTransfer.objects.exists())
 
-	def test_stock_page_displays_branch_delete_action(self):
+	def test_web_deletion_requires_the_current_users_password(self):
+		for password in ['', 'not-the-password']:
+			with self.subTest(password='missing' if not password else 'incorrect'):
+				response = self.client.post(
+					'/api/products/delete/',
+					data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': password}),
+					content_type='application/json',
+				)
+				self.assertEqual(response.status_code, 403)
+		self.assertFalse(ProductDeletionRequest.objects.exists())
+
+	def test_deleted_products_page_and_api_show_completed_deletions(self):
+		completed = ProductDeletionRequest.objects.create(
+			branch='BranchA', product_id=3001, product_name='Branch Product',
+			requested_by='product-delete-admin', status='completed',
+		)
+		ProductDeletionRequest.objects.create(
+			branch='BranchB', product_id=3001, product_name='Still pending', status='pending',
+		)
+
+		page = self.client.get('/products/deleted/')
+		response = self.client.get('/api/products/deleted/')
+
+		self.assertEqual(page.status_code, 200)
+		self.assertContains(page, 'Deleted products')
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()['products'], [{
+			'branch': 'BranchA',
+			'product_id': 3001,
+			'product_name': 'Branch Product',
+			'deleted_by': 'product-delete-admin',
+			'deleted_at': completed.updated_at.isoformat(),
+		}])
+
+	def test_stock_page_displays_product_controls_and_deleted_products_link(self):
 		response = self.client.get('/stock/')
 
 		self.assertEqual(response.status_code, 200)
 		self.assertContains(response, 'Delete at branch')
+		self.assertContains(response, 'Your account password')
+		self.assertContains(response, 'Save tax')
+		self.assertContains(response, '/products/deleted/')
 		self.assertContains(response, '/api/products/delete/')
 
+
+class ProductTaxRateTests(TestCase):
+	def setUp(self):
+		admin = get_user_model().objects.create_superuser(username='product-tax-admin', password='ProductTaxPass4182!')
+		self.client.force_login(admin)
+
+	def test_tax_rate_updates_confirmed_catalog_and_shared_pos_feed(self):
+		for branch in ['BranchA', 'BranchB', 'MAIN']:
+			ProductCatalog.objects.create(
+				branch=branch, product_id=401, product_name='Tax Product', tax_rate='5.00',
+			)
+		ProductCatalog.objects.create(
+			branch='BranchPending', product_id=401, product_name='Tax Product',
+			tax_rate='5.00', branch_confirmed=False,
+		)
+
+		response = self.client.post(
+			'/api/products/tax-rate/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': 401, 'tax_rate': '7.50'}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()['branch_count'], 2)
+		for branch in ['BranchA', 'BranchB', 'MAIN']:
+			self.assertEqual(str(ProductCatalog.objects.get(branch=branch, product_id=401).tax_rate), '7.50')
+		self.assertEqual(str(ProductCatalog.objects.get(branch='BranchPending', product_id=401).tax_rate), '5.00')
+		shared_product = next(
+			item for item in self.client.get('/api/products/shared/').json()['products']
+			if item['product_id'] == 401
+		)
+		self.assertEqual(shared_product['tax_rate'], '7.50')
+
+	def test_tax_rate_rejects_values_outside_the_supported_range(self):
+		ProductCatalog.objects.create(branch='BranchA', product_id=402, product_name='Tax Product')
+		response = self.client.post(
+			'/api/products/tax-rate/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': 402, 'tax_rate': '100.01'}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 400)
+		self.assertEqual(str(ProductCatalog.objects.get(product_id=402).tax_rate), '0.00')
 
 class DashboardCompressionTests(TestCase):
 	def setUp(self):
