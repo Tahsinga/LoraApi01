@@ -334,7 +334,7 @@ public sealed class BranchSyncDashboardForm : Form
                     WHERE UPPER(LTRIM(RTRIM(CAST(b.branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
                     GROUP BY b.ProductID
                 )
-                SELECT p.ProductID, p.ProductDesc, p.ProductCode, p.BarCode,
+                  SELECT p.ProductID, p.ProductDesc, p.ProductCode, p.BarCode, COALESCE(p.TaxRate, 0) AS TaxRate,
                        {sellingPriceExpression} AS SellingPrice,
                        COALESCE(s.SoldQuantity, 0) AS SoldQuantity,
                        COALESCE(b.AvailableQuantity, 0) AS AvailableQuantity
@@ -357,11 +357,13 @@ public sealed class BranchSyncDashboardForm : Form
                 var productName = reader["ProductDesc"]?.ToString()?.Trim() ?? string.Empty;
                 var productCode = reader["ProductCode"]?.ToString()?.Trim() ?? string.Empty;
                 var barcode = reader["BarCode"]?.ToString()?.Trim() ?? string.Empty;
+                var taxRate = Convert.ToDecimal(reader["TaxRate"], CultureInfo.InvariantCulture);
                 var sellingPrice = Convert.ToDecimal(reader["SellingPrice"], CultureInfo.InvariantCulture);
                 var soldQuantity = Convert.ToDecimal(reader["SoldQuantity"], CultureInfo.InvariantCulture);
                 var availableQuantity = Convert.ToDecimal(reader["AvailableQuantity"], CultureInfo.InvariantCulture);
                 var stateKey = productId.ToString(CultureInfo.InvariantCulture);
                 var state = string.Join("\u001f", productName, productCode, barcode,
+                    taxRate.ToString(CultureInfo.InvariantCulture),
                     sellingPrice.ToString(CultureInfo.InvariantCulture),
                     soldQuantity.ToString(CultureInfo.InvariantCulture),
                     availableQuantity.ToString(CultureInfo.InvariantCulture));
@@ -372,6 +374,7 @@ public sealed class BranchSyncDashboardForm : Form
                     product_name = productName,
                     product_code = productCode,
                     barcode,
+                    tax_rate = taxRate,
                     selling_price = sellingPrice,
                     sold_quantity = soldQuantity,
                     available_quantity = availableQuantity,
@@ -484,7 +487,7 @@ public sealed class BranchSyncDashboardForm : Form
                 {
                     const string updateProductSql = @"
                         UPDATE [dbo].[Products]
-                        SET ProductDesc = @productName, ProductCode = @productCode, BarCode = @barcode, SellingPrice = @sellingPrice
+                        SET ProductDesc = @productName, ProductCode = @productCode, BarCode = @barcode, SellingPrice = @sellingPrice, TaxRate = @taxRate
                         WHERE ProductID = @productId;";
                     using (var productCommand = new SqlCommand(updateProductSql, connection))
                     {
@@ -493,6 +496,7 @@ public sealed class BranchSyncDashboardForm : Form
                         productCommand.Parameters.AddWithValue("@productCode", product.product_code ?? string.Empty);
                         productCommand.Parameters.AddWithValue("@barcode", product.barcode ?? string.Empty);
                         productCommand.Parameters.AddWithValue("@sellingPrice", product.selling_price);
+                        productCommand.Parameters.AddWithValue("@taxRate", product.tax_rate);
                         updated += await productCommand.ExecuteNonQueryAsync();
                     }
 
@@ -535,7 +539,7 @@ public sealed class BranchSyncDashboardForm : Form
                         VALUES (
                             @productId, 1, @productName, 0, @sellingPrice, 0, 0,
                             0, 0, @doneBy, CONVERT(varchar(50), GETDATE(), 112), @productCode, @barcode, 1,
-                            0, 0, 'EA', '0', 1, '', @coid, NULL,
+                            @taxRate, 0, 'EA', '0', 1, '', @coid, NULL,
                             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
                         );
                         SET IDENTITY_INSERT [dbo].[Products] OFF;";
@@ -546,6 +550,7 @@ public sealed class BranchSyncDashboardForm : Form
                         productCommand.Parameters.AddWithValue("@productCode", product.product_code ?? string.Empty);
                         productCommand.Parameters.AddWithValue("@barcode", product.barcode ?? string.Empty);
                         productCommand.Parameters.AddWithValue("@sellingPrice", product.selling_price);
+                        productCommand.Parameters.AddWithValue("@taxRate", product.tax_rate);
                         productCommand.Parameters.AddWithValue("@doneBy", Environment.UserName);
                         productCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
                         await productCommand.ExecuteNonQueryAsync();
@@ -608,6 +613,7 @@ public sealed class BranchSyncDashboardForm : Form
         public string? product_code { get; set; }
         public string? barcode { get; set; }
         public decimal selling_price { get; set; }
+        public decimal tax_rate { get; set; }
     }
 
     private static async Task<string> ResolveSellingPriceExpressionAsync(SqlConnection connection)
@@ -1084,6 +1090,11 @@ public sealed class BranchSyncDashboardForm : Form
                 throw new InvalidOperationException($"Invalid selling price: {productCreation.selling_price}");
             }
 
+            if (!decimal.TryParse(productCreation.tax_rate, NumberStyles.Number, CultureInfo.InvariantCulture, out var taxRate) || taxRate < 0 || taxRate > 100)
+            {
+                throw new InvalidOperationException($"Invalid tax rate: {productCreation.tax_rate}");
+            }
+
             if (!decimal.TryParse(productCreation.initial_quantity, NumberStyles.Number, CultureInfo.InvariantCulture, out var initialQuantity) || initialQuantity < 0)
             {
                 throw new InvalidOperationException($"Invalid opening quantity: {productCreation.initial_quantity}");
@@ -1116,18 +1127,6 @@ public sealed class BranchSyncDashboardForm : Form
                 }
             }
 
-            const string branchCompanySql = @"
-                SELECT TOP (1) Coid
-                FROM [dbo].[Branches]
-                WHERE UPPER(LTRIM(RTRIM(Branch))) = UPPER(LTRIM(RTRIM(@branch)));";
-            using var branchCompanyCommand = new SqlCommand(branchCompanySql, connection, transaction);
-            branchCompanyCommand.Parameters.AddWithValue("@branch", branchName);
-            var companyIdValue = await branchCompanyCommand.ExecuteScalarAsync();
-            if (companyIdValue is null || companyIdValue == DBNull.Value)
-            {
-                throw new InvalidOperationException($"Branch {branchName} was not found in dbo.Branches.");
-            }
-
             const string insertProductSql = @"
                 INSERT INTO [dbo].[Products](
                     ProductID, CatID, ProductDesc, Cost, SellingPrice, SellingPriceWholesale, WholesaleQTY,
@@ -1141,7 +1140,7 @@ public sealed class BranchSyncDashboardForm : Form
                 VALUES (
                     @productId, 1, @productName, 0, @sellingPrice, 0, 0,
                     0, 0, @doneBy, CONVERT(varchar(50), GETDATE(), 112), @productCode, @barcode, 1,
-                    0, 0, 'EA', '0', 1, '', @coid, NULL,
+                    @taxRate, 0, 'EA', '0', 1, '', @coid, NULL,
                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
                 );";
             using (var identityOnCommand = new SqlCommand("SET IDENTITY_INSERT [dbo].[Products] ON;", connection, transaction))
@@ -1156,8 +1155,9 @@ public sealed class BranchSyncDashboardForm : Form
                 productCommand.Parameters.AddWithValue("@productCode", (actualProductId + 1).ToString(CultureInfo.InvariantCulture));
                 productCommand.Parameters.AddWithValue("@barcode", productCreation.barcode?.Trim() ?? string.Empty);
                 productCommand.Parameters.AddWithValue("@sellingPrice", sellingPrice);
+                productCommand.Parameters.AddWithValue("@taxRate", taxRate);
                 productCommand.Parameters.AddWithValue("@doneBy", Environment.UserName);
-                productCommand.Parameters.AddWithValue("@coid", Convert.ToInt32(companyIdValue, CultureInfo.InvariantCulture));
+                productCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
                 actualProductId = Convert.ToInt32(await productCommand.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
             }
 
@@ -1180,7 +1180,7 @@ public sealed class BranchSyncDashboardForm : Form
             using var balanceCommand = new SqlCommand(insertBalanceSql, connection, transaction);
             balanceCommand.Parameters.AddWithValue("@productId", actualProductId);
             balanceCommand.Parameters.AddWithValue("@initialQuantity", initialQuantity);
-            balanceCommand.Parameters.AddWithValue("@coid", Convert.ToInt32(companyIdValue, CultureInfo.InvariantCulture));
+            balanceCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
             balanceCommand.Parameters.AddWithValue("@branch", branchName);
             await balanceCommand.ExecuteNonQueryAsync();
             transaction.Commit();
@@ -1631,6 +1631,7 @@ public sealed class BranchSyncDashboardForm : Form
         public string? barcode { get; set; }
         public string? initial_quantity { get; set; }
         public string? selling_price { get; set; }
+        public string? tax_rate { get; set; }
     }
 
     private sealed class BranchProductDeletion

@@ -194,6 +194,7 @@ def product_payload(product):
         'barcode': product.barcode,
         'available_quantity': str(product.available_quantity),
         'selling_price': str(product.selling_price),
+        'tax_rate': str(product.tax_rate),
     }
 
 
@@ -1077,6 +1078,7 @@ def request_branch_price_update(request):
                 'product_code': catalog.product_code,
                 'barcode': catalog.barcode,
                 'selling_price': selling_price,
+                'tax_rate': catalog.tax_rate,
                 'branch_confirmed': True,
                 'pending_selling_price': None,
                 'pending_price_update': False,
@@ -1113,6 +1115,7 @@ def create_branch_product(request):
         barcode = str(payload.get('barcode', '')).strip()
         initial_quantity = Decimal('0')
         selling_price = Decimal(str(payload.get('selling_price', 0) or 0))
+        tax_rate = Decimal(str(payload.get('tax_rate', 0) or 0))
     except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
         return JsonResponse({'status': 'error', 'message': 'Branch, product name, and a valid price are required.'}, status=400)
 
@@ -1122,7 +1125,7 @@ def create_branch_product(request):
         return JsonResponse({'status': 'error', 'message': 'Product ID cannot exceed 2147483647.'}, status=400)
     if branch.casefold() == 'main' or not product_name or len(product_name) > 250:
         return JsonResponse({'status': 'error', 'message': 'A product name is required; Main cannot be selected as a branch.'}, status=400)
-    if len(product_code) > 50 or len(barcode) > 100 or initial_quantity < 0 or initial_quantity != whole_quantity(initial_quantity) or selling_price < 0:
+    if len(product_code) > 50 or len(barcode) > 100 or initial_quantity < 0 or initial_quantity != whole_quantity(initial_quantity) or selling_price < 0 or tax_rate < 0 or tax_rate > 100:
         return JsonResponse({'status': 'error', 'message': 'Product code, barcode, quantity, and price are invalid.'}, status=400)
 
     branch_targets = set(ProductCatalog.objects.exclude(branch__iexact='MAIN').exclude(branch='').values_list('branch', flat=True))
@@ -1163,6 +1166,7 @@ def create_branch_product(request):
                 barcode=barcode,
                 pending_stock_quantity=initial_quantity,
                 selling_price=selling_price,
+                tax_rate=tax_rate,
                 branch_confirmed=False,
                 pending_product_creation=True,
             )
@@ -1180,6 +1184,7 @@ def create_branch_product(request):
         'barcode': product.barcode,
         'initial_quantity': str(product.pending_stock_quantity),
         'selling_price': str(product.selling_price),
+        'tax_rate': str(product.tax_rate),
         'branches': branches,
     }, status=202)
 
@@ -1219,6 +1224,7 @@ def complete_branch_product_creation(request):
                     'product_code': product.product_code,
                     'barcode': product.barcode,
                     'selling_price': product.selling_price,
+                    'tax_rate': product.tax_rate,
                     'branch_confirmed': True,
                     'pending_product_creation': False,
                 },
@@ -1322,14 +1328,24 @@ def sync_product_catalog(request):
                 continue
             available_quantity = whole_quantity(Decimal(str(item.get('available_quantity', 0) or 0)))
             selling_price = Decimal(str(item.get('selling_price', 0) or 0))
+            tax_rate_value = item.get('tax_rate')
+            tax_rate = Decimal(str(tax_rate_value)) if tax_rate_value is not None and str(tax_rate_value).strip() else None
             sold_quantity_value = item.get('sold_quantity')
             sold_quantity = whole_quantity(Decimal(str(sold_quantity_value or 0))) if sold_quantity_value is not None else None
             catalog, created = ProductCatalog.objects.select_for_update().get_or_create(
                 branch=branch,
                 product_id=product_id,
-                defaults={'available_quantity': available_quantity, 'selling_price': selling_price, 'branch_confirmed': True},
+                defaults={
+                    'available_quantity': available_quantity,
+                    'selling_price': selling_price,
+                    'tax_rate': tax_rate if tax_rate is not None else Decimal('0'),
+                    'branch_confirmed': True,
+                },
             )
             catalog.branch_confirmed = True
+            tax_rate_changed = tax_rate is not None and catalog.tax_rate != tax_rate
+            if tax_rate is not None:
+                catalog.tax_rate = tax_rate
             previous_quantity = catalog.available_quantity
             previous_sold_quantity = catalog.sold_quantity or Decimal('0')
             stock_take_sale_sync = False
@@ -1403,6 +1419,26 @@ def sync_product_catalog(request):
             if sold_quantity is not None:
                 catalog.sold_quantity = sold_quantity
             catalog.save()
+
+            if tax_rate is not None:
+                main_catalog = ProductCatalog.objects.filter(
+                    branch__iexact='MAIN',
+                    product_id=product_id,
+                ).first()
+                if main_catalog is None:
+                    ProductCatalog.objects.create(
+                        branch='MAIN',
+                        product_id=product_id,
+                        product_name=product_name,
+                        product_code=catalog.product_code,
+                        barcode=catalog.barcode,
+                        selling_price=catalog.selling_price,
+                        tax_rate=tax_rate,
+                        branch_confirmed=True,
+                    )
+                elif (tax_rate_changed and not created) or (main_catalog.tax_rate == 0 and tax_rate != 0):
+                    main_catalog.tax_rate = tax_rate
+                    main_catalog.save(update_fields=['tax_rate', 'updated_at'])
             updated += 1
 
     invalidate_product_catalog_cache()
@@ -1460,6 +1496,7 @@ def shared_product_catalog(request):
             'product_code': product.product_code,
             'barcode': product.barcode,
             'selling_price': str(product.selling_price),
+            'tax_rate': str(product.tax_rate),
         })
 
     return JsonResponse({
@@ -1758,7 +1795,7 @@ def branch_sync(request):
         pending_product_creations = list(ProductCatalog.objects.filter(
             branch__iexact=branch_name,
             pending_product_creation=True,
-        ).values('branch', 'product_id', 'product_name', 'product_code', 'barcode', 'pending_stock_quantity', 'selling_price'))
+        ).values('branch', 'product_id', 'product_name', 'product_code', 'barcode', 'pending_stock_quantity', 'selling_price', 'tax_rate'))
         with transaction.atomic():
             reprint = InvoiceReprintRequest.objects.select_for_update().filter(
                 branch__iexact=branch_name,
@@ -1796,6 +1833,7 @@ def branch_sync(request):
                     'barcode': item['barcode'],
                     'initial_quantity': str(item['pending_stock_quantity'] or 0),
                     'selling_price': str(item['selling_price']),
+                    'tax_rate': str(item['tax_rate']),
                 }
                 for item in pending_product_creations
             ],
