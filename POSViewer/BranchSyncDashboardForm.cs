@@ -487,13 +487,12 @@ public sealed class BranchSyncDashboardForm : Form
                 {
                     const string updateProductSql = @"
                         UPDATE [dbo].[Products]
-                        SET ProductDesc = @productName, ProductCode = @productCode, BarCode = @barcode, SellingPrice = @sellingPrice, TaxRate = @taxRate
+                        SET ProductDesc = @productName, BarCode = @barcode, SellingPrice = @sellingPrice, TaxRate = @taxRate
                         WHERE ProductID = @productId;";
                     using (var productCommand = new SqlCommand(updateProductSql, connection))
                     {
                         productCommand.Parameters.AddWithValue("@productId", product.product_id);
                         productCommand.Parameters.AddWithValue("@productName", product.product_name.Trim());
-                        productCommand.Parameters.AddWithValue("@productCode", product.product_code ?? string.Empty);
                         productCommand.Parameters.AddWithValue("@barcode", product.barcode ?? string.Empty);
                         productCommand.Parameters.AddWithValue("@sellingPrice", product.selling_price);
                         productCommand.Parameters.AddWithValue("@taxRate", product.tax_rate);
@@ -531,7 +530,7 @@ public sealed class BranchSyncDashboardForm : Form
                         transaction,
                         product.product_id,
                         product.product_name.Trim(),
-                        product.product_code ?? string.Empty,
+                        checked(product.product_id + 1).ToString(CultureInfo.InvariantCulture),
                         product.barcode ?? string.Empty,
                         product.selling_price,
                         product.tax_rate);
