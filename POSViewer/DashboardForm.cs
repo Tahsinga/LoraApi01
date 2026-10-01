@@ -2,6 +2,7 @@ using System.Data;
 using System.Data.SqlClient;
 using System.Drawing;
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -246,7 +247,10 @@ public sealed class DashboardForm : Form
     {
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+            using var client = new HttpClient(new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli,
+            }) { Timeout = TimeSpan.FromSeconds(60) };
             var inboxStartedAt = DateTimeOffset.UtcNow;
             var inboxUrl = $"{_settings.GetApiBaseUrl()}/api/products/inbox/";
             if (_productInboxSince.HasValue)
