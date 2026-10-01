@@ -1,6 +1,7 @@
 using System.Data;
 using System.Data.SqlClient;
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -119,7 +120,10 @@ public sealed class BranchSyncDashboardForm : Form
         var apiBaseUrl = _settings.GetApiBaseUrl();
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(3) };
+            using var client = new HttpClient(new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli,
+            }) { Timeout = TimeSpan.FromMinutes(3) };
             var branchName = await GetBranchNameAsync();
 
             try

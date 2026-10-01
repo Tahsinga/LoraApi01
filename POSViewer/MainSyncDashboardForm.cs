@@ -1,5 +1,6 @@
 using System.Data.SqlClient;
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -114,7 +115,10 @@ public sealed class MainSyncDashboardForm : Form
         try
         {
             _statusLabel.Text = "Main PC receiving branch products...";
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+            using var client = new HttpClient(new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli,
+            }) { Timeout = TimeSpan.FromSeconds(60) };
             await EnsureCancellationTableAsync();
             await StoreCancellationRecordsAsync(client);
             await PollStockTransfersAsync(client);
