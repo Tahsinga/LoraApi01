@@ -10,6 +10,7 @@
 **/staticfiles/
 installer-output/
 **/publish/
+**/publish-*/
 *.user
 *.suo
 *.log

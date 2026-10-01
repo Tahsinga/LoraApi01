@@ -1,5 +1,10 @@
 #define MyAppName "Lora POS Returns"
-#define MyAppVersion "1.0.29"
+#ifndef MyAppVersion
+#define MyAppVersion "1.0.30"
+#endif
+#ifndef MyAppPublishDir
+#define MyAppPublishDir "..\publish-1.0.30"
+#endif
 #define MyAppPublisher "Tahsinga"
 #define MyAppExeName "POSViewer.exe"
 
@@ -11,7 +16,7 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\Programs\Lora POS Returns
 DefaultGroupName={#MyAppName}
 OutputDir=..\..\installer-output
-OutputBaseFilename=LoraPOSReturns-Setup-1.0.29
+OutputBaseFilename=LoraPOSReturns-Setup-{#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -20,7 +25,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Files]
-Source: "..\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#MyAppPublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
