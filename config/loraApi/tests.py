@@ -255,14 +255,6 @@ class StockTransferTests(TestCase):
 		self.assertEqual(catalog.available_quantity, 15)
 		self.assertTrue(catalog.pending_stock_adjustment)
 		self.assertEqual(catalog.pending_stock_quantity, 15)
-		self.client.post(
-			'/api/products/sync/',
-			data=json.dumps({'branch': 'BranchA', 'entered_by': 'branch-user', 'products': [{
-				'product_id': 999, 'product_name': 'Test Product', 'available_quantity': 10,
-			}]}),
-			content_type='application/json',
-		)
-		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=999).available_quantity, 15)
 
 	def test_stock_take_updates_main_and_branch_together(self):
 		ProductCatalog.objects.create(
@@ -285,36 +277,6 @@ class StockTransferTests(TestCase):
 		)
 		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=999).available_quantity, 12)
 		self.assertFalse(StockMovement.objects.filter(product_id=999, movement_type='sold').exists())
-
-	def test_sale_after_stock_take_updates_web_quantity(self):
-		ProductCatalog.objects.create(
-			branch='BranchA', product_id=999, product_name='Test Product', available_quantity=4,
-		)
-		stock_take = self.client.post(
-			'/api/stock/main/adjust/',
-			data=json.dumps({'product_id': 999, 'product_name': 'Test Product', 'quantity': 12, 'branch': 'BranchA'}),
-			content_type='application/json',
-		)
-		self.assertEqual(stock_take.status_code, 200)
-		stock_take_transfer = StockTransfer.objects.get()
-		self.client.post(
-			'/api/stock/transfers/complete/',
-			data=json.dumps({'transfer_id': stock_take_transfer.transfer_id, 'branch': 'BranchA', 'success': True}),
-			content_type='application/json',
-		)
-
-		sync = self.client.post(
-			'/api/products/sync/',
-			data=json.dumps({'branch': 'BranchA', 'products': [{
-				'product_id': 999, 'product_name': 'Test Product', 'available_quantity': 11, 'sold_quantity': 1,
-			}]}),
-			content_type='application/json',
-		)
-		self.assertEqual(sync.status_code, 200)
-		catalog = ProductCatalog.objects.get(branch='BranchA', product_id=999)
-		self.assertEqual(catalog.available_quantity, 11)
-		self.assertFalse(catalog.pending_stock_adjustment)
-		self.assertEqual(StockMovement.objects.get(product_id=999, movement_type='sold').quantity, 1)
 
 	def test_repeated_success_acknowledgment_is_idempotent(self):
 		transfer = StockTransfer.objects.create(
@@ -509,30 +471,6 @@ class StockTransferTests(TestCase):
 			'selling_price': '10.00',
 			'tax_rate': '7.50',
 		}])
-
-	def test_branch_tax_rate_sync_updates_shared_catalog(self):
-		ProductCatalog.objects.create(
-			branch='MAIN', product_id=1301, product_name='Taxed Product', tax_rate='0.00',
-		)
-		response = self.client.post(
-			'/api/products/sync/',
-			data=json.dumps({'branch': 'BranchA', 'products': [{
-				'product_id': 1301,
-				'product_name': 'Taxed Product',
-				'available_quantity': 4,
-				'selling_price': '10.00',
-				'tax_rate': '7.50',
-			}]}),
-			content_type='application/json',
-		)
-
-		self.assertEqual(response.status_code, 200)
-		self.assertEqual(str(ProductCatalog.objects.get(branch='BranchA', product_id=1301).tax_rate), '7.50')
-		self.assertEqual(str(ProductCatalog.objects.get(branch='MAIN', product_id=1301).tax_rate), '7.50')
-		shared = self.client.get('/api/products/shared/')
-		self.assertEqual(shared.status_code, 200)
-		product = next(item for item in shared.json()['products'] if item['product_id'] == 1301)
-		self.assertEqual(product['tax_rate'], '7.50')
 
 	def test_branch_price_update_refreshes_shared_catalog_price(self):
 		for branch in ('BranchA', 'BranchB', 'MAIN'):
@@ -807,98 +745,23 @@ class StockTransferTests(TestCase):
 		movements = response.json()['movements']
 		self.assertEqual(len(movements), 20)
 
-	def test_catalog_sync_records_reduction_as_sold(self):
-		ProductCatalog.objects.create(
-			branch='BranchA', product_id=999, product_name='Test Product', available_quantity=10,
-		)
-
-		decrease = self.client.post(
-			'/api/products/sync/',
-			data=json.dumps({'branch': 'BranchA', 'entered_by': 'branch-user', 'products': [{
-				'product_id': 999, 'product_name': 'Test Product', 'available_quantity': 7,
-			}]}),
-			content_type='application/json',
-		)
-		increase = self.client.post(
-			'/api/products/sync/',
-			data=json.dumps({'branch': 'BranchA', 'entered_by': 'branch-user', 'products': [{
-				'product_id': 999, 'product_name': 'Test Product', 'available_quantity': 12,
-			}]}),
-			content_type='application/json',
-		)
-
-		self.assertEqual(decrease.status_code, 200)
-		self.assertEqual(increase.status_code, 200)
-		self.assertEqual(StockMovement.objects.filter(product_id=999, movement_type='sold').count(), 1)
-		self.assertEqual(StockMovement.objects.get(product_id=999, movement_type='sold').quantity, 3)
-
-	def test_catalog_sync_merges_case_variant_rows_and_preserves_pending_stock(self):
-		ProductCatalog.objects.create(
-			branch='BranchA', product_id=1002, product_name='Test Product', available_quantity=10,
-			pending_stock_adjustment=True, pending_stock_quantity=15,
-		)
-		ProductCatalog.objects.create(
-			branch='brancha', product_id=1002, product_name='Test Product', available_quantity=12,
-			sold_quantity=4,
-		)
+	def test_product_catalog_sync_is_disabled_and_preserves_case_variant_rows(self):
+		ProductCatalog.objects.create(branch='YEUKAI', product_id=3979, available_quantity=10)
+		ProductCatalog.objects.create(branch='yeukai', product_id=3979, available_quantity=12)
 
 		response = self.client.post(
 			'/api/products/sync/',
-			data=json.dumps({'branch': 'BranchA', 'products': [{
-				'product_id': 1002, 'product_name': 'Test Product', 'available_quantity': 10,
+			data=json.dumps({'branch': 'YEUKAI', 'products': [{
+				'product_id': 3979, 'product_name': 'Test Product', 'available_quantity': 7,
 			}]}),
 			content_type='application/json',
 		)
 
-		self.assertEqual(response.status_code, 200)
-		self.assertEqual(ProductCatalog.objects.filter(branch__iexact='BranchA', product_id=1002).count(), 1)
-		catalog = ProductCatalog.objects.get(branch='BranchA', product_id=1002)
-		self.assertEqual(catalog.available_quantity, 15)
-		self.assertEqual(catalog.sold_quantity, 4)
-		self.assertTrue(catalog.pending_stock_adjustment)
-
-	def test_catalog_sync_does_not_sell_stock_take_reduction(self):
-		ProductCatalog.objects.create(
-			branch='BranchA', product_id=999, product_name='Test Product', available_quantity=10,
+		self.assertEqual(response.status_code, 410)
+		self.assertEqual(
+			list(ProductCatalog.objects.filter(product_id=3979).order_by('branch').values_list('branch', 'available_quantity')),
+			[('YEUKAI', 10), ('yeukai', 12)],
 		)
-		self.client.post(
-			'/api/stock/main/adjust/',
-			data=json.dumps({'product_id': 999, 'product_name': 'Test Product', 'quantity': 100, 'branch': 'BranchA'}),
-			content_type='application/json',
-		)
-		response = self.client.post(
-			'/api/products/sync/',
-			data=json.dumps({'branch': 'BranchA', 'entered_by': 'branch-user', 'products': [{
-				'product_id': 999, 'product_name': 'Test Product', 'available_quantity': 20,
-			}]}),
-			content_type='application/json',
-		)
-
-		self.assertEqual(response.status_code, 200)
-		self.assertFalse(StockMovement.objects.filter(product_id=999, movement_type='sold').exists())
-		catalog = ProductCatalog.objects.get(branch='BranchA', product_id=999)
-		self.assertEqual(catalog.available_quantity, 20)
-		self.assertFalse(catalog.pending_stock_adjustment)
-
-	def test_catalog_sync_does_not_duplicate_web_transfer_movement(self):
-		ProductCatalog.objects.create(
-			branch='Mini Market', product_id=4941, product_name='LOBELS BREAD 700G #B', available_quantity=0,
-		)
-		StockMovement.objects.create(
-			branch='Mini Market', product_id=4941, product_name='LOBELS BREAD 700G #B',
-			movement_type='received', quantity=200, source='Admin (transfer to Mini Market)',
-		)
-
-		response = self.client.post(
-			'/api/products/sync/',
-			data=json.dumps({'branch': 'Mini Market', 'entered_by': 'HP EliteBook', 'products': [{
-				'product_id': 4941, 'product_name': 'LOBELS BREAD 700G #B', 'available_quantity': 200,
-			}]}),
-			content_type='application/json',
-		)
-
-		self.assertEqual(response.status_code, 200)
-		self.assertEqual(StockMovement.objects.filter(product_id=4941, movement_type='received').count(), 1)
 
 	def test_product_movement_history_filters_product_and_date(self):
 		StockMovement.objects.create(

@@ -19,10 +19,7 @@ public sealed class BranchSyncDashboardForm : Form
     private readonly Button _backButton = new();
     private readonly System.Windows.Forms.Timer _autoPollTimer = new();
     private readonly SemaphoreSlim _syncGate = new(1, 1);
-    private bool _productCatalogSynced;
-    private DateTime _lastProductCatalogSyncUtc = DateTime.MinValue;
     private DateTimeOffset? _sharedProductCatalogSince;
-    private readonly Dictionary<string, string> _productCatalogStates = new(StringComparer.OrdinalIgnoreCase);
 
     public BranchSyncDashboardForm(ConnectionSettings settings, ConnectionForm connectionForm)
     {
@@ -145,15 +142,6 @@ public sealed class BranchSyncDashboardForm : Form
             catch (HttpRequestException ex)
             {
                 _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ [CONNECTION] Web API heartbeat failed: {ex.Message}");
-            }
-
-            if (!_productCatalogSynced || DateTime.UtcNow - _lastProductCatalogSyncUtc >= TimeSpan.FromSeconds(60))
-            {
-                _productCatalogSynced = await SyncProductCatalogAsync(client, branchName);
-                if (_productCatalogSynced)
-                {
-                    _lastProductCatalogSyncUtc = DateTime.UtcNow;
-                }
             }
 
             if (!_sharedProductCatalogSince.HasValue || DateTimeOffset.UtcNow - _sharedProductCatalogSince.Value >= TimeSpan.FromMinutes(1))
@@ -316,128 +304,6 @@ public sealed class BranchSyncDashboardForm : Form
         }
 
         return Task.FromResult(configuredBranch);
-    }
-
-    private async Task<bool> SyncProductCatalogAsync(HttpClient client, string branchName)
-    {
-        try
-        {
-            using var connection = new SqlConnection(_settings.BuildConnectionString());
-            await connection.OpenAsync();
-            var sellingPriceExpression = await ResolveSellingPriceExpressionAsync(connection);
-            var query = $@"
-                WITH SoldByProduct AS (
-                    SELECT m.ProductID,
-                           SUM(CASE WHEN ISNULL(m.IsStockIn, 0) = 0 THEN COALESCE(m.Quantity, 0) ELSE 0 END) AS SoldQuantity
-                    FROM [dbo].[Movement] m
-                    WHERE UPPER(LTRIM(RTRIM(CAST(m.Branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
-                    GROUP BY m.ProductID
-                ), BalanceByProduct AS (
-                    SELECT b.ProductID, SUM(COALESCE(b.StockBal, 0)) AS AvailableQuantity
-                    FROM [dbo].[ProductStockBalances] b
-                    WHERE UPPER(LTRIM(RTRIM(CAST(b.branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
-                    GROUP BY b.ProductID
-                )
-                  SELECT p.ProductID, p.ProductDesc, p.ProductCode, p.BarCode, COALESCE(p.TaxRate, 0) AS TaxRate,
-                       {sellingPriceExpression} AS SellingPrice,
-                       COALESCE(s.SoldQuantity, 0) AS SoldQuantity,
-                       COALESCE(b.AvailableQuantity, 0) AS AvailableQuantity
-                FROM [dbo].[Products] p
-                LEFT JOIN SoldByProduct s ON s.ProductID = p.ProductID
-                LEFT JOIN BalanceByProduct b ON b.ProductID = p.ProductID
-                WHERE p.ProductID IS NOT NULL
-                  AND p.ProductDesc IS NOT NULL
-                  AND LTRIM(RTRIM(p.ProductDesc)) <> ''
-                  AND ISNULL(p.IsActive, 1) = 1;";
-            using var command = new SqlCommand(query, connection);
-            command.Parameters.AddWithValue("@branch", branchName);
-            using var reader = await command.ExecuteReaderAsync();
-            var products = new List<object>();
-            var productStates = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var availableCount = 0;
-            while (await reader.ReadAsync())
-            {
-                var productId = Convert.ToInt32(reader["ProductID"]);
-                var productName = reader["ProductDesc"]?.ToString()?.Trim() ?? string.Empty;
-                var productCode = reader["ProductCode"]?.ToString()?.Trim() ?? string.Empty;
-                var barcode = reader["BarCode"]?.ToString()?.Trim() ?? string.Empty;
-                var taxRate = Convert.ToDecimal(reader["TaxRate"], CultureInfo.InvariantCulture);
-                var sellingPrice = Convert.ToDecimal(reader["SellingPrice"], CultureInfo.InvariantCulture);
-                var soldQuantity = Convert.ToDecimal(reader["SoldQuantity"], CultureInfo.InvariantCulture);
-                var availableQuantity = Convert.ToDecimal(reader["AvailableQuantity"], CultureInfo.InvariantCulture);
-                var stateKey = productId.ToString(CultureInfo.InvariantCulture);
-                var state = string.Join("\u001f", productName, productCode, barcode,
-                    taxRate.ToString(CultureInfo.InvariantCulture),
-                    sellingPrice.ToString(CultureInfo.InvariantCulture),
-                    soldQuantity.ToString(CultureInfo.InvariantCulture),
-                    availableQuantity.ToString(CultureInfo.InvariantCulture));
-                productStates[stateKey] = state;
-                products.Add(new
-                {
-                    product_id = productId,
-                    product_name = productName,
-                    product_code = productCode,
-                    barcode,
-                    tax_rate = taxRate,
-                    selling_price = sellingPrice,
-                    sold_quantity = soldQuantity,
-                    available_quantity = availableQuantity,
-                });
-                if (availableQuantity != 0)
-                {
-                    availableCount++;
-                }
-            }
-
-            products = products
-                .Where(product =>
-                {
-                    var productId = (int)product.GetType().GetProperty("product_id")!.GetValue(product)!;
-                    return !_productCatalogStates.TryGetValue(productId.ToString(CultureInfo.InvariantCulture), out var previousState)
-                        || previousState != productStates[productId.ToString(CultureInfo.InvariantCulture)];
-                })
-                .ToList();
-
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [BALANCE] Read {availableCount} non-zero available stock balance(s) for {branchName}.");
-            if (products.Count == 0)
-            {
-                _productCatalogStates.Clear();
-                foreach (var item in productStates)
-                {
-                    _productCatalogStates[item.Key] = item.Value;
-                }
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [BALANCE] No catalog changes for {branchName}; skipped upload.");
-                return true;
-            }
-
-            var syncedCount = 0;
-            foreach (var batch in products.Chunk(500))
-            {
-                var payload = JsonSerializer.Serialize(new { branch = branchName, entered_by = Environment.UserName, products = batch });
-                using var content = new StringContent(payload, Encoding.UTF8, "application/json");
-                using var response = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/products/sync/", content);
-                if (!response.IsSuccessStatusCode)
-                {
-                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Product sync failed after {syncedCount} products: {response.StatusCode}");
-                    return false;
-                }
-
-                syncedCount += batch.Length;
-            }
-
-            _productCatalogStates.Clear();
-            foreach (var item in productStates)
-            {
-                _productCatalogStates[item.Key] = item.Value;
-            }
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✓ Synced {syncedCount} products for {branchName} in batches.");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Product sync unavailable: {ex.Message}");
-            return false;
-        }
     }
 
     private async Task<bool> ApplySharedProductCatalogAsync(HttpClient client, string branchName)
@@ -674,56 +540,6 @@ public sealed class BranchSyncDashboardForm : Form
                 return candidate;
             }
         }
-    }
-
-    private static async Task<string> ResolveSellingPriceExpressionAsync(SqlConnection connection)
-    {
-        const string metadataSql = @"
-            SELECT TABLE_NAME, COLUMN_NAME
-            FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_SCHEMA = 'dbo'
-                            AND TABLE_NAME IN ('Products', 'Movement', 'ProductStockBalances')
-              AND COLUMN_NAME IN ('SellingPrice', 'SalePrice', 'RetailPrice', 'UnitPrice', 'Price');";
-        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        using (var metadataCommand = new SqlCommand(metadataSql, connection))
-        using (var reader = await metadataCommand.ExecuteReaderAsync())
-        {
-            while (await reader.ReadAsync())
-            {
-                columns.Add($"{reader["TABLE_NAME"]}.{reader["COLUMN_NAME"]}");
-            }
-        }
-
-        var priceExpressions = new List<string>();
-        foreach (var column in new[] { "SellingPrice", "SalePrice", "RetailPrice", "UnitPrice", "Price" })
-        {
-            if (columns.Contains($"Products.{column}"))
-            {
-                return $"COALESCE(NULLIF(CONVERT(decimal(18,2), p.[{column}]), 0), 0)";
-            }
-        }
-
-        foreach (var column in new[] { "SellingPrice", "SalePrice", "RetailPrice", "UnitPrice", "Price" })
-        {
-            if (columns.Contains($"ProductStockBalances.{column}"))
-            {
-                priceExpressions.Add($"NULLIF((SELECT TOP 1 CONVERT(decimal(18,2), b.[{column}]) FROM [dbo].[ProductStockBalances] b WHERE b.ProductID = p.ProductID AND UPPER(LTRIM(RTRIM(CAST(b.branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch))) ORDER BY b.MvtEntryNo DESC), 0)");
-                break;
-            }
-        }
-
-        foreach (var column in new[] { "SellingPrice", "SalePrice", "RetailPrice", "UnitPrice", "Price" })
-        {
-            if (columns.Contains($"Movement.{column}"))
-            {
-                priceExpressions.Add($"NULLIF((SELECT TOP 1 CONVERT(decimal(18,2), m.[{column}]) FROM [dbo].[Movement] m WHERE m.ProductID = p.ProductID AND m.[{column}] IS NOT NULL AND m.[{column}] <> 0 ORDER BY m.TranDate DESC, m.EntryNo DESC), 0)");
-                break;
-            }
-        }
-
-        return priceExpressions.Count == 0
-            ? "CONVERT(decimal(18,2), 0)"
-            : $"COALESCE({string.Join(", ", priceExpressions)}, 0)";
     }
 
     private async Task<int> DeleteAndConfirmAsync(DeletionTrigger deletion, HttpClient client)
