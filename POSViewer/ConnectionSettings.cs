@@ -7,7 +7,7 @@ namespace POSViewer;
 
 public sealed class ConnectionSettings
 {
-    public const string DefaultApiBaseUrl = "https://loraapi01.onrender.com";
+    public const string DefaultApiBaseUrl = "https://laxdomloraapi.onrender.com";
 
     public string Server { get; set; } = "";
     public string Database { get; set; } = "";
@@ -40,8 +40,10 @@ public sealed class ConnectionSettings
         {
             var path = uri.AbsolutePath.TrimEnd('/');
             var host = uri.Host.Equals("loraapi.onrender.com", StringComparison.OrdinalIgnoreCase)
-                ? "loraapi01.onrender.com"
-                : uri.Host;
+                || uri.Host.Equals("lora-api.onrender.com", StringComparison.OrdinalIgnoreCase)
+                || uri.Host.Equals("loraapi01.onrender.com", StringComparison.OrdinalIgnoreCase)
+                    ? "laxdomloraapi.onrender.com"
+                    : uri.Host;
             if (path.Equals("/api", StringComparison.OrdinalIgnoreCase))
             {
                 path = string.Empty;
