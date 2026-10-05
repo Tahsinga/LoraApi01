@@ -1,6 +1,7 @@
 import hashlib
 import json
 import time
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import wraps
@@ -11,7 +12,7 @@ from django.contrib.auth import get_user_model, update_session_auth_hash
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.forms import SetPasswordForm, UserCreationForm
 from django.core.cache import cache
-from django.db import OperationalError, ProgrammingError, close_old_connections, transaction
+from django.db import IntegrityError, OperationalError, ProgrammingError, close_old_connections, connection, transaction
 from django.db.models import Case, F, IntegerField, Max, OuterRef, Q, Subquery, Sum, When
 from django.db.models.functions import Cast
 from django.http import JsonResponse, HttpResponse
@@ -64,10 +65,49 @@ def invalidate_product_catalog_cache():
     cache.set(PRODUCT_CACHE_VERSION_KEY, int(version) + 1, None)
 
 
+def get_or_create_branch_catalog(branch, product_id, defaults):
+    catalogs = list(
+        ProductCatalog.objects.select_for_update()
+        .filter(branch__iexact=branch, product_id=product_id)
+        .order_by('-updated_at', '-pk')
+    )
+    if not catalogs:
+        return ProductCatalog.objects.select_for_update().get_or_create(
+            branch=branch,
+            product_id=product_id,
+            defaults=defaults,
+        )
+
+    catalog = next((item for item in catalogs if item.branch == branch), catalogs[0])
+    for duplicate in catalogs:
+        if duplicate.pk == catalog.pk:
+            continue
+        if duplicate.pending_stock_adjustment and not catalog.pending_stock_adjustment:
+            catalog.pending_stock_adjustment = True
+            catalog.pending_stock_quantity = duplicate.pending_stock_quantity
+        if duplicate.pending_price_update and not catalog.pending_price_update:
+            catalog.pending_price_update = True
+            catalog.pending_selling_price = duplicate.pending_selling_price
+        if duplicate.sold_quantity is not None and (
+            catalog.sold_quantity is None or duplicate.sold_quantity > catalog.sold_quantity
+        ):
+            catalog.sold_quantity = duplicate.sold_quantity
+        catalog.branch_confirmed = catalog.branch_confirmed or duplicate.branch_confirmed
+        catalog.pending_product_creation = catalog.pending_product_creation or duplicate.pending_product_creation
+
+    duplicate_ids = [item.pk for item in catalogs if item.pk != catalog.pk]
+    if duplicate_ids:
+        ProductCatalog.objects.filter(pk__in=duplicate_ids).delete()
+    if catalog.branch != branch:
+        catalog.branch = branch
+    return catalog, False
+
+
 def retry_on_database_lock(view_func):
     @wraps(view_func)
     def wrapped_view(request, *args, **kwargs):
-        with PRODUCT_SYNC_QUEUE:
+        sync_lock = PRODUCT_SYNC_QUEUE if connection.vendor == 'sqlite' else nullcontext()
+        with sync_lock:
             for attempt in range(5):
                 try:
                     close_old_connections()
@@ -125,6 +165,7 @@ def report_payload(report):
         'id': report.request_id,
         'branch': report.branch,
         'report_date': report.report_date.isoformat(),
+        'scheduled_at': report.scheduled_at.isoformat() if report.scheduled_at else None,
         'status': report.status,
         'requested_at': report.requested_at.timestamp(),
         'scheduled_at': report.scheduled_at.isoformat() if report.scheduled_at else None,
@@ -185,6 +226,7 @@ def product_payload(product):
         'barcode': product.barcode,
         'available_quantity': str(product.available_quantity),
         'selling_price': str(product.selling_price),
+        'tax_rate': str(product.tax_rate),
     }
 
 
@@ -232,10 +274,13 @@ def stock_summary_payload(product, branch):
 def index(request):
     """Browser dashboard for managing branch sale cancellations."""
     cleanup_queues()
-    return render(request, 'loraApi/dashboard.html', {
+    response = render(request, 'loraApi/dashboard.html', {
         'pending_count': DeletionRecord.objects.filter(status__in=['pending', 'processing']).count(),
         'processed_count': DeletionRecord.objects.filter(status='processed').count(),
     })
+    response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response['Pragma'] = 'no-cache'
+    return response
 
 
 @login_required(login_url='/login/')
@@ -459,6 +504,12 @@ def request_sales_report(request):
         branches = [branch['name'] for branch in CONNECTED_BRANCHES.values()]
     branches = sorted(set(branches), key=str.casefold)
     report_date = parse_date(str(payload.get('report_date', '')).strip())
+    scheduled_at_value = payload.get('scheduled_at')
+    scheduled_at = parse_datetime(str(scheduled_at_value)) if scheduled_at_value else None
+    if scheduled_at_value and (scheduled_at is None or timezone.is_naive(scheduled_at)):
+        return JsonResponse({'status': 'error', 'message': 'Choose a valid local print time.'}, status=400)
+    if scheduled_at and scheduled_at <= timezone.now():
+        return JsonResponse({'status': 'error', 'message': 'Print time must be in the future.'}, status=400)
     if not branches or report_date is None:
         return JsonResponse({'status': 'error', 'message': 'Select at least one branch and a valid report date.'}, status=400)
 
@@ -469,11 +520,16 @@ def request_sales_report(request):
             request_id=request_id,
             branch=branch,
             report_date=report_date,
+            scheduled_at=scheduled_at,
+            status='scheduled' if scheduled_at else 'pending',
             requested_by=request.user.get_username(),
         ))
     return JsonResponse({
         'status': 'accepted',
-        'message': f'Sales reports queued for {len(reports)} branch(es) on {report_date.isoformat()}.',
+        'message': (
+            f'Sales reports scheduled for {len(reports)} branch(es) at {timezone.localtime(scheduled_at).strftime("%Y-%m-%d %H:%M")}.'
+            if scheduled_at else f'Sales reports queued for {len(reports)} branch(es) on {report_date.isoformat()}.'
+        ),
         'reports': [report_payload(report) for report in reports],
     }, status=202)
 
@@ -1205,14 +1261,17 @@ def create_branch_product(request):
         barcode = str(payload.get('barcode', '')).strip()
         initial_quantity = Decimal('0')
         selling_price = Decimal(str(payload.get('selling_price', 0) or 0))
+        tax_rate = Decimal(str(payload.get('tax_rate', 0) or 0))
     except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
         return JsonResponse({'status': 'error', 'message': 'Branch, product name, and a valid price are required.'}, status=400)
 
     if requested_product_id and requested_product_id < 12_100_000:
         return JsonResponse({'status': 'error', 'message': 'Product ID must be at least 12100000.'}, status=400)
+    if requested_product_id > 2_147_483_647:
+        return JsonResponse({'status': 'error', 'message': 'Product ID cannot exceed 2147483647.'}, status=400)
     if branch.casefold() == 'main' or not product_name or len(product_name) > 250:
         return JsonResponse({'status': 'error', 'message': 'A product name is required; Main cannot be selected as a branch.'}, status=400)
-    if len(product_code) > 50 or len(barcode) > 100 or initial_quantity < 0 or initial_quantity != whole_quantity(initial_quantity) or selling_price < 0:
+    if len(product_code) > 50 or len(barcode) > 100 or initial_quantity < 0 or initial_quantity != whole_quantity(initial_quantity) or selling_price < 0 or tax_rate < 0 or tax_rate > 100:
         return JsonResponse({'status': 'error', 'message': 'Product code, barcode, quantity, and price are invalid.'}, status=400)
 
     branch_targets = set(ProductCatalog.objects.exclude(branch__iexact='MAIN').exclude(branch='').values_list('branch', flat=True))
@@ -1253,6 +1312,7 @@ def create_branch_product(request):
                 barcode=barcode,
                 pending_stock_quantity=initial_quantity,
                 selling_price=selling_price,
+                tax_rate=tax_rate,
                 branch_confirmed=False,
                 pending_product_creation=True,
             )
@@ -1270,6 +1330,7 @@ def create_branch_product(request):
         'barcode': product.barcode,
         'initial_quantity': str(product.pending_stock_quantity),
         'selling_price': str(product.selling_price),
+        'tax_rate': str(product.tax_rate),
         'branches': branches,
     }, status=202)
 
@@ -1309,6 +1370,7 @@ def complete_branch_product_creation(request):
                     'product_code': product.product_code,
                     'barcode': product.barcode,
                     'selling_price': product.selling_price,
+                    'tax_rate': product.tax_rate,
                     'branch_confirmed': True,
                     'pending_product_creation': False,
                 },
@@ -1338,6 +1400,7 @@ def delete_branch_product(request):
 
     if not password or not request.user.check_password(password):
         return JsonResponse({'status': 'error', 'message': 'Enter your account password to confirm product deletion.'}, status=403)
+
     if not branch or branch.casefold() == 'main' or product_id <= 0:
         return JsonResponse({'status': 'error', 'message': 'Select a branch product to delete.'}, status=400)
 
@@ -1395,18 +1458,17 @@ def complete_branch_product_deletion(request):
     except (TypeError, ValueError, json.JSONDecodeError):
         return JsonResponse({'status': 'error', 'message': 'Branch and deletion request are required.'}, status=400)
 
-    with transaction.atomic():
-        deletion = ProductDeletionRequest.objects.select_for_update().filter(
-            pk=request_id,
-            branch__iexact=branch,
-        ).first()
-        if deletion is None:
-            return JsonResponse({'status': 'error', 'message': 'The deletion request was not found.'}, status=404)
-        if deletion.status != 'pending':
-            return JsonResponse({'status': 'ok', 'deletion_status': deletion.status})
+    deletion = ProductDeletionRequest.objects.filter(
+        pk=request_id,
+        branch__iexact=branch,
+        status='pending',
+    ).first()
+    if deletion is None:
+        return JsonResponse({'status': 'error', 'message': 'The pending product deletion was not found.'}, status=404)
 
+    with transaction.atomic():
         deletion.status = 'completed' if success else 'failed'
-        deletion.error = '' if success else str(payload.get('error', 'Product deletion failed.'))[:2000]
+        deletion.error = '' if success else str(payload.get('error', '')).strip()[:2000]
         deletion.save(update_fields=['status', 'error', 'updated_at'])
         if success:
             ProductCatalog.objects.filter(
@@ -1426,7 +1488,6 @@ def complete_branch_product_deletion(request):
         'branch': deletion.branch,
         'product_id': deletion.product_id,
         'success': success,
-        'deletion_status': deletion.status,
     })
 
 
@@ -1468,8 +1529,9 @@ def product_catalog(request):
 
     query = str(request.GET.get('q', '')).strip()
     branch = str(request.GET.get('branch', '')).strip()
+    include_all = str(request.GET.get('all', '')).strip().lower() in {'1', 'true', 'yes'}
     cache_version = cache.get(PRODUCT_CACHE_VERSION_KEY, 0)
-    request_key = hashlib.sha256(f'{branch.casefold()}:{query.casefold()}'.encode()).hexdigest()
+    request_key = hashlib.sha256(f'{branch.casefold()}:{query.casefold()}:{include_all}'.encode()).hexdigest()
     cache_key = f'lora:products:{cache_version}:{request_key}'
     cached_products = cache.get(cache_key)
     if cached_products is not None:
@@ -1490,7 +1552,7 @@ def product_catalog(request):
             | Q(barcode__icontains=query)
             | Q(product_id__icontains=query)
         )[:30]
-    else:
+    elif not include_all:
         products = products[:3000]
     product_rows = [product_payload(product) for product in products]
     cache.set(cache_key, product_rows, PRODUCT_CACHE_SECONDS)
@@ -1519,156 +1581,11 @@ def deleted_products(request):
 
 
 @csrf_exempt
-def shared_product_catalog(request):
-    if request.method != 'GET':
-        return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
-
-    since = parse_datetime(str(request.GET.get('since', '')).strip())
-    products = ProductCatalog.objects.filter(branch_confirmed=True)
-    if since is not None:
-        if timezone.is_naive(since):
-            since = timezone.make_aware(since, timezone.get_current_timezone())
-        changed_ids = products.filter(updated_at__gte=since - timedelta(seconds=3)).values_list('product_id', flat=True).distinct()
-        products = products.filter(product_id__in=changed_ids)
-
-    shared_products = {}
-    for product in products.filter(branch__iexact='MAIN').iterator():
-        shared_products[product.product_id] = product
-    for product in products.exclude(branch__iexact='MAIN').order_by('branch').iterator():
-        shared_products.setdefault(product.product_id, product)
-
-    return JsonResponse({
-        'status': 'ok',
-        'changed': bool(shared_products),
-        'full': since is None,
-        'products': [
-            {
-                'product_id': product.product_id,
-                'product_name': product.product_name,
-                'product_code': product.product_code,
-                'barcode': product.barcode,
-                'selling_price': str(product.selling_price),
-                'tax_rate': str(product.tax_rate),
-            }
-            for product in shared_products.values()
-        ],
-    })
-
-
-@csrf_exempt
-@retry_on_database_lock
-def sync_product_catalog(request):
-    if request.method != 'POST':
-        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
-
-    try:
-        payload = json.loads(request.body or '{}')
-        products = payload.get('products', [])
-        branch = str(payload.get('branch', '')).strip()
-        entered_by = str(payload.get('entered_by', '')).strip() or f'{branch} branch sync'
-    except json.JSONDecodeError:
-        return JsonResponse({'status': 'error', 'message': 'Invalid JSON'}, status=400)
-
-    if not isinstance(products, list) or not branch:
-        return JsonResponse({'status': 'error', 'message': 'Branch and products are required.'}, status=400)
-
-    updated = 0
-    with transaction.atomic():
-        for item in products:
-            try:
-                product_id = int(item.get('product_id'))
-            except (TypeError, ValueError):
-                continue
-            product_name = str(item.get('product_name', '')).strip()
-            if product_id <= 0 or not product_name:
-                continue
-            available_quantity = whole_quantity(Decimal(str(item.get('available_quantity', 0) or 0)))
-            selling_price = Decimal(str(item.get('selling_price', 0) or 0))
-            sold_quantity_value = item.get('sold_quantity')
-            sold_quantity = whole_quantity(Decimal(str(sold_quantity_value or 0))) if sold_quantity_value is not None else None
-            catalog, created = ProductCatalog.objects.select_for_update().get_or_create(
-                branch=branch,
-                product_id=product_id,
-                defaults={'available_quantity': available_quantity, 'selling_price': selling_price, 'branch_confirmed': True},
-            )
-            catalog.branch_confirmed = True
-            previous_quantity = catalog.available_quantity
-            previous_sold_quantity = catalog.sold_quantity or Decimal('0')
-            stock_take_sale_sync = False
-            if catalog.pending_stock_adjustment:
-                if catalog.pending_stock_quantity == available_quantity:
-                    catalog.pending_stock_adjustment = False
-                    catalog.pending_stock_quantity = None
-                elif sold_quantity is not None and sold_quantity > previous_sold_quantity:
-                    catalog.pending_stock_adjustment = False
-                    catalog.pending_stock_quantity = None
-                    stock_take_sale_sync = True
-                else:
-                    available_quantity = catalog.pending_stock_quantity
-                    sold_quantity = catalog.sold_quantity
-            if created and available_quantity > 0:
-                transfer_already_logged = StockMovement.objects.filter(
-                    branch__iexact=branch,
-                    product_id=product_id,
-                    movement_type='received',
-                    quantity=available_quantity,
-                    source__icontains=f'transfer to {branch}',
-                ).exists()
-                if not transfer_already_logged:
-                    StockMovement.objects.create(
-                        branch=branch,
-                        product_id=product_id,
-                        product_name=product_name,
-                        movement_type='received',
-                        quantity=available_quantity,
-                        source=entered_by,
-                    )
-            elif available_quantity < previous_quantity:
-                latest_adjustment = StockMovement.objects.filter(
-                    branch__iexact=branch,
-                    product_id=product_id,
-                    movement_type='adjusted',
-                ).order_by('-created_at').first()
-                adjustment_sync_pending = latest_adjustment is not None and latest_adjustment.created_at >= catalog.updated_at
-                if not adjustment_sync_pending or stock_take_sale_sync:
-                    StockMovement.objects.create(
-                        branch=branch,
-                        product_id=product_id,
-                        product_name=product_name,
-                        movement_type='sold',
-                        quantity=previous_quantity - available_quantity,
-                        source=entered_by,
-                    )
-            elif available_quantity > previous_quantity:
-                increase = available_quantity - previous_quantity
-                transfer_already_logged = StockMovement.objects.filter(
-                    branch__iexact=branch,
-                    product_id=product_id,
-                    movement_type='received',
-                    quantity=increase,
-                    source__icontains=f'transfer to {branch}',
-                ).exists()
-                if not transfer_already_logged:
-                    StockMovement.objects.create(
-                        branch=branch,
-                        product_id=product_id,
-                        product_name=product_name,
-                        movement_type='received',
-                        quantity=increase,
-                        source=entered_by,
-                    )
-            catalog.product_name = product_name
-            catalog.product_code = str(item.get('product_code', '')).strip()
-            catalog.barcode = str(item.get('barcode', '')).strip()
-            catalog.available_quantity = available_quantity
-            catalog.selling_price = selling_price
-            if sold_quantity is not None:
-                catalog.sold_quantity = sold_quantity
-            catalog.save()
-            updated += 1
-
-    invalidate_product_catalog_cache()
-    return JsonResponse({'status': 'ok', 'updated': updated})
+def product_catalog_sync_disabled(request):
+    return JsonResponse(
+        {'status': 'disabled', 'message': 'Branch product catalog sync is no longer supported.'},
+        status=410,
+    )
 
 
 @csrf_exempt
@@ -1722,6 +1639,7 @@ def shared_product_catalog(request):
             'product_code': product.product_code,
             'barcode': product.barcode,
             'selling_price': str(product.selling_price),
+            'tax_rate': str(product.tax_rate),
         })
 
     return JsonResponse({
@@ -1752,7 +1670,12 @@ def publish_product_catalog(request):
             product_id = int(item.get('product_id'))
             available_quantity = Decimal(str(item.get('available_quantity', 0) or 0))
             selling_price = Decimal(str(item.get('selling_price', 0) or 0))
-            tax_rate = Decimal(str(item.get('tax_rate', 0) or 0))
+            raw_tax_rate = item.get('tax_rate')
+            if raw_tax_rate is None or str(raw_tax_rate).strip() == '':
+                existing_product = ProductCatalog.objects.filter(product_id=product_id).order_by('-updated_at', '-id').first()
+                tax_rate = existing_product.tax_rate if existing_product and existing_product.tax_rate is not None else Decimal('0')
+            else:
+                tax_rate = Decimal(str(raw_tax_rate))
         except (TypeError, ValueError, InvalidOperation):
             continue
         product_name = str(item.get('product_name', '')).strip()
@@ -1863,10 +1786,10 @@ def complete_stock_transfer(request):
     if payload.get('success'):
         if transfer.status != 'completed':
             with transaction.atomic():
-                catalog, created = ProductCatalog.objects.select_for_update().get_or_create(
-                    branch=transfer.branch,
-                    product_id=transfer.product_id,
-                    defaults={
+                catalog, created = get_or_create_branch_catalog(
+                    transfer.branch,
+                    transfer.product_id,
+                    {
                         'product_name': transfer.product_name,
                         'available_quantity': transfer.quantity,
                     },
@@ -1987,7 +1910,12 @@ def branch_sync(request):
         pending_query = DeletionRecord.objects.filter(status='pending')
         if branch_name:
             pending_query = pending_query.filter(branch__iexact=branch_name)
-        pending = [record_payload(item) for item in pending_query]
+        with transaction.atomic():
+            pending_records = list(pending_query.select_for_update())
+            for record in pending_records:
+                record.status = 'processing'
+                record.save(update_fields=['status'])
+        pending = [record_payload(item) for item in pending_records]
 
         report_query = SalesReportRequest.objects.filter(status='pending')
         if branch_name:
@@ -2159,15 +2087,18 @@ def main_sync(request):
         ]
         queue.sort(key=lambda item: item['timestamp'], reverse=True)
 
-        return JsonResponse({
+        response = JsonResponse({
             'status': 'ok',
             'service': 'main_sync_trigger',
             'pending_deletions': pending,
             'queue': queue,
             'pending_count': DeletionRecord.objects.filter(status__in=['pending', 'processing']).count(),
             'recently_processed': processed,
-            'processed_count': DeletionRecord.objects.filter(status='processed').count()
+            'processed_count': DeletionRecord.objects.filter(status='processed').count(),
+            'queue': queue[:40],
         })
+        response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        return response
 
     try:
         payload = json.loads(request.body or '{}')

@@ -367,7 +367,8 @@ public sealed class MainSyncDashboardForm : Form
                     ProductCode nvarchar(50) NULL,
                     BarCode nvarchar(100) NULL,
                     SellingPrice decimal(18,2) NOT NULL CONSTRAINT DF_BranchProductCatalog_SellingPrice DEFAULT 0,
-                        AvailableQuantity decimal(18,3) NOT NULL CONSTRAINT DF_BranchProductCatalog_AvailableQuantity DEFAULT 0,
+                    AvailableQuantity decimal(18,3) NOT NULL CONSTRAINT DF_BranchProductCatalog_AvailableQuantity DEFAULT 0,
+                    TaxRate decimal(18,2) NOT NULL CONSTRAINT DF_BranchProductCatalog_TaxRate DEFAULT 0,
                     UpdatedAt datetime2 NOT NULL CONSTRAINT DF_BranchProductCatalog_UpdatedAt DEFAULT SYSUTCDATETIME(),
                     CONSTRAINT PK_BranchProductCatalog PRIMARY KEY (Branch, ProductID)
                 );
@@ -380,7 +381,9 @@ public sealed class MainSyncDashboardForm : Form
             IF COL_LENGTH('dbo.BranchProductCatalog', 'AvailableQuantity') IS NULL
                 ALTER TABLE [dbo].[BranchProductCatalog] ADD AvailableQuantity decimal(18,3) NOT NULL CONSTRAINT DF_BranchProductCatalog_AvailableQuantity_Existing DEFAULT 0;
             IF COL_LENGTH('dbo.BranchProductCatalog', 'SellingPrice') IS NULL
-                ALTER TABLE [dbo].[BranchProductCatalog] ADD SellingPrice decimal(18,2) NOT NULL CONSTRAINT DF_BranchProductCatalog_SellingPrice_Existing DEFAULT 0;", connection))
+                ALTER TABLE [dbo].[BranchProductCatalog] ADD SellingPrice decimal(18,2) NOT NULL CONSTRAINT DF_BranchProductCatalog_SellingPrice_Existing DEFAULT 0;
+            IF COL_LENGTH('dbo.BranchProductCatalog', 'TaxRate') IS NULL
+                ALTER TABLE [dbo].[BranchProductCatalog] ADD TaxRate decimal(18,2) NOT NULL CONSTRAINT DF_BranchProductCatalog_TaxRate_Existing DEFAULT 0;", connection))
         {
             await alterCommand.ExecuteNonQueryAsync();
         }
@@ -389,11 +392,11 @@ public sealed class MainSyncDashboardForm : Form
         {
             const string upsertSql = @"
                 UPDATE [dbo].[BranchProductCatalog]
-                SET ProductDesc = @productName, ProductCode = @productCode, BarCode = @barcode, SellingPrice = @sellingPrice, AvailableQuantity = @availableQuantity, UpdatedAt = SYSUTCDATETIME()
+                SET ProductDesc = @productName, ProductCode = @productCode, BarCode = @barcode, SellingPrice = @sellingPrice, AvailableQuantity = @availableQuantity, TaxRate = @taxRate, UpdatedAt = SYSUTCDATETIME()
                 WHERE Branch = @branch AND ProductID = @productId;
                 IF @@ROWCOUNT = 0
-                INSERT INTO [dbo].[BranchProductCatalog](Branch, ProductID, ProductDesc, ProductCode, BarCode, SellingPrice, AvailableQuantity)
-                VALUES (@branch, @productId, @productName, @productCode, @barcode, @sellingPrice, @availableQuantity);";
+                INSERT INTO [dbo].[BranchProductCatalog](Branch, ProductID, ProductDesc, ProductCode, BarCode, SellingPrice, AvailableQuantity, TaxRate)
+                VALUES (@branch, @productId, @productName, @productCode, @barcode, @sellingPrice, @availableQuantity, @taxRate);";
             using var command = new SqlCommand(upsertSql, connection);
             command.Parameters.AddWithValue("@branch", product.branch ?? string.Empty);
             command.Parameters.AddWithValue("@productId", product.product_id);
@@ -402,6 +405,7 @@ public sealed class MainSyncDashboardForm : Form
             command.Parameters.AddWithValue("@barcode", product.barcode ?? string.Empty);
             command.Parameters.AddWithValue("@sellingPrice", product.selling_price);
             command.Parameters.AddWithValue("@availableQuantity", product.available_quantity);
+            command.Parameters.AddWithValue("@taxRate", product.tax_rate);
             await command.ExecuteNonQueryAsync();
         }
     }
@@ -411,7 +415,7 @@ public sealed class MainSyncDashboardForm : Form
         using var connection = new SqlConnection(_settings.BuildConnectionString());
         await connection.OpenAsync();
         var query = @"
-                        SELECT Branch, ProductID, ProductDesc, ProductCode, BarCode, SellingPrice, AvailableQuantity
+                        SELECT Branch, ProductID, ProductDesc, ProductCode, BarCode, SellingPrice, AvailableQuantity, TaxRate
                         FROM [dbo].[BranchProductCatalog]
                         WHERE ProductID IS NOT NULL
                             AND ProductDesc IS NOT NULL
@@ -429,8 +433,9 @@ public sealed class MainSyncDashboardForm : Form
             var barcode = reader["BarCode"]?.ToString()?.Trim() ?? string.Empty;
             var sellingPrice = Convert.ToDecimal(reader["SellingPrice"], CultureInfo.InvariantCulture);
             var availableQuantity = Convert.ToDecimal(reader["AvailableQuantity"], CultureInfo.InvariantCulture);
+            var taxRate = Convert.ToDecimal(reader["TaxRate"], CultureInfo.InvariantCulture);
             var stateKey = $"{branch}\u001e{productId}";
-            var state = $"{productName}\u001f{productCode}\u001f{barcode}\u001f{sellingPrice}\u001f{availableQuantity}";
+            var state = $"{productName}\u001f{productCode}\u001f{barcode}\u001f{sellingPrice}\u001f{availableQuantity}\u001f{taxRate}";
             productStates[stateKey] = state;
             if (_publishedCatalogStates.TryGetValue(stateKey, out var previousState) && previousState == state)
             {
@@ -443,9 +448,10 @@ public sealed class MainSyncDashboardForm : Form
                 branch,
                 product_name = productName,
                 product_code = productCode,
-                barcode
-                , selling_price = sellingPrice
-                , available_quantity = availableQuantity
+                barcode,
+                selling_price = sellingPrice,
+                available_quantity = availableQuantity,
+                tax_rate = taxRate
             });
         }
 
@@ -533,6 +539,7 @@ public sealed class MainSyncDashboardForm : Form
         public string? barcode { get; set; }
         public decimal selling_price { get; set; }
         public decimal available_quantity { get; set; }
+        public decimal tax_rate { get; set; }
     }
 
     private sealed class StockTransferLogResponse

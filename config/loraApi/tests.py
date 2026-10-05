@@ -550,6 +550,23 @@ class StockTransferTests(TestCase):
 		self.assertEqual(product.available_quantity, 8)
 		self.assertEqual(str(product.tax_rate), '5.00')
 
+	def test_publish_product_catalog_keeps_existing_tax_rate_when_payload_omits_it(self):
+		ProductCatalog.objects.create(
+			branch='MAIN', product_id=1003, product_name='Published Product Existing Tax',
+			selling_price='12.50', tax_rate='12.50', branch_confirmed=True,
+		)
+		response = self.client.post(
+			'/api/products/publish/',
+			data=json.dumps({'products': [{
+				'branch': 'BranchA', 'product_id': 1003, 'product_name': 'Published Product Existing Tax',
+				'available_quantity': 8, 'selling_price': '12.50',
+			}]}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(str(ProductCatalog.objects.get(branch='BranchA', product_id=1003).tax_rate), '12.50')
+
 	def test_web_can_queue_branch_product_and_branch_can_acknowledge_it(self):
 		BranchHeartbeat.objects.create(branch='BranchB', last_seen=timezone.now())
 		BranchHeartbeat.objects.create(branch='Offline Branch', last_seen=timezone.now() - timedelta(days=1))

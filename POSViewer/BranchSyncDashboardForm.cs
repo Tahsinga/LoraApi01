@@ -993,27 +993,48 @@ public sealed class BranchSyncDashboardForm : Form
                 actualProductId = Convert.ToInt32(await nextProductIdCommand.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
             }
 
-            const string productIdExistsSql = "SELECT COUNT(1) FROM [dbo].[Products] WHERE ProductID = @productId;";
-            using (var productIdExistsCommand = new SqlCommand(productIdExistsSql, connection, transaction))
+            const string existingProductSql = "SELECT ProductDesc, BarCode FROM [dbo].[Products] WITH (UPDLOCK, HOLDLOCK) WHERE ProductID = @productId;";
+            string? existingProductName = null;
+            string? existingBarcode = null;
+            using (var existingProductCommand = new SqlCommand(existingProductSql, connection, transaction))
             {
-                productIdExistsCommand.Parameters.AddWithValue("@productId", actualProductId);
-                if (Convert.ToInt32(await productIdExistsCommand.ExecuteScalarAsync(), CultureInfo.InvariantCulture) > 0)
+                existingProductCommand.Parameters.AddWithValue("@productId", actualProductId);
+                using var existingProductReader = await existingProductCommand.ExecuteReaderAsync();
+                if (await existingProductReader.ReadAsync())
                 {
-                    throw new InvalidOperationException($"Product ID {actualProductId} already exists in dbo.Products.");
+                    existingProductName = Convert.ToString(existingProductReader["ProductDesc"], CultureInfo.InvariantCulture)?.Trim();
+                    existingBarcode = Convert.ToString(existingProductReader["BarCode"], CultureInfo.InvariantCulture)?.Trim();
                 }
             }
 
-            actualProductId = await InsertPosProductAsync(
-                connection,
-                transaction,
-                productCreation.product_id,
-                productCreation.product_name.Trim(),
-                (actualProductId + 1).ToString(CultureInfo.InvariantCulture),
-                productCreation.barcode?.Trim() ?? string.Empty,
-                sellingPrice,
-                taxRate);
+            var requestedProductName = productCreation.product_name.Trim();
+            var requestedBarcode = productCreation.barcode?.Trim() ?? string.Empty;
+            if (existingProductName is not null)
+            {
+                if (!string.Equals(existingProductName, requestedProductName, StringComparison.OrdinalIgnoreCase)
+                    || (!string.IsNullOrEmpty(requestedBarcode) && !string.Equals(existingBarcode, requestedBarcode, StringComparison.Ordinal)))
+                {
+                    throw new InvalidOperationException($"Product ID {actualProductId} already belongs to '{existingProductName}' in dbo.Products; it does not match '{requestedProductName}'.");
+                }
+            }
+            else
+            {
+                actualProductId = await InsertPosProductAsync(
+                    connection,
+                    transaction,
+                    productCreation.product_id,
+                    requestedProductName,
+                    (actualProductId + 1).ToString(CultureInfo.InvariantCulture),
+                    requestedBarcode,
+                    sellingPrice,
+                    taxRate);
+            }
 
             const string insertBalanceSql = @"
+                IF NOT EXISTS (
+                    SELECT 1 FROM [dbo].[ProductStockBalances]
+                    WHERE ProductID = @productId AND branch = @branch
+                )
                 INSERT INTO [dbo].[ProductStockBalances]
                     (ProductID, StockBal, MvtEntryNo, coid, branch, batchnumber, expirydate)
                 VALUES (

@@ -280,6 +280,7 @@ public sealed class DashboardForm : Form
                         ProductCode nvarchar(50) NULL,
                         BarCode nvarchar(100) NULL,
                         SellingPrice decimal(18,2) NOT NULL CONSTRAINT DF_BranchProductCatalog_SellingPrice DEFAULT 0,
+                        TaxRate decimal(18,2) NOT NULL CONSTRAINT DF_BranchProductCatalog_TaxRate DEFAULT 0,
                         UpdatedAt datetime2 NOT NULL CONSTRAINT DF_BranchProductCatalog_UpdatedAt DEFAULT SYSUTCDATETIME(),
                         CONSTRAINT PK_BranchProductCatalog PRIMARY KEY (Branch, ProductID)
                     );
@@ -290,7 +291,9 @@ public sealed class DashboardForm : Form
             }
             using (var alterCommand = new SqlCommand(@"
                 IF COL_LENGTH('dbo.BranchProductCatalog', 'SellingPrice') IS NULL
-                    ALTER TABLE [dbo].[BranchProductCatalog] ADD SellingPrice decimal(18,2) NOT NULL CONSTRAINT DF_BranchProductCatalog_SellingPrice_Existing DEFAULT 0;", connection))
+                    ALTER TABLE [dbo].[BranchProductCatalog] ADD SellingPrice decimal(18,2) NOT NULL CONSTRAINT DF_BranchProductCatalog_SellingPrice_Existing DEFAULT 0;
+                IF COL_LENGTH('dbo.BranchProductCatalog', 'TaxRate') IS NULL
+                    ALTER TABLE [dbo].[BranchProductCatalog] ADD TaxRate decimal(18,2) NOT NULL CONSTRAINT DF_BranchProductCatalog_TaxRate_Existing DEFAULT 0;", connection))
             {
                 await alterCommand.ExecuteNonQueryAsync();
             }
@@ -299,11 +302,11 @@ public sealed class DashboardForm : Form
             {
                 const string upsertSql = @"
                     UPDATE [dbo].[BranchProductCatalog]
-                    SET ProductDesc = @productName, ProductCode = @productCode, BarCode = @barcode, SellingPrice = @sellingPrice, UpdatedAt = SYSUTCDATETIME()
+                    SET ProductDesc = @productName, ProductCode = @productCode, BarCode = @barcode, SellingPrice = @sellingPrice, TaxRate = @taxRate, UpdatedAt = SYSUTCDATETIME()
                     WHERE Branch = @branch AND ProductID = @productId;
                     IF @@ROWCOUNT = 0
-                    INSERT INTO [dbo].[BranchProductCatalog](Branch, ProductID, ProductDesc, ProductCode, BarCode, SellingPrice)
-                    VALUES (@branch, @productId, @productName, @productCode, @barcode, @sellingPrice);";
+                    INSERT INTO [dbo].[BranchProductCatalog](Branch, ProductID, ProductDesc, ProductCode, BarCode, SellingPrice, TaxRate)
+                    VALUES (@branch, @productId, @productName, @productCode, @barcode, @sellingPrice, @taxRate);";
                 using var command = new SqlCommand(upsertSql, connection);
                 command.Parameters.AddWithValue("@branch", product.branch ?? string.Empty);
                 command.Parameters.AddWithValue("@productId", product.product_id);
@@ -311,6 +314,7 @@ public sealed class DashboardForm : Form
                 command.Parameters.AddWithValue("@productCode", product.product_code ?? string.Empty);
                 command.Parameters.AddWithValue("@barcode", product.barcode ?? string.Empty);
                 command.Parameters.AddWithValue("@sellingPrice", product.selling_price);
+                command.Parameters.AddWithValue("@taxRate", product.tax_rate);
                 await command.ExecuteNonQueryAsync();
             }
 
@@ -482,6 +486,7 @@ public sealed class DashboardForm : Form
         public string? product_code { get; set; }
         public string? barcode { get; set; }
         public decimal selling_price { get; set; }
+        public decimal tax_rate { get; set; }
     }
 
     private async Task TryCreateReturnAsync()

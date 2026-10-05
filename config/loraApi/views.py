@@ -1603,7 +1603,12 @@ def publish_product_catalog(request):
             product_id = int(item.get('product_id'))
             available_quantity = Decimal(str(item.get('available_quantity', 0) or 0))
             selling_price = Decimal(str(item.get('selling_price', 0) or 0))
-            tax_rate = Decimal(str(item.get('tax_rate', 0) or 0))
+            raw_tax_rate = item.get('tax_rate')
+            if raw_tax_rate is None or str(raw_tax_rate).strip() == '':
+                existing_product = ProductCatalog.objects.filter(product_id=product_id).order_by('-updated_at', '-id').first()
+                tax_rate = existing_product.tax_rate if existing_product and existing_product.tax_rate is not None else Decimal('0')
+            else:
+                tax_rate = Decimal(str(raw_tax_rate))
         except (TypeError, ValueError, InvalidOperation):
             continue
         product_name = str(item.get('product_name', '')).strip()

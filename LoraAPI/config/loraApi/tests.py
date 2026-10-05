@@ -1,5 +1,6 @@
-import gzip
 from datetime import datetime, timedelta, timezone as datetime_timezone
+import gzip
+import re
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
@@ -8,41 +9,36 @@ from django.core.management import call_command
 from django.utils import timezone
 from loraApi.state_store import load_state
 from loraApi.models import BranchHeartbeat, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
+
 import json
 
 
 class ProductDeletionTests(TestCase):
 	def setUp(self):
-		self.password = 'ProductDeletePass4182!'
-		admin = get_user_model().objects.create_superuser(username='product-delete-admin', password=self.password)
+		admin = get_user_model().objects.create_superuser(username='product-delete-admin', password='ProductDeletePass4182!')
 		self.client.force_login(admin)
 		ProductCatalog.objects.create(branch='BranchA', product_id=3001, product_name='Branch Product')
 		ProductCatalog.objects.create(branch='BranchB', product_id=3001, product_name='Branch Product')
 		ProductCatalog.objects.create(branch='MAIN', product_id=3001, product_name='Branch Product')
 
-	def test_deletion_requires_the_current_users_password(self):
-		for password in ['', 'not-the-password']:
-			with self.subTest(password='missing' if not password else 'incorrect'):
-				response = self.client.post(
-					'/api/products/delete/',
-					data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': password}),
-					content_type='application/json',
-				)
-				self.assertEqual(response.status_code, 403)
-		self.assertFalse(ProductDeletionRequest.objects.exists())
-
-	def test_deletion_is_queued_polled_and_completed_for_only_one_branch(self):
-		since = (timezone.now() - timedelta(seconds=1)).isoformat()
+	def test_web_queues_branch_deletion_and_branch_confirmation_removes_only_that_branch(self):
+		since = timezone.now().isoformat()
 		response = self.client.post(
 			'/api/products/delete/',
-			data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': self.password}),
+			data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': 'ProductDeletePass4182!'}),
 			content_type='application/json',
 		)
+
 		self.assertEqual(response.status_code, 202)
 		request_id = response.json()['request_id']
+		self.assertEqual(response.json()['product_name'], 'Branch Product')
 		self.assertEqual(self.client.get('/api/products/?branch=BranchA').json()['products'], [])
-		stock_summary = self.client.get('/api/stock/summary/', {'branch': 'BranchA', 'since': since}).json()
-		self.assertEqual(stock_summary['removed_product_ids'], [3001])
+		self.assertEqual(self.client.get('/api/stock/summary/?branch=BranchA').json()['products'], [])
+		self.assertEqual(
+			self.client.get(f'/api/stock/summary/?branch=BranchA&since={since.replace("+", "%2B")}').json()['removed_product_ids'],
+			[3001],
+		)
+
 		branch_poll = self.client.get('/api/branch-sync/?branch=BranchA').json()
 		self.assertEqual(branch_poll['pending_product_deletions'], [{
 			'request_id': request_id,
@@ -51,6 +47,7 @@ class ProductDeletionTests(TestCase):
 			'product_name': 'Branch Product',
 		}])
 		self.assertEqual(self.client.get('/api/branch-sync/?branch=BranchB').json()['pending_product_deletions'], [])
+
 		complete = self.client.post(
 			'/api/products/delete/complete/',
 			data=json.dumps({'request_id': request_id, 'branch': 'BranchA', 'success': True}),
@@ -62,26 +59,130 @@ class ProductDeletionTests(TestCase):
 		self.assertTrue(ProductCatalog.objects.filter(branch='BranchB', product_id=3001).exists())
 		self.assertTrue(ProductCatalog.objects.filter(branch='MAIN', product_id=3001).exists())
 
-	def test_deleted_products_page_and_api_only_show_completed_items(self):
-		ProductDeletionRequest.objects.create(
-			branch='BranchA', product_id=3001, product_name='Branch Product', status='completed',
+	def test_failed_branch_deletion_restores_product_to_web_catalog(self):
+		response = self.client.post(
+			'/api/products/delete/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': 'ProductDeletePass4182!'}),
+			content_type='application/json',
+		)
+		request_id = response.json()['request_id']
+		complete = self.client.post(
+			'/api/products/delete/complete/',
+			data=json.dumps({
+				'request_id': request_id,
+				'branch': 'BranchA',
+				'success': False,
+				'error': 'Product table update failed',
+			}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(complete.status_code, 200)
+		self.assertEqual(ProductDeletionRequest.objects.get(pk=request_id).status, 'failed')
+		self.assertEqual(ProductDeletionRequest.objects.get(pk=request_id).error, 'Product table update failed')
+		self.assertEqual(
+			[item['product_id'] for item in self.client.get('/api/products/?branch=BranchA').json()['products']],
+			[3001],
+		)
+
+	def test_main_or_in_flight_transfer_product_cannot_be_deleted(self):
+		main_response = self.client.post(
+			'/api/products/delete/',
+			data=json.dumps({'branch': 'MAIN', 'product_id': 3001, 'password': 'ProductDeletePass4182!'}),
+			content_type='application/json',
+		)
+		self.assertEqual(main_response.status_code, 400)
+
+		StockTransfer.objects.create(
+			transfer_id='DELETE_GUARD', branch='BranchA', product_id=3001,
+			product_name='Branch Product', quantity=1,
+		)
+		transfer_response = self.client.post(
+			'/api/products/delete/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': 'ProductDeletePass4182!'}),
+			content_type='application/json',
+		)
+		self.assertEqual(transfer_response.status_code, 409)
+
+	def test_stock_transfer_is_rejected_after_branch_deletion_is_queued(self):
+		deletion = self.client.post(
+			'/api/products/delete/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': 'ProductDeletePass4182!'}),
+			content_type='application/json',
+		)
+		self.assertEqual(deletion.status_code, 202)
+
+		transfer = self.client.post(
+			'/api/stock/transfers/',
+			data=json.dumps({
+				'branch': 'BranchA',
+				'product_id': 3001,
+				'product_name': 'Branch Product',
+				'quantity': 2,
+			}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(transfer.status_code, 409)
+		self.assertFalse(StockTransfer.objects.exists())
+
+	def test_web_deletion_requires_the_current_users_password(self):
+		for password in ['', 'not-the-password']:
+			with self.subTest(password='missing' if not password else 'incorrect'):
+				response = self.client.post(
+					'/api/products/delete/',
+					data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': password}),
+					content_type='application/json',
+				)
+				self.assertEqual(response.status_code, 403)
+		self.assertFalse(ProductDeletionRequest.objects.exists())
+
+	def test_deleted_products_page_and_api_show_completed_deletions(self):
+		completed = ProductDeletionRequest.objects.create(
+			branch='BranchA', product_id=3001, product_name='Branch Product',
+			requested_by='product-delete-admin', status='completed',
 		)
 		ProductDeletionRequest.objects.create(
-			branch='BranchB', product_id=3001, product_name='Pending Product', status='pending',
+			branch='BranchB', product_id=3001, product_name='Still pending', status='pending',
 		)
+
 		page = self.client.get('/products/deleted/')
 		response = self.client.get('/api/products/deleted/')
+
 		self.assertEqual(page.status_code, 200)
 		self.assertContains(page, 'Deleted products')
-		self.assertEqual(len(response.json()['products']), 1)
-
-	def test_stock_page_renders_password_delete_and_tax_controls(self):
-		response = self.client.get('/stock/')
 		self.assertEqual(response.status_code, 200)
-		self.assertContains(response, 'Your account password')
+		self.assertEqual(response.json()['products'], [{
+			'branch': 'BranchA',
+			'product_id': 3001,
+			'product_name': 'Branch Product',
+			'deleted_by': 'product-delete-admin',
+			'deleted_at': completed.updated_at.isoformat(),
+		}])
+
+	def test_stock_page_displays_product_controls_and_deleted_products_link(self):
+		response = self.client.get('/stock/')
+
+		self.assertEqual(response.status_code, 200)
 		self.assertContains(response, 'Delete at branch')
+		self.assertContains(response, 'Your account password')
 		self.assertContains(response, 'Save tax')
 		self.assertContains(response, '/products/deleted/')
+		self.assertContains(response, '/api/products/delete/')
+
+	def test_product_catalog_all_returns_more_than_default_limit(self):
+		ProductCatalog.objects.bulk_create([
+			ProductCatalog(branch='BranchAllProducts', product_id=10000 + index, product_name=f'Product {index}')
+			for index in range(3001)
+		])
+
+		default_response = self.client.get('/api/products/', {'branch': 'BranchAllProducts'})
+		all_response = self.client.get('/api/products/', {'branch': 'BranchAllProducts', 'all': '1'})
+
+		self.assertEqual(default_response.status_code, 200)
+		self.assertEqual(len(default_response.json()['products']), 3000)
+		self.assertEqual(all_response.status_code, 200)
+		self.assertEqual(len(all_response.json()['products']), 3001)
 
 
 class ProductTaxRateTests(TestCase):
@@ -89,56 +190,44 @@ class ProductTaxRateTests(TestCase):
 		admin = get_user_model().objects.create_superuser(username='product-tax-admin', password='ProductTaxPass4182!')
 		self.client.force_login(admin)
 
-	def test_tax_rate_updates_catalog_and_shared_pos_feed(self):
+	def test_tax_rate_updates_confirmed_catalog_and_shared_pos_feed(self):
 		for branch in ['BranchA', 'BranchB', 'MAIN']:
-			ProductCatalog.objects.create(branch=branch, product_id=401, product_name='Tax Product', tax_rate='5.00')
+			ProductCatalog.objects.create(
+				branch=branch, product_id=401, product_name='Tax Product', tax_rate='5.00',
+			)
 		ProductCatalog.objects.create(
 			branch='BranchPending', product_id=401, product_name='Tax Product',
 			tax_rate='5.00', branch_confirmed=False,
 		)
+
 		response = self.client.post(
 			'/api/products/tax-rate/',
 			data=json.dumps({'branch': 'BranchA', 'product_id': 401, 'tax_rate': '7.50'}),
 			content_type='application/json',
 		)
+
 		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()['branch_count'], 2)
 		for branch in ['BranchA', 'BranchB', 'MAIN']:
 			self.assertEqual(str(ProductCatalog.objects.get(branch=branch, product_id=401).tax_rate), '7.50')
 		self.assertEqual(str(ProductCatalog.objects.get(branch='BranchPending', product_id=401).tax_rate), '5.00')
-		shared = next(item for item in self.client.get('/api/products/shared/').json()['products'] if item['product_id'] == 401)
-		self.assertEqual(shared['tax_rate'], '7.50')
+		shared_product = next(
+			item for item in self.client.get('/api/products/shared/').json()['products']
+			if item['product_id'] == 401
+		)
+		self.assertEqual(shared_product['tax_rate'], '7.50')
 
-	def test_tax_rate_rejects_values_above_one_hundred(self):
+	def test_tax_rate_rejects_values_outside_the_supported_range(self):
 		ProductCatalog.objects.create(branch='BranchA', product_id=402, product_name='Tax Product')
 		response = self.client.post(
 			'/api/products/tax-rate/',
 			data=json.dumps({'branch': 'BranchA', 'product_id': 402, 'tax_rate': '100.01'}),
 			content_type='application/json',
 		)
+
 		self.assertEqual(response.status_code, 400)
 		self.assertEqual(str(ProductCatalog.objects.get(product_id=402).tax_rate), '0.00')
 
-
-class BandwidthCompressionTests(TestCase):
-	def setUp(self):
-		admin = get_user_model().objects.create_superuser(username='compression-admin', password='CompressionPass4182!')
-		self.client.force_login(admin)
-		for product_id in range(500, 520):
-			ProductCatalog.objects.create(
-				branch='MAIN', product_id=product_id,
-				product_name=f'Repeatable product name {product_id}',
-				product_code=f'CODE-{product_id}', barcode=f'BARCODE-{product_id}',
-			)
-
-	def test_product_catalog_is_compressed_without_changing_its_payload(self):
-		response = self.client.get('/api/products/?branch=MAIN', HTTP_ACCEPT_ENCODING='gzip')
-
-		self.assertEqual(response.status_code, 200)
-		self.assertEqual(response.headers.get('Content-Encoding'), 'gzip')
-		decompressed = gzip.decompress(response.content)
-		self.assertEqual(json.loads(decompressed)['status'], 'ok')
-		self.assertEqual(len(json.loads(decompressed)['products']), 20)
-		self.assertLess(len(response.content), len(decompressed))
 class DashboardCompressionTests(TestCase):
 	def setUp(self):
 		admin = get_user_model().objects.create_superuser(username='compression-admin', password='CompressionPass4182!')
@@ -205,6 +294,40 @@ class StockTransferTests(TestCase):
 		)
 		self.client.force_login(self.admin)
 		MainStockBalance.objects.create(product_id=999, product_name='Test Product', quantity=10)
+
+	def test_sign_out_works_from_each_page_with_csrf_enforced(self):
+		client = self.client_class(enforce_csrf_checks=True)
+		for page in ('/', '/stock/', '/history/', '/stock/movements/history/', '/users/'):
+			client.force_login(self.admin)
+			page_response = client.get(page)
+			self.assertEqual(page_response.status_code, 200, page)
+			logout_form = re.search(
+				r'<form[^>]*action="/logout/"[^>]*>(.*?)</form>',
+				page_response.content.decode(),
+				re.DOTALL,
+			)
+			self.assertIsNotNone(logout_form, page)
+			csrf_token = re.search(
+				r'name="csrfmiddlewaretoken" value="([^"]+)"',
+				logout_form.group(1),
+			)
+			self.assertIsNotNone(csrf_token, page)
+			logout_response = client.post('/logout/', {'csrfmiddlewaretoken': csrf_token.group(1)})
+			self.assertRedirects(logout_response, '/login/', fetch_redirect_response=False)
+
+	@override_settings(STORAGES={
+		'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+		'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+	})
+	def test_bandwidth_page_and_dashboard_link(self):
+		self.client.logout()
+		self.assertEqual(self.client.get('/bandwidth/').status_code, 302)
+		self.client.force_login(self.admin)
+		self.assertContains(self.client.get('/'), 'id="api-bandwidth-meter" href="/bandwidth/"')
+		page = self.client.get('/bandwidth/')
+		self.assertContains(page, 'API data received today')
+		self.assertContains(page, 'Daily log')
+		self.assertContains(page, 'data-bandwidth-month-log')
 
 	def test_main_stock_update_sets_stock_take_value(self):
 		ProductCatalog.objects.create(
@@ -297,14 +420,6 @@ class StockTransferTests(TestCase):
 		self.assertEqual(catalog.available_quantity, 15)
 		self.assertTrue(catalog.pending_stock_adjustment)
 		self.assertEqual(catalog.pending_stock_quantity, 15)
-		self.client.post(
-			'/api/products/sync/',
-			data=json.dumps({'branch': 'BranchA', 'entered_by': 'branch-user', 'products': [{
-				'product_id': 999, 'product_name': 'Test Product', 'available_quantity': 10,
-			}]}),
-			content_type='application/json',
-		)
-		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=999).available_quantity, 15)
 
 	def test_stock_take_updates_main_and_branch_together(self):
 		ProductCatalog.objects.create(
@@ -327,36 +442,6 @@ class StockTransferTests(TestCase):
 		)
 		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=999).available_quantity, 12)
 		self.assertFalse(StockMovement.objects.filter(product_id=999, movement_type='sold').exists())
-
-	def test_sale_after_stock_take_updates_web_quantity(self):
-		ProductCatalog.objects.create(
-			branch='BranchA', product_id=999, product_name='Test Product', available_quantity=4,
-		)
-		stock_take = self.client.post(
-			'/api/stock/main/adjust/',
-			data=json.dumps({'product_id': 999, 'product_name': 'Test Product', 'quantity': 12, 'branch': 'BranchA'}),
-			content_type='application/json',
-		)
-		self.assertEqual(stock_take.status_code, 200)
-		stock_take_transfer = StockTransfer.objects.get()
-		self.client.post(
-			'/api/stock/transfers/complete/',
-			data=json.dumps({'transfer_id': stock_take_transfer.transfer_id, 'branch': 'BranchA', 'success': True}),
-			content_type='application/json',
-		)
-
-		sync = self.client.post(
-			'/api/products/sync/',
-			data=json.dumps({'branch': 'BranchA', 'products': [{
-				'product_id': 999, 'product_name': 'Test Product', 'available_quantity': 11, 'sold_quantity': 1,
-			}]}),
-			content_type='application/json',
-		)
-		self.assertEqual(sync.status_code, 200)
-		catalog = ProductCatalog.objects.get(branch='BranchA', product_id=999)
-		self.assertEqual(catalog.available_quantity, 11)
-		self.assertFalse(catalog.pending_stock_adjustment)
-		self.assertEqual(StockMovement.objects.get(product_id=999, movement_type='sold').quantity, 1)
 
 	def test_repeated_success_acknowledgment_is_idempotent(self):
 		transfer = StockTransfer.objects.create(
@@ -391,6 +476,28 @@ class StockTransferTests(TestCase):
 		self.assertEqual(second.status_code, 200)
 		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=999).available_quantity, 15)
 
+	def test_transfer_completion_merges_case_variant_catalog_rows(self):
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=1001, product_name='Test Product', available_quantity=10,
+		)
+		ProductCatalog.objects.create(
+			branch='brancha', product_id=1001, product_name='Test Product', available_quantity=20,
+		)
+		transfer = StockTransfer.objects.create(
+			transfer_id='TRANSFER_BRANCHA_1001_DUPLICATE', branch='BranchA', product_id=1001,
+			product_name='Test Product', quantity=5,
+		)
+
+		response = self.client.post(
+			'/api/stock/transfers/complete/',
+			data=json.dumps({'transfer_id': transfer.transfer_id, 'branch': 'BranchA', 'success': True}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(ProductCatalog.objects.filter(branch__iexact='BranchA', product_id=1001).count(), 1)
+		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=1001).available_quantity, 15)
+
 	def test_branch_price_changes_only_after_branch_confirmation(self):
 		ProductCatalog.objects.create(
 			branch='BranchA', product_id=999, product_name='Test Product', selling_price='10.00',
@@ -414,6 +521,9 @@ class StockTransferTests(TestCase):
 		self.assertEqual(queued.status_code, 202)
 		self.assertEqual(queued.json()['branch_count'], 2)
 		self.assertCountEqual(queued.json()['branches'], ['BranchA', 'BranchB'])
+		shared_catalog = self.client.get('/api/products/shared/')
+		shared_product = next(item for item in shared_catalog.json()['products'] if item['product_id'] == 999)
+		self.assertEqual(shared_product['selling_price'], '12.50')
 		for branch in ['BranchA', 'BranchB']:
 			catalog = ProductCatalog.objects.get(branch=branch, product_id=999)
 			self.assertEqual(catalog.selling_price, 10)
@@ -618,6 +728,18 @@ class StockTransferTests(TestCase):
 		branches = self.client.get('/api/branches/').json()['branches']
 		self.assertEqual([item['name'] for item in branches], ['Online Branch'])
 
+	def test_branch_list_supports_twelve_online_branch_pc_heartbeats(self):
+		for index in range(1, 13):
+			response = self.client.post(
+				'/api/branches/',
+				data=json.dumps({'branch': f'Branch {index}', 'device_role': 'Branch PC'}),
+				content_type='application/json',
+			)
+			self.assertEqual(response.status_code, 200)
+
+		branches = self.client.get('/api/branches/').json()['branches']
+		self.assertEqual(len(branches), 12)
+
 	def test_publish_product_catalog_upserts_products(self):
 		response = self.client.post(
 			'/api/products/publish/',
@@ -633,6 +755,117 @@ class StockTransferTests(TestCase):
 		product = ProductCatalog.objects.get(branch='BranchA', product_id=1002)
 		self.assertEqual(product.product_name, 'Published Product')
 		self.assertEqual(product.available_quantity, 8)
+		self.assertEqual(str(product.tax_rate), '5.00')
+
+	def test_web_can_queue_branch_product_and_branch_can_acknowledge_it(self):
+		BranchHeartbeat.objects.create(branch='BranchB', last_seen=timezone.now())
+		BranchHeartbeat.objects.create(branch='Offline Branch', last_seen=timezone.now() - timedelta(days=1))
+		response = self.client.post(
+			'/api/products/create/',
+			data=json.dumps({
+				'branch': 'BranchA', 'product_name': 'New Branch Product',
+				'product_id': '12100001', 'product_code': 'NEW-001', 'barcode': '990001', 'initial_quantity': '8', 'selling_price': '4.25', 'tax_rate': '7.50',
+			}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 202)
+		self.assertEqual(set(response.json()['branches']), {'BranchA', 'BranchB', 'Offline Branch'})
+		product_id = response.json()['product_id']
+		self.assertEqual(product_id, 12_100_001)
+		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).product_code, '12100002')
+		self.assertTrue(ProductCatalog.objects.get(branch='BranchB', product_id=product_id).pending_product_creation)
+		self.assertTrue(ProductCatalog.objects.get(branch='Offline Branch', product_id=product_id).pending_product_creation)
+		self.assertFalse(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).branch_confirmed)
+		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).pending_stock_quantity, 0)
+		self.assertEqual(str(ProductCatalog.objects.get(branch='BranchA', product_id=product_id).tax_rate), '7.50')
+		not_visible = self.client.get('/api/products/?branch=BranchA&q=New%20Branch%20Product')
+		self.assertEqual(not_visible.status_code, 200)
+		self.assertEqual(not_visible.json()['products'], [])
+
+		poll = self.client.get('/api/branch-sync/?branch=BranchA')
+		self.assertEqual(poll.status_code, 200)
+		self.assertEqual(poll.json()['pending_product_creations'][0]['product_name'], 'New Branch Product')
+		self.assertEqual(poll.json()['pending_product_creations'][0]['initial_quantity'], '0')
+		self.assertEqual(poll.json()['pending_product_creations'][0]['tax_rate'], '7.50')
+
+		complete = self.client.post(
+			'/api/products/create/complete/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': product_id, 'actual_product_id': 2001, 'success': True}),
+			content_type='application/json',
+		)
+		self.assertEqual(complete.status_code, 200)
+		product = ProductCatalog.objects.get(branch='BranchA', product_id=2001)
+		self.assertFalse(product.pending_product_creation)
+		self.assertTrue(product.branch_confirmed)
+		self.assertEqual(str(product.tax_rate), '7.50')
+		self.assertEqual(str(ProductCatalog.objects.get(branch='MAIN', product_id=2001).tax_rate), '7.50')
+		visible = self.client.get('/api/products/?branch=BranchA&q=New%20Branch%20Product')
+		self.assertEqual([item['product_id'] for item in visible.json()['products']], [2001])
+		main_products = self.client.get('/api/products/?branch=MAIN&q=New%20Branch%20Product')
+		self.assertEqual([item['product_id'] for item in main_products.json()['products']], [2001])
+		transfer = self.client.post(
+			'/api/stock/transfers/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': 2001, 'product_name': 'New Branch Product', 'quantity': 6}),
+			content_type='application/json',
+		)
+		self.assertEqual(transfer.status_code, 202)
+		self.assertEqual(MainStockBalance.objects.get(product_id=2001).quantity, 6)
+
+	def test_web_rejects_main_as_branch_product_target(self):
+		response = self.client.post(
+			'/api/products/create/',
+			data=json.dumps({'branch': 'MAIN', 'product_name': 'Invalid Product', 'selling_price': '1.00'}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 400)
+
+	def test_web_rejects_product_id_above_sql_integer_limit(self):
+		response = self.client.post(
+			'/api/products/create/',
+			data=json.dumps({
+				'branch': 'BranchA', 'product_id': '12100000324',
+				'product_name': 'TEST FOR ALL BRANCHIES', 'product_code': '12100000325',
+				'initial_quantity': '0', 'selling_price': '1',
+			}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 400)
+		self.assertEqual(response.json()['message'], 'Product ID cannot exceed 2147483647.')
+		self.assertFalse(ProductCatalog.objects.filter(product_id=12100000324).exists())
+
+	def test_web_rejects_duplicate_product_id_with_clear_message(self):
+		ProductCatalog.objects.create(branch='BranchA', product_id=12100002, product_name='Existing Product')
+		response = self.client.post(
+			'/api/products/create/',
+			data=json.dumps({'branch': 'BranchB', 'product_id': 12100002, 'product_name': 'Duplicate Product', 'selling_price': '1.00'}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 409)
+		self.assertIn('already queued', response.json()['message'])
+
+	def test_web_can_queue_and_branch_can_claim_invoice_reprint(self):
+		response = self.client.post(
+			'/api/invoice-reprint/',
+			data=json.dumps({'branch': 'BranchA', 'invoice': 'INV-100'}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 202)
+		poll = self.client.get('/api/branch-sync/?branch=BranchA')
+		self.assertEqual(poll.status_code, 200)
+		self.assertEqual(poll.json()['pending_invoice_reprints'][0]['invoice'], 'INV-100')
+		request_id = poll.json()['pending_invoice_reprints'][0]['request_id']
+		complete = self.client.post(
+			'/api/invoice-reprint/complete/',
+			data=json.dumps({'request_id': request_id, 'success': True}),
+			content_type='application/json',
+		)
+		self.assertEqual(complete.status_code, 200)
+		self.assertEqual(InvoiceReprintRequest.objects.get(request_id=request_id).status, 'completed')
 
 	def test_web_can_queue_branch_product_and_branch_can_acknowledge_it(self):
 		BranchHeartbeat.objects.create(branch='BranchA', last_seen=timezone.now())
@@ -675,6 +908,11 @@ class StockTransferTests(TestCase):
 		product = ProductCatalog.objects.get(branch='BranchA', product_id=2001)
 		self.assertFalse(product.pending_product_creation)
 		self.assertTrue(product.branch_confirmed)
+		shared_catalog = self.client.get('/api/products/shared/')
+		self.assertTrue(shared_catalog.json()['full'])
+		shared_product = next(item for item in shared_catalog.json()['products'] if item['product_id'] == 2001)
+		self.assertEqual(shared_product['product_name'], 'New Branch Product')
+		self.assertEqual(shared_product['selling_price'], '4.25')
 		visible = self.client.get('/api/products/?branch=BranchA&q=New%20Branch%20Product')
 		self.assertEqual([item['product_id'] for item in visible.json()['products']], [2001])
 		main_products = self.client.get('/api/products/?branch=MAIN&q=New%20Branch%20Product')
@@ -858,73 +1096,23 @@ class StockTransferTests(TestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual([movement['product_id'] for movement in response.json()['movements']], [today.product_id])
 
-	def test_catalog_sync_records_reduction_as_sold(self):
-		ProductCatalog.objects.create(
-			branch='BranchA', product_id=999, product_name='Test Product', available_quantity=10,
-		)
-
-		decrease = self.client.post(
-			'/api/products/sync/',
-			data=json.dumps({'branch': 'BranchA', 'entered_by': 'branch-user', 'products': [{
-				'product_id': 999, 'product_name': 'Test Product', 'available_quantity': 7,
-			}]}),
-			content_type='application/json',
-		)
-		increase = self.client.post(
-			'/api/products/sync/',
-			data=json.dumps({'branch': 'BranchA', 'entered_by': 'branch-user', 'products': [{
-				'product_id': 999, 'product_name': 'Test Product', 'available_quantity': 12,
-			}]}),
-			content_type='application/json',
-		)
-
-		self.assertEqual(decrease.status_code, 200)
-		self.assertEqual(increase.status_code, 200)
-		self.assertEqual(StockMovement.objects.filter(product_id=999, movement_type='sold').count(), 1)
-		self.assertEqual(StockMovement.objects.get(product_id=999, movement_type='sold').quantity, 3)
-
-	def test_catalog_sync_does_not_sell_stock_take_reduction(self):
-		ProductCatalog.objects.create(
-			branch='BranchA', product_id=999, product_name='Test Product', available_quantity=10,
-		)
-		self.client.post(
-			'/api/stock/main/adjust/',
-			data=json.dumps({'product_id': 999, 'product_name': 'Test Product', 'quantity': 100, 'branch': 'BranchA'}),
-			content_type='application/json',
-		)
-		response = self.client.post(
-			'/api/products/sync/',
-			data=json.dumps({'branch': 'BranchA', 'entered_by': 'branch-user', 'products': [{
-				'product_id': 999, 'product_name': 'Test Product', 'available_quantity': 20,
-			}]}),
-			content_type='application/json',
-		)
-
-		self.assertEqual(response.status_code, 200)
-		self.assertFalse(StockMovement.objects.filter(product_id=999, movement_type='sold').exists())
-		catalog = ProductCatalog.objects.get(branch='BranchA', product_id=999)
-		self.assertEqual(catalog.available_quantity, 20)
-		self.assertFalse(catalog.pending_stock_adjustment)
-
-	def test_catalog_sync_does_not_duplicate_web_transfer_movement(self):
-		ProductCatalog.objects.create(
-			branch='Mini Market', product_id=4941, product_name='LOBELS BREAD 700G #B', available_quantity=0,
-		)
-		StockMovement.objects.create(
-			branch='Mini Market', product_id=4941, product_name='LOBELS BREAD 700G #B',
-			movement_type='received', quantity=200, source='Admin (transfer to Mini Market)',
-		)
+	def test_product_catalog_sync_is_disabled_and_preserves_case_variant_rows(self):
+		ProductCatalog.objects.create(branch='YEUKAI', product_id=3979, available_quantity=10)
+		ProductCatalog.objects.create(branch='yeukai', product_id=3979, available_quantity=12)
 
 		response = self.client.post(
 			'/api/products/sync/',
-			data=json.dumps({'branch': 'Mini Market', 'entered_by': 'HP EliteBook', 'products': [{
-				'product_id': 4941, 'product_name': 'LOBELS BREAD 700G #B', 'available_quantity': 200,
+			data=json.dumps({'branch': 'YEUKAI', 'products': [{
+				'product_id': 3979, 'product_name': 'Test Product', 'available_quantity': 7,
 			}]}),
 			content_type='application/json',
 		)
 
-		self.assertEqual(response.status_code, 200)
-		self.assertEqual(StockMovement.objects.filter(product_id=4941, movement_type='received').count(), 1)
+		self.assertEqual(response.status_code, 410)
+		self.assertEqual(
+			list(ProductCatalog.objects.filter(product_id=3979).order_by('branch').values_list('branch', 'available_quantity')),
+			[('YEUKAI', 10), ('yeukai', 12)],
+		)
 
 	def test_product_movement_history_filters_product_and_date(self):
 		StockMovement.objects.create(
@@ -979,6 +1167,10 @@ class StockTransferTests(TestCase):
 		self.assertEqual(response.json()['message'], 'Select a product first.')
 
 
+@override_settings(STORAGES={
+	'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+	'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+})
 class DeletionQueueTests(TestCase):
 	def setUp(self):
 		self.client.force_login(get_user_model().objects.create_user(
@@ -994,6 +1186,10 @@ class DeletionQueueTests(TestCase):
 
 		self.assertEqual(response.status_code, 202)
 		self.assertEqual(self.client.get('/api/main-sync/').json()['pending_count'], 1)
+
+	def test_dashboard_and_queue_are_not_cached(self):
+		self.assertEqual(self.client.get('/').headers['Cache-Control'], 'no-store, no-cache, must-revalidate, max-age=0')
+		self.assertEqual(self.client.get('/api/main-sync/').headers['Cache-Control'], 'no-store, no-cache, must-revalidate, max-age=0')
 
 	def test_confirmation_moves_record_to_processed_count(self):
 		response = self.client.post(
@@ -1018,6 +1214,108 @@ class DeletionQueueTests(TestCase):
 		summary = self.client.get('/api/main-sync/').json()
 		self.assertEqual(summary['pending_count'], 0)
 		self.assertEqual(summary['processed_count'], 1)
+
+	def test_main_queue_includes_cancellation_and_sales_report_statuses(self):
+		cancellation = self.client.post(
+			'/api/cancel-sale/',
+			data=json.dumps({'invoice': 'INV-QUEUE', 'branch': 'Branch A'}),
+			content_type='application/json',
+		).json()
+		report = self.client.post(
+			'/api/sales-report/',
+			data=json.dumps({'report_date': '2026-09-25', 'branches': ['Branch A']}),
+			content_type='application/json',
+		).json()
+
+		queue = self.client.get('/api/main-sync/').json()['queue']
+		statuses = {(item['type'], item['id']): item['status'] for item in queue}
+		self.assertEqual(statuses[('cancellation', cancellation['deletion_id'])], 'pending')
+		self.assertEqual(statuses[('sales_report', report['reports'][0]['id'])], 'pending')
+
+	def test_queue_shows_sent_and_printed_states(self):
+		cancellation_id = self.client.post(
+			'/api/cancel-sale/',
+			data=json.dumps({'invoice': 'INV-SENT', 'branch': 'Branch A'}),
+			content_type='application/json',
+		).json()['deletion_id']
+		report_id = self.client.post(
+			'/api/sales-report/',
+			data=json.dumps({'report_date': '2026-09-25', 'branches': ['Branch A']}),
+			content_type='application/json',
+		).json()['reports'][0]['id']
+
+		self.client.get('/api/branch-sync/?branch=Branch A')
+		self.client.post(
+			'/api/sales-report/complete/',
+			data=json.dumps({'report_id': report_id, 'success': True, 'row_count': 4, 'branch': 'Branch A'}),
+			content_type='application/json',
+		)
+
+		queue = self.client.get('/api/main-sync/').json()['queue']
+		statuses = {item['id']: item['status'] for item in queue}
+		self.assertEqual(statuses[cancellation_id], 'processing')
+		self.assertEqual(statuses[report_id], 'printed')
+
+	def test_scheduled_report_is_only_released_to_selected_branch_when_due(self):
+		scheduled_at = timezone.now() + timedelta(minutes=2)
+		response = self.client.post(
+			'/api/sales-report/',
+			data=json.dumps({
+				'report_date': '2026-09-25',
+				'branches': ['Branch A'],
+				'scheduled_at': scheduled_at.isoformat(),
+			}),
+			content_type='application/json',
+		)
+		self.assertEqual(response.status_code, 202)
+		report_id = response.json()['reports'][0]['id']
+		self.assertEqual(SalesReportRequest.objects.get(pk=report_id).status, 'scheduled')
+		self.assertEqual(self.client.get('/api/branch-sync/?branch=Branch A').json()['pending_reports'], [])
+
+		SalesReportRequest.objects.filter(pk=report_id).update(scheduled_at=timezone.now() - timedelta(seconds=1))
+		self.assertEqual(self.client.get('/api/branch-sync/?branch=Branch B').json()['pending_reports'], [])
+		branch_a_reports = self.client.get('/api/branch-sync/?branch=Branch A').json()['pending_reports']
+		self.assertEqual([report['id'] for report in branch_a_reports], [report_id])
+
+	def test_daily_report_schedules_are_branch_specific_and_repeat_once_per_day(self):
+		fixed_now = datetime(2026, 9, 26, 12, 1, tzinfo=datetime_timezone.utc)
+		response = self.client.post(
+			'/api/sales-report/schedules/',
+			data=json.dumps({
+				'schedules': [
+					{'branch': 'Branch A', 'time': '12:00', 'timezone': 'UTC'},
+					{'branch': 'Branch B', 'time': '12:02', 'timezone': 'UTC'},
+				],
+			}),
+			content_type='application/json',
+		)
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(SalesReportSchedule.objects.count(), 2)
+
+		with patch('loraApi.views.timezone.now', return_value=fixed_now):
+			main_queue = self.client.get('/api/main-sync/').json()['queue']
+			daily_reports = [item for item in main_queue if item['type'] == 'sales_report']
+			self.assertEqual(len(daily_reports), 1)
+			self.assertEqual(daily_reports[0]['branch'], 'Branch A')
+			branch_b_reports = self.client.get('/api/branch-sync/?branch=Branch B').json()['pending_reports']
+			self.assertEqual(branch_b_reports, [])
+			branch_a_reports = self.client.get('/api/branch-sync/?branch=Branch A').json()['pending_reports']
+			self.assertEqual(len(branch_a_reports), 1)
+			self.assertEqual(branch_a_reports[0]['report_date'], '2026-09-26')
+			self.assertEqual(self.client.get('/api/branch-sync/?branch=Branch A').json()['pending_reports'], [])
+			main_queue = self.client.get('/api/main-sync/').json()['queue']
+			daily_reports = [item for item in main_queue if item['type'] == 'sales_report']
+			self.assertEqual(len(daily_reports), 1)
+			self.assertEqual(SalesReportRequest.objects.filter(branch='Branch A', report_date=fixed_now.date()).count(), 1)
+
+		with patch('loraApi.views.timezone.now', return_value=fixed_now + timedelta(days=1)):
+			main_queue = self.client.get('/api/main-sync/').json()['queue']
+			next_day_reports = [
+				item for item in main_queue
+				if item['type'] == 'sales_report' and item['branch'] == 'Branch A' and item['detail'] == '2026-09-27'
+			]
+		self.assertEqual(len(next_day_reports), 1)
+		self.assertEqual(next_day_reports[0]['detail'], '2026-09-27')
 
 	def test_history_returns_confirmed_invoices_newest_first(self):
 		older = self.client.post(
@@ -1064,6 +1362,10 @@ class DeletionQueueTests(TestCase):
 		self.assertEqual(response.json()['cancellations'][0]['deleted_by'], 'operator')
 
 
+@override_settings(STORAGES={
+	'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+	'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+})
 class AuthenticationTests(TestCase):
 	def setUp(self):
 		self.admin = get_user_model().objects.create_superuser(
@@ -1152,6 +1454,10 @@ class AuthenticationTests(TestCase):
 		self.assertRedirects(self.client.get('/'), '/login/?next=/')
 
 
+@override_settings(STORAGES={
+	'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+	'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+})
 class DailySalesReportScheduleTests(TestCase):
 	def setUp(self):
 		admin = get_user_model().objects.create_superuser(username='schedule-admin', password='SchedulePass4182!')
