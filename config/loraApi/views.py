@@ -64,6 +64,44 @@ def invalidate_product_catalog_cache():
     cache.set(PRODUCT_CACHE_VERSION_KEY, int(version) + 1, None)
 
 
+def get_or_create_branch_catalog(branch, product_id, defaults):
+    catalogs = list(
+        ProductCatalog.objects.select_for_update()
+        .filter(branch__iexact=branch, product_id=product_id)
+        .order_by('-updated_at', '-pk')
+    )
+    if not catalogs:
+        return ProductCatalog.objects.select_for_update().get_or_create(
+            branch=branch,
+            product_id=product_id,
+            defaults=defaults,
+        )
+
+    catalog = next((item for item in catalogs if item.branch == branch), catalogs[0])
+    for duplicate in catalogs:
+        if duplicate.pk == catalog.pk:
+            continue
+        if duplicate.pending_stock_adjustment and not catalog.pending_stock_adjustment:
+            catalog.pending_stock_adjustment = True
+            catalog.pending_stock_quantity = duplicate.pending_stock_quantity
+        if duplicate.pending_price_update and not catalog.pending_price_update:
+            catalog.pending_price_update = True
+            catalog.pending_selling_price = duplicate.pending_selling_price
+        if duplicate.sold_quantity is not None and (
+            catalog.sold_quantity is None or duplicate.sold_quantity > catalog.sold_quantity
+        ):
+            catalog.sold_quantity = duplicate.sold_quantity
+        catalog.branch_confirmed = catalog.branch_confirmed or duplicate.branch_confirmed
+        catalog.pending_product_creation = catalog.pending_product_creation or duplicate.pending_product_creation
+
+    duplicate_ids = [item.pk for item in catalogs if item.pk != catalog.pk]
+    if duplicate_ids:
+        ProductCatalog.objects.filter(pk__in=duplicate_ids).delete()
+    if catalog.branch != branch:
+        catalog.branch = branch
+    return catalog, False
+
+
 def retry_on_database_lock(view_func):
     @wraps(view_func)
     def wrapped_view(request, *args, **kwargs):
@@ -1508,10 +1546,10 @@ def sync_product_catalog(request):
             tax_rate = Decimal(str(tax_rate_value)) if tax_rate_value is not None and str(tax_rate_value).strip() else None
             sold_quantity_value = item.get('sold_quantity')
             sold_quantity = whole_quantity(Decimal(str(sold_quantity_value or 0))) if sold_quantity_value is not None else None
-            catalog, created = ProductCatalog.objects.select_for_update().get_or_create(
-                branch=branch,
-                product_id=product_id,
-                defaults={
+            catalog, created = get_or_create_branch_catalog(
+                branch,
+                product_id,
+                {
                     'available_quantity': available_quantity,
                     'selling_price': selling_price,
                     'tax_rate': tax_rate if tax_rate is not None else Decimal('0'),
@@ -1803,10 +1841,10 @@ def complete_stock_transfer(request):
     if payload.get('success'):
         if transfer.status != 'completed':
             with transaction.atomic():
-                catalog, created = ProductCatalog.objects.select_for_update().get_or_create(
-                    branch=transfer.branch,
-                    product_id=transfer.product_id,
-                    defaults={
+                catalog, created = get_or_create_branch_catalog(
+                    transfer.branch,
+                    transfer.product_id,
+                    {
                         'product_name': transfer.product_name,
                         'available_quantity': transfer.quantity,
                     },
