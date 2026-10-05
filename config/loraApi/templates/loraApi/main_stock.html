@@ -410,79 +410,11 @@
       : '<p class="empty">No products match your search.</p>';
   }
   async function loadBranchProducts(showLoading = true) {
-  branchProducts.addEventListener('submit', async event => {
-    const taxForm = event.target.closest('[data-product-tax-rate]');
-    if (!taxForm) return;
-    event.preventDefault();
-    const productId = taxForm.dataset.productTaxRate;
-    const taxInput = taxForm.querySelector('input');
-    const saveButton = taxForm.querySelector('button');
-    saveButton.disabled = true;
-    productCatalogStatus.textContent = 'Saving product tax rate...';
-    try {
-      const response = await fetch('/api/products/tax-rate/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch:selectedBranch.value, product_id:productId, tax_rate:taxInput.value }) });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || 'Product tax rate could not be saved.');
-      const product = branchCatalogProducts.find(item => String(item.product_id) === productId);
-      if (product) product.tax_rate = data.tax_rate;
-      productCatalogStatus.textContent = `${data.product_name} tax rate saved at ${data.tax_rate}%. POS branches will receive it on sync.`;
-      renderBranchProducts();
-    } catch (error) {
-      productCatalogStatus.textContent = error.message;
-      saveButton.disabled = false;
-    }
-  });
-    if (branchProductsLoading) return;
-    const deleteButton = event.target.closest('[data-product-delete]');
-    if (deleteButton) {
-      event.stopPropagation();
-      const product = branchCatalogProducts.find(item => String(item.product_id) === deleteButton.dataset.productDelete);
-      const branch = selectedBranch.value;
-      if (!product || !branch) return;
-      pendingProductDeletion = { product, branch, button: deleteButton };
-      productDeleteDescription.textContent = `Delete ${product.product_name} from ${branch}? Historical sales will be kept.`;
-      productDeletePassword.value = '';
-      productDeleteStatus.className = 'notice';
-      productDeleteStatus.textContent = '';
-      productDeleteDialog.showModal();
-      productDeletePassword.focus();
-      return;
-    }
-    if (!event.target.closest('[data-product-select]')) return;
     const requestId = ++branchProductsRequestId;
     const branch = selectedBranch.value;
     if (showLoading) {
       branchProducts.innerHTML = '<p class="empty loading-state"><span class="loading-spinner" aria-hidden="true"></span>Loading products...</p>';
       setBranchCardsLoading(true);
-  productDeleteCancel.addEventListener('click', () => productDeleteDialog.close());
-  productDeleteForm.addEventListener('submit', async event => {
-    event.preventDefault();
-    if (!pendingProductDeletion) return;
-    const { product, branch, button } = pendingProductDeletion;
-    const submitButton = productDeleteForm.querySelector('button[type="submit"]');
-    submitButton.disabled = true;
-    productDeleteStatus.className = 'notice';
-    productDeleteStatus.textContent = 'Queueing deletion...';
-    try {
-      const response = await fetch('/api/products/delete/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch, product_id:product.product_id, password:productDeletePassword.value }) });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || 'Product deletion could not be queued.');
-      productDeleteDialog.close();
-      pendingProductDeletion = null;
-      branchCatalogSince = '';
-      branchCatalogSinceBranch = '';
-      await loadBranchProducts(false);
-      productCatalogStatus.textContent = `Deletion queued for ${product.product_name}; it will be deactivated at ${branch} on the next sync.`;
-    } catch (error) {
-      productDeleteStatus.className = 'notice error';
-      productDeleteStatus.textContent = error.message;
-      productDeletePassword.value = '';
-      productDeletePassword.focus();
-      button.disabled = false;
-    } finally {
-      submitButton.disabled = false;
-    }
-  });
     }
     branchProductsLoading = true;
     if (showLoading) {
@@ -548,6 +480,80 @@
       if (showLoading) setBranchCardsLoading(false);
     }
   }
+  branchProducts.addEventListener('submit', async event => {
+    const taxForm = event.target.closest('[data-product-tax-rate]');
+    if (!taxForm) return;
+    event.preventDefault();
+    const productId = taxForm.dataset.productTaxRate;
+    const taxInput = taxForm.querySelector('input');
+    const saveButton = taxForm.querySelector('button');
+    saveButton.disabled = true;
+    productCatalogStatus.textContent = 'Saving product tax rate...';
+    try {
+      const response = await fetch('/api/products/tax-rate/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch:selectedBranch.value, product_id:productId, tax_rate:taxInput.value }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'Product tax rate could not be saved.');
+      const product = branchCatalogProducts.find(item => String(item.product_id) === productId);
+      if (product) product.tax_rate = data.tax_rate;
+      productCatalogStatus.textContent = `${data.product_name} tax rate saved at ${data.tax_rate}%. POS branches will receive it on sync.`;
+      renderBranchProducts();
+    } catch (error) {
+      productCatalogStatus.textContent = error.message;
+      saveButton.disabled = false;
+    }
+  });
+  branchProducts.addEventListener('click', event => {
+    if (branchProductsLoading) return;
+    const deleteButton = event.target.closest('[data-product-delete]');
+    if (deleteButton) {
+      event.stopPropagation();
+      const product = branchCatalogProducts.find(item => String(item.product_id) === deleteButton.dataset.productDelete);
+      const branch = selectedBranch.value;
+      if (!product || !branch) return;
+      pendingProductDeletion = { product, branch, button: deleteButton };
+      productDeleteDescription.textContent = `Delete ${product.product_name} from ${branch}? Historical sales will be kept.`;
+      productDeletePassword.value = '';
+      productDeleteStatus.className = 'notice';
+      productDeleteStatus.textContent = '';
+      productDeleteDialog.showModal();
+      productDeletePassword.focus();
+      return;
+    }
+    if (!event.target.closest('[data-product-select]')) return;
+    const row = event.target.closest('[data-product-id]');
+    if (!row) return;
+    const product = branchCatalogProducts.find(item => String(item.product_id) === row.dataset.productId);
+    if (product) selectProduct(product);
+  });
+  productDeleteCancel.addEventListener('click', () => productDeleteDialog.close());
+  productDeleteForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!pendingProductDeletion) return;
+    const { product, branch, button } = pendingProductDeletion;
+    const submitButton = productDeleteForm.querySelector('button[type="submit"]');
+    submitButton.disabled = true;
+    productDeleteStatus.className = 'notice';
+    productDeleteStatus.textContent = 'Queueing deletion...';
+    try {
+      const response = await fetch('/api/products/delete/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch, product_id:product.product_id, password:productDeletePassword.value }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'Product deletion could not be queued.');
+      productDeleteDialog.close();
+      pendingProductDeletion = null;
+      branchCatalogSince = '';
+      branchCatalogSinceBranch = '';
+      await loadBranchProducts(false);
+      productCatalogStatus.textContent = `Deletion queued for ${product.product_name}; it will be deactivated at ${branch} on the next sync.`;
+    } catch (error) {
+      productDeleteStatus.className = 'notice error';
+      productDeleteStatus.textContent = error.message;
+      productDeletePassword.value = '';
+      productDeletePassword.focus();
+      button.disabled = false;
+    } finally {
+      submitButton.disabled = false;
+    }
+  });
   refreshStockButton.addEventListener('click', () => loadBranchProducts(true));
   function requestBranchLoad() {
     loadStockButton.disabled = true;
@@ -718,12 +724,6 @@
     });
   }
   branchProductSearch.addEventListener('input', renderBranchProducts);
-  branchProducts.addEventListener('click', event => {
-    const row = event.target.closest('[data-product-id]');
-    if (!row) return;
-    const product = branchCatalogProducts.find(item => String(item.product_id) === row.dataset.productId);
-    if (product) selectProduct(product);
-  });
   sectionJumpButton.addEventListener('click', () => {
     const target = document.querySelector(sectionJumpButton.dataset.target);
     target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
