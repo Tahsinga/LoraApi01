@@ -30,7 +30,7 @@ ALLOWED_HOSTS = ['*'] if DEBUG else [
     host.strip()
     for host in os.environ.get(
         'ALLOWED_HOSTS',
-        'localhost,127.0.0.1,loraapi.onrender.com,lora-api.onrender.com',
+        'localhost,127.0.0.1,192.168.1.145,192.168.110.87,testserver,loraapi.onrender.com,lora-api.onrender.com',
     ).split(',')
     if host.strip()
 ]
@@ -59,6 +59,9 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = 'config.urls'
+LOGIN_URL = '/login/'
+LOGIN_REDIRECT_URL = '/'
+LOGOUT_REDIRECT_URL = '/login/'
 
 TEMPLATES = [
     {
@@ -128,8 +131,8 @@ STATIC_ROOT = BASE_DIR.parent / 'staticfiles'
 
 # Security settings for production
 SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'False') == 'True'
-SESSION_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_SECURE = os.environ.get('SESSION_COOKIE_SECURE', 'False') == 'True'
+CSRF_COOKIE_SECURE = os.environ.get('CSRF_COOKIE_SECURE', 'False') == 'True'
 SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_SECURITY_POLICY = {
     'default-src': ("'self'",),
@@ -142,5 +145,43 @@ SECURE_CONTENT_SECURITY_POLICY = {
 MAILERS = {
     'default': {
         'BACKEND': 'django.core.mail.backends.console.EmailBackend',
+    },
+}
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '[%(asctime)s] %(levelname)s %(name)s: %(message)s',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+            'level': 'INFO',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'loraApi': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'config': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
     },
 }
