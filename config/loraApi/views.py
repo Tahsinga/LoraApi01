@@ -1063,6 +1063,91 @@ def record_branch_sales(request):
     return JsonResponse({'status': 'ok', 'movement_id': movement.id})
 
 
+@csrf_exempt
+def publish_branch_stock_snapshot(request):
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+
+    try:
+        payload = json.loads(request.body or '{}')
+        branch = str(payload.get('branch', '')).strip()
+        products = payload.get('products', [])
+        if not isinstance(products, list):
+            raise ValueError
+
+        snapshots = []
+        for item in products:
+            if not isinstance(item, dict):
+                raise ValueError
+            product_id = int(item.get('product_id'))
+            product_name = str(item.get('product_name', '')).strip()
+            quantity = Decimal(str(item.get('available_quantity')))
+            if product_id <= 0 or not product_name or quantity != whole_quantity(quantity):
+                raise ValueError
+            snapshots.append({
+                'product_id': product_id,
+                'product_name': product_name,
+                'product_code': str(item.get('product_code', '')).strip(),
+                'barcode': str(item.get('barcode', '')).strip(),
+                'selling_price': Decimal(str(item.get('selling_price', 0) or 0)),
+                'available_quantity': quantity,
+            })
+    except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
+        return JsonResponse({'status': 'error', 'message': 'Branch and valid product stock snapshots are required.'}, status=400)
+
+    if not branch:
+        return JsonResponse({'status': 'error', 'message': 'Branch is required.'}, status=400)
+
+    updated = 0
+    movements_recorded = 0
+    with transaction.atomic():
+        for snapshot in snapshots:
+            product, created = ProductCatalog.objects.select_for_update().get_or_create(
+                branch=branch,
+                product_id=snapshot['product_id'],
+                defaults={
+                    'product_name': snapshot['product_name'],
+                    'product_code': snapshot['product_code'],
+                    'barcode': snapshot['barcode'],
+                    'selling_price': snapshot['selling_price'],
+                    'available_quantity': Decimal('0'),
+                    'branch_confirmed': True,
+                },
+            )
+            quantity_changed = product.available_quantity != snapshot['available_quantity']
+            changed_fields = []
+            for field in ('product_name', 'product_code', 'barcode', 'selling_price'):
+                if getattr(product, field) != snapshot[field]:
+                    setattr(product, field, snapshot[field])
+                    changed_fields.append(field)
+            if quantity_changed:
+                product.available_quantity = snapshot['available_quantity']
+                changed_fields.append('available_quantity')
+            if changed_fields:
+                product.branch_confirmed = True
+                product.updated_at = timezone.now()
+                product.save(update_fields=[*changed_fields, 'branch_confirmed', 'updated_at'])
+            if changed_fields or created:
+                updated += 1
+            if quantity_changed:
+                StockMovement.objects.create(
+                    branch=branch,
+                    product_id=product.product_id,
+                    product_name=product.product_name,
+                    movement_type='adjusted',
+                    quantity=snapshot['available_quantity'],
+                    source='pos_stock_snapshot',
+                )
+                movements_recorded += 1
+
+    return JsonResponse({
+        'status': 'ok',
+        'branch': branch,
+        'updated': updated,
+        'movements_recorded': movements_recorded,
+    })
+
+
 @login_required(login_url='/login/')
 @csrf_exempt
 @retry_on_database_lock

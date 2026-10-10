@@ -742,6 +742,47 @@ class StockTransferTests(TestCase):
 		self.assertEqual(product['available_quantity'], '4')
 		self.assertEqual(product['movement_balance'], '-3')
 
+	def test_pos_stock_snapshot_updates_negative_balance_and_is_idempotent(self):
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=1004, product_name='TEST PRODUCT',
+			product_code='1005', available_quantity=300,
+		)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=1004, product_name='TEST PRODUCT',
+			movement_type='adjusted', quantity=500, source='previous snapshot',
+		)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=1004, product_name='TEST PRODUCT',
+			movement_type='received', quantity=100, source='receipt',
+		)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=1004, product_name='TEST PRODUCT',
+			movement_type='sold', quantity=300, source='sale',
+		)
+		payload = {'branch': 'BranchA', 'products': [{
+			'product_id': 1004, 'product_name': 'TEST PRODUCT', 'product_code': '1005',
+			'available_quantity': -700,
+		}]}
+
+		first_response = self.client.post(
+			'/api/stock/snapshot/', data=json.dumps(payload), content_type='application/json',
+		)
+		second_response = self.client.post(
+			'/api/stock/snapshot/', data=json.dumps(payload), content_type='application/json',
+		)
+		summary = self.client.get('/api/stock/summary/?branch=BranchA').json()
+
+		self.assertEqual(first_response.status_code, 200)
+		self.assertEqual(first_response.json()['movements_recorded'], 1)
+		self.assertEqual(second_response.status_code, 200)
+		self.assertEqual(second_response.json()['movements_recorded'], 0)
+		self.assertEqual(StockMovement.objects.filter(
+			branch='BranchA', product_id=1004, source='pos_stock_snapshot',
+		).count(), 1)
+		product = next(item for item in summary['products'] if item['product_id'] == 1004)
+		self.assertEqual(product['available_quantity'], '-700')
+		self.assertEqual(product['movement_balance'], '-700')
+
 	def test_stock_page_highlights_products_with_negative_movement_balance(self):
 		response = self.client.get('/stock/')
 

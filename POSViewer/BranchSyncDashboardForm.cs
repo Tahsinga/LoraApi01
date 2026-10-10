@@ -19,7 +19,9 @@ public sealed class BranchSyncDashboardForm : Form
     private readonly Button _backButton = new();
     private readonly System.Windows.Forms.Timer _autoPollTimer = new();
     private readonly SemaphoreSlim _syncGate = new(1, 1);
+    private readonly Dictionary<int, decimal> _publishedStockBalances = new();
     private DateTimeOffset? _sharedProductCatalogSince;
+    private string? _publishedStockSnapshotBranch;
 
     public BranchSyncDashboardForm(ConnectionSettings settings, ConnectionForm connectionForm)
     {
@@ -282,6 +284,8 @@ public sealed class BranchSyncDashboardForm : Form
                 _statusLabel.Text = $"No pending transactions | Branch: {branchName}";
                 _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [POLL] No pending transactions for {branchName}. Transfers={pendingTransfers.Count}, reports={pendingReports.Count}, cancellations={pendingDeletions.Count}.");
             }
+
+            await PublishBranchStockSnapshotAsync(client, branchName);
         }
         catch (Exception ex)
         {
@@ -304,6 +308,93 @@ public sealed class BranchSyncDashboardForm : Form
         }
 
         return Task.FromResult(configuredBranch);
+    }
+
+    private async Task PublishBranchStockSnapshotAsync(HttpClient client, string branchName)
+    {
+        try
+        {
+            if (!string.Equals(_publishedStockSnapshotBranch, branchName, StringComparison.OrdinalIgnoreCase))
+            {
+                _publishedStockBalances.Clear();
+                _publishedStockSnapshotBranch = branchName;
+            }
+
+            using var connection = new SqlConnection(_settings.BuildConnectionString());
+            await connection.OpenAsync();
+            const string query = @"
+                SELECT p.ProductID, p.ProductDesc, p.ProductCode, p.BarCode, p.SellingPrice,
+                    COALESCE(branch_stock.AvailableQuantity, 0) AS AvailableQuantity
+                FROM [dbo].[Products] AS p
+                OUTER APPLY (
+                    SELECT SUM(stock.StockBal) AS AvailableQuantity
+                    FROM [dbo].[ProductStockBalances] AS stock
+                    WHERE stock.ProductID = p.ProductID
+                        AND stock.coid = @companyId
+                        AND UPPER(LTRIM(RTRIM(stock.branch))) = UPPER(@branch)
+                ) AS branch_stock
+                WHERE p.ProductID IS NOT NULL
+                    AND p.ProductDesc IS NOT NULL
+                    AND LTRIM(RTRIM(p.ProductDesc)) <> '';";
+            using var command = new SqlCommand(query, connection);
+            command.Parameters.AddWithValue("@companyId", BranchCompanyId);
+            command.Parameters.AddWithValue("@branch", branchName);
+
+            var products = new List<object>();
+            var changedBalances = new Dictionary<int, decimal>();
+            using (var reader = await command.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                {
+                    var productId = Convert.ToInt32(reader["ProductID"], CultureInfo.InvariantCulture);
+                    var availableQuantity = Convert.ToDecimal(reader["AvailableQuantity"], CultureInfo.InvariantCulture);
+                    if (_publishedStockBalances.TryGetValue(productId, out var previousBalance)
+                        && previousBalance == availableQuantity)
+                    {
+                        continue;
+                    }
+
+                    products.Add(new
+                    {
+                        product_id = productId,
+                        product_name = reader["ProductDesc"]?.ToString()?.Trim() ?? string.Empty,
+                        product_code = reader["ProductCode"]?.ToString()?.Trim() ?? string.Empty,
+                        barcode = reader["BarCode"]?.ToString()?.Trim() ?? string.Empty,
+                        selling_price = Convert.ToDecimal(reader["SellingPrice"], CultureInfo.InvariantCulture),
+                        available_quantity = availableQuantity,
+                    });
+                    changedBalances[productId] = availableQuantity;
+                }
+            }
+
+            if (products.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var batch in products.Chunk(200))
+            {
+                var payload = JsonSerializer.Serialize(new { branch = branchName, products = batch });
+                using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+                using var response = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/stock/snapshot/", content);
+                var responseBody = await response.Content.ReadAsStringAsync();
+                if (!response.IsSuccessStatusCode)
+                {
+                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: POS stock snapshot failed: {(int)response.StatusCode} {responseBody}");
+                    return;
+                }
+            }
+
+            foreach (var item in changedBalances)
+            {
+                _publishedStockBalances[item.Key] = item.Value;
+            }
+            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK] Published {products.Count} changed POS stock balance(s) for {branchName}.");
+        }
+        catch (Exception ex)
+        {
+            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: POS stock snapshot failed: {ex.Message}");
+        }
     }
 
     private async Task<bool> ApplySharedProductCatalogAsync(HttpClient client, string branchName)
