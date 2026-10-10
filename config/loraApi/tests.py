@@ -782,6 +782,7 @@ class StockTransferTests(TestCase):
 		product = next(item for item in summary['products'] if item['product_id'] == 1004)
 		self.assertEqual(product['available_quantity'], '-700')
 		self.assertEqual(product['movement_balance'], '-700')
+		self.assertEqual(product['sold_quantity'], '300')
 
 	def test_stock_page_highlights_products_with_negative_movement_balance(self):
 		response = self.client.get('/stock/')

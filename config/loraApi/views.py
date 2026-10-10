@@ -768,8 +768,10 @@ def stock_summary(request):
     received_by_product = {}
     sold_by_product = {}
     for movement in movement_totals:
-        target = received_by_product if movement['movement_type'] == 'received' else sold_by_product
-        target[movement['product_id']] = movement['total'] or 0
+        if movement['movement_type'] == 'received':
+            received_by_product[movement['product_id']] = movement['total'] or 0
+        elif movement['movement_type'] == 'sold':
+            sold_by_product[movement['product_id']] = movement['total'] or 0
 
     sent_by_product = {
         row['product_id']: row['total'] or 0
