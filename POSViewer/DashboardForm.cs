@@ -520,39 +520,39 @@ public sealed class DashboardForm : Form
         var returnQty = Math.Abs(qtyValue);
         var entryNo = GetCellValue(row, "EntryNo", "Entry");
         var returnReference = string.IsNullOrWhiteSpace(invoiceNum) ? $"RET-{DateTime.Now:yyyyMMddHHmmss}" : $"{invoiceNum}-RETURN";
+        if (productId <= 0)
+        {
+            AddLog("[WARNING] The selected invoice row does not contain a valid product ID.", Color.Orange);
+            return;
+        }
 
         try
         {
             using var connection = new SqlConnection(_settings.BuildConnectionString());
             await connection.OpenAsync();
+            using var transaction = connection.BeginTransaction();
 
-            var stockSql = @"
-                UPDATE [dbo].[ProductStockBalances]
-                SET StockBal = StockBal + @returnQty
-                WHERE branch = @branch
-                  AND ProductID = @productId";
-
-            if (coid > 0)
+            if (coid <= 0)
             {
-                stockSql += " AND coid = @coid";
+                const string resolveCoidSql = @"
+                    SELECT TOP (1) coid
+                    FROM [dbo].[Movement]
+                    WHERE (CAST(InvoiceNum AS nvarchar(50)) = @invoiceNum OR InvoiceNum = @invoiceNumInt)
+                      AND ProductID = @productId
+                      AND UPPER(LTRIM(RTRIM(CAST(Branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
+                    ORDER BY EntryNo DESC;";
+                using var resolveCoidCommand = new SqlCommand(resolveCoidSql, connection, transaction);
+                resolveCoidCommand.Parameters.AddWithValue("@invoiceNum", invoiceNum);
+                resolveCoidCommand.Parameters.AddWithValue("@invoiceNumInt", int.TryParse(invoiceNum, out var parsedInvoiceNumber) ? parsedInvoiceNumber : 0);
+                resolveCoidCommand.Parameters.AddWithValue("@productId", productId);
+                resolveCoidCommand.Parameters.AddWithValue("@branch", branch);
+                var resolvedCoid = await resolveCoidCommand.ExecuteScalarAsync();
+                coid = resolvedCoid is null or DBNull ? 0 : Convert.ToInt32(resolvedCoid, CultureInfo.InvariantCulture);
             }
 
-            using (var stockCommand = new SqlCommand(stockSql, connection))
+            if (coid <= 0)
             {
-                stockCommand.Parameters.AddWithValue("@returnQty", returnQty);
-                stockCommand.Parameters.AddWithValue("@branch", branch);
-                stockCommand.Parameters.AddWithValue("@productId", productId);
-                if (coid > 0)
-                {
-                    stockCommand.Parameters.AddWithValue("@coid", coid);
-                }
-
-                var affected = await stockCommand.ExecuteNonQueryAsync();
-                if (affected == 0)
-                {
-                    AddLog($"[WARNING] No stock balance row was updated for ProductID {productId} in branch {branch}.", Color.Orange);
-                    return;
-                }
+                throw new InvalidOperationException($"Could not determine the company ID for ProductID {productId} in branch {branch}; return was not applied.");
             }
 
             // Delete the movement record - use multiple strategies to ensure it's deleted
@@ -566,14 +566,16 @@ public sealed class DashboardForm : Form
                     WHERE (CAST(InvoiceNum AS nvarchar(50)) = @invoiceNum OR InvoiceNum = @invoiceNumInt)
                       AND ProductID = @productId
                       AND Branch = @branch
+                                            AND coid = @coid
                       AND (CAST(EntryNo AS nvarchar(50)) = @entryNo OR EntryNo = @entryNoInt);";
 
-                using (var deleteCommand = new SqlCommand(deleteSql, connection))
+                using (var deleteCommand = new SqlCommand(deleteSql, connection, transaction))
                 {
                     deleteCommand.Parameters.AddWithValue("@invoiceNum", invoiceNum);
                     deleteCommand.Parameters.AddWithValue("@invoiceNumInt", int.TryParse(invoiceNum, out var iv) ? iv : 0);
                     deleteCommand.Parameters.AddWithValue("@productId", productId);
                     deleteCommand.Parameters.AddWithValue("@branch", branch);
+                    deleteCommand.Parameters.AddWithValue("@coid", coid);
                     deleteCommand.Parameters.AddWithValue("@entryNo", entryNo);
                     deleteCommand.Parameters.AddWithValue("@entryNoInt", entryValue);
 
@@ -589,14 +591,16 @@ public sealed class DashboardForm : Form
                     DELETE FROM [dbo].[Movement]
                     WHERE (CAST(InvoiceNum AS nvarchar(50)) = @invoiceNum OR InvoiceNum = @invoiceNumInt)
                       AND ProductID = @productId
-                      AND Branch = @branch;";
+                                            AND Branch = @branch
+                                            AND coid = @coid;";
 
-                using (var deleteCommand = new SqlCommand(deleteSql, connection))
+                using (var deleteCommand = new SqlCommand(deleteSql, connection, transaction))
                 {
                     deleteCommand.Parameters.AddWithValue("@invoiceNum", invoiceNum);
                     deleteCommand.Parameters.AddWithValue("@invoiceNumInt", int.TryParse(invoiceNum, out var iv) ? iv : 0);
                     deleteCommand.Parameters.AddWithValue("@productId", productId);
                     deleteCommand.Parameters.AddWithValue("@branch", branch);
+                    deleteCommand.Parameters.AddWithValue("@coid", coid);
 
                     deletedRows = await deleteCommand.ExecuteNonQueryAsync();
                     AddLog($"[DEBUG] Strategy 2 (3-field match): deleted {deletedRows} row(s)", Color.Gray);
@@ -610,14 +614,16 @@ public sealed class DashboardForm : Form
                     DELETE FROM [dbo].[Movement]
                     WHERE (CAST(InvoiceNum AS nvarchar(50)) = @invoiceNum OR InvoiceNum = @invoiceNumInt)
                       AND ProductID = @productId
-                      AND UPPER(CAST(Branch AS nvarchar(100))) = UPPER(@branch);";
+                                            AND UPPER(CAST(Branch AS nvarchar(100))) = UPPER(@branch)
+                                            AND coid = @coid;";
 
-                using (var deleteCommand = new SqlCommand(deleteSql, connection))
+                using (var deleteCommand = new SqlCommand(deleteSql, connection, transaction))
                 {
                     deleteCommand.Parameters.AddWithValue("@invoiceNum", invoiceNum);
                     deleteCommand.Parameters.AddWithValue("@invoiceNumInt", int.TryParse(invoiceNum, out var iv) ? iv : 0);
                     deleteCommand.Parameters.AddWithValue("@productId", productId);
                     deleteCommand.Parameters.AddWithValue("@branch", branch);
+                    deleteCommand.Parameters.AddWithValue("@coid", coid);
 
                     deletedRows = await deleteCommand.ExecuteNonQueryAsync();
                     AddLog($"[DEBUG] Strategy 3 (case-insensitive): deleted {deletedRows} row(s)", Color.Gray);
@@ -626,10 +632,44 @@ public sealed class DashboardForm : Form
 
             if (deletedRows == 0)
             {
+                await transaction.RollbackAsync();
                 AddLog($"[WARNING] Stock was restored for ProductID {productId}, but no Movement transaction matched the criteria [Invoice={invoiceNum}, Product={productId}, Branch={branch}, Entry={entryNo}]. It may already be deleted or the data format doesn't match.", Color.Orange);
                 await LoadMovementsAsync();
                 return;
             }
+
+            const string restoreStockSql = @"
+                UPDATE [dbo].[ProductStockBalances]
+                SET StockBal = StockBal + @returnQty
+                WHERE ProductID = @productId
+                  AND coid = @coid
+                  AND UPPER(LTRIM(RTRIM(CAST(branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)));
+
+                IF @@ROWCOUNT = 0
+                BEGIN
+                    INSERT INTO [dbo].[ProductStockBalances]
+                        (ProductID, StockBal, MvtEntryNo, coid, branch, batchnumber, expirydate)
+                    SELECT
+                        @productId,
+                        @returnQty,
+                        ISNULL(MAX(MvtEntryNo), 0) + 1,
+                        @coid,
+                        @branch,
+                        NULL,
+                        NULL
+                    FROM [dbo].[ProductStockBalances] WITH (UPDLOCK, HOLDLOCK)
+                    WHERE ProductID = @productId;
+                END;";
+            using (var stockCommand = new SqlCommand(restoreStockSql, connection, transaction))
+            {
+                stockCommand.Parameters.AddWithValue("@returnQty", returnQty);
+                stockCommand.Parameters.AddWithValue("@branch", branch);
+                stockCommand.Parameters.AddWithValue("@productId", productId);
+                stockCommand.Parameters.AddWithValue("@coid", coid);
+                await stockCommand.ExecuteNonQueryAsync();
+            }
+
+            await transaction.CommitAsync();
 
             await NotifyGatewayInvoiceDeletedAsync(invoiceNum, branch, productId, entryNo);
 

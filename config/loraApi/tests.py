@@ -722,6 +722,33 @@ class StockTransferTests(TestCase):
 		self.assertEqual(product['received_quantity'], '5')
 		self.assertEqual(product['sold_quantity'], '3')
 
+	def test_stock_summary_reports_negative_movement_balance_for_branch_products(self):
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=1001, product_name='Negative movement product', available_quantity=4,
+		)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=1001, product_name='Negative movement product',
+			movement_type='received', quantity=5, source='opening stock',
+		)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=1001, product_name='Negative movement product',
+			movement_type='sold', quantity=8, source='sale',
+		)
+
+		response = self.client.get('/api/stock/summary/?branch=BranchA')
+
+		self.assertEqual(response.status_code, 200)
+		product = response.json()['products'][0]
+		self.assertEqual(product['available_quantity'], '4')
+		self.assertEqual(product['movement_balance'], '-3')
+
+	def test_stock_page_highlights_products_with_negative_movement_balance(self):
+		response = self.client.get('/stock/')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, 'negative-stock')
+		self.assertContains(response, 'Negative movement')
+
 	def test_stock_movements_can_be_filtered_by_date(self):
 		from django.utils import timezone
 		from datetime import timedelta

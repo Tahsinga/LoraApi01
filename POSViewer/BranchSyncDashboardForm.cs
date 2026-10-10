@@ -273,7 +273,7 @@ public sealed class BranchSyncDashboardForm : Form
                 }
 
                 _statusLabel.ForeColor = Color.DarkGreen;
-                _statusLabel.Text = $"✓ Processed {pendingDeletions.Count} deletion(s), {pendingReports.Count} report(s), {Math.Min(pendingTransfers.Count, 1)} transfer(s) | More transfers remain queued until this is confirmed";
+                _statusLabel.Text = $"✓ Sync complete | Branch: {branchName}";
                 _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] === SYNC COMPLETE ===");
             }
             else
@@ -602,6 +602,17 @@ public sealed class BranchSyncDashboardForm : Form
                 }
             }
 
+            if (wholeInvoice)
+            {
+                return await CancelWholeInvoiceAndConfirmAsync(
+                    connection,
+                    client,
+                    deletion,
+                    invoiceNum,
+                    branchName,
+                    stockLines);
+            }
+
             // Build WHERE clause from trigger data
             var deleteSql = @"
                 DELETE FROM [dbo].[Movement]
@@ -791,6 +802,216 @@ public sealed class BranchSyncDashboardForm : Form
         return deletedCount;
     }
 
+    private async Task<int> CancelWholeInvoiceAndConfirmAsync(
+        SqlConnection connection,
+        HttpClient client,
+        DeletionTrigger deletion,
+        string invoiceNum,
+        string branchName,
+        List<(int ProductId, string ProductName, decimal Quantity, decimal UnitPrice, decimal LineTotal)> stockLines)
+    {
+        if (!int.TryParse(invoiceNum, NumberStyles.Integer, CultureInfo.InvariantCulture, out var invoiceNumber))
+        {
+            throw new InvalidOperationException($"Invoice number '{invoiceNum}' is not a valid Quantum invoice number.");
+        }
+
+        var companyId = deletion.coid ?? BranchCompanyId;
+        var cancelledDetails = await LoadCancelledInvoiceDetailsAsync(connection, invoiceNumber, companyId, branchName);
+        if (cancelledDetails.Rows.Count == 0)
+        {
+            if (stockLines.Count == 0)
+            {
+                throw new InvalidOperationException($"Invoice {invoiceNum} has no matching Movement rows and is not already cancelled.");
+            }
+
+            using var cancelCommand = new SqlCommand("dbo.CancelSale", connection)
+            {
+                CommandType = CommandType.StoredProcedure
+            };
+            cancelCommand.Parameters.AddWithValue("@invoicenum", invoiceNumber);
+            cancelCommand.Parameters.AddWithValue("@Cancelledby", Environment.UserName);
+            cancelCommand.Parameters.AddWithValue("@datecancelled", int.Parse(DateTime.Today.ToString("yyyyMMdd", CultureInfo.InvariantCulture), CultureInfo.InvariantCulture));
+            cancelCommand.Parameters.AddWithValue("@coid", companyId);
+            cancelCommand.Parameters.AddWithValue("@branch", branchName);
+            cancelCommand.Parameters.AddWithValue("@machinename", Environment.MachineName);
+            cancelCommand.Parameters.AddWithValue("@iswarehouse", 0);
+            cancelCommand.Parameters.AddWithValue("@approval", 0);
+            cancelCommand.Parameters.AddWithValue("@comment", deletion.message ?? "Cancelled from web");
+            await cancelCommand.ExecuteNonQueryAsync();
+
+            try
+            {
+                cancelledDetails = await LoadCancelledInvoiceDetailsAsync(connection, invoiceNumber, companyId, branchName);
+            }
+            catch (Exception ex)
+            {
+                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Quantum cancelled invoice {invoiceNum}, but credit-note details could not be loaded: {ex.Message}");
+            }
+        }
+        else
+        {
+            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] Invoice {invoiceNum} is already cancelled in Quantum; skipping duplicate cancellation.");
+        }
+
+        var creditNote = BuildCancellationReceiptDetails(cancelledDetails, stockLines, invoiceNum, branchName);
+        var printed = ReceiptPrinter.TryPrint(_settings.PrinterName, "CREDIT NOTE", creditNote, out var printError);
+        if (!printed)
+        {
+            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Cancellation completed, but credit note was not printed: {printError}");
+        }
+
+        var completedCount = Math.Max(1, Math.Max(stockLines.Count, cancelledDetails.Rows.Count));
+        var confirmPayload = new
+        {
+            deletion_id = deletion.id,
+            deleted_rows = completedCount,
+            branch = branchName,
+            deleted_by = Environment.UserName,
+            receipt_products = stockLines.Select(line => new
+            {
+                product_id = line.ProductId,
+                product_name = line.ProductName,
+                quantity = line.Quantity,
+                unit_price = line.UnitPrice,
+                total = line.LineTotal,
+            }).ToList(),
+            receipt_total = stockLines.Sum(line => line.LineTotal),
+            success = true
+        };
+
+        try
+        {
+            using var confirmContent = new StringContent(JsonSerializer.Serialize(confirmPayload), Encoding.UTF8, "application/json");
+            using var confirmResponse = await client.PostAsync(
+                $"{_settings.GetApiBaseUrl()}/api/confirm-deletion/",
+                confirmContent);
+
+            if (confirmResponse.IsSuccessStatusCode)
+            {
+                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] → Quantum cancellation confirmed to API: deletion_id={deletion.id}");
+            }
+            else
+            {
+                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Invoice {invoiceNum} was cancelled locally, but API confirmation returned {confirmResponse.StatusCode}.");
+            }
+        }
+        catch (Exception ex)
+        {
+            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Invoice {invoiceNum} was cancelled locally, but API confirmation failed: {ex.Message}");
+        }
+
+        return completedCount;
+    }
+
+    private static async Task<DataTable> LoadCancelledInvoiceDetailsAsync(
+        SqlConnection connection,
+        int invoiceNumber,
+        int companyId,
+        string branchName)
+    {
+        using var command = new SqlCommand("SalesCancelledForPeriodByInvoiceDetails", connection)
+        {
+            CommandType = CommandType.StoredProcedure
+        };
+        command.Parameters.AddWithValue("@invoicenum", invoiceNumber);
+        command.Parameters.AddWithValue("@coid", companyId);
+        command.Parameters.AddWithValue("@branch", branchName);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        var details = new DataTable();
+        details.Load(reader);
+        return details;
+    }
+
+    private static List<(string Label, string Value)> BuildCancellationReceiptDetails(
+        DataTable cancelledDetails,
+        List<(int ProductId, string ProductName, decimal Quantity, decimal UnitPrice, decimal LineTotal)> stockLines,
+        string invoiceNum,
+        string branchName)
+    {
+        var details = cancelledDetails.Rows.Count > 0 ? cancelledDetails.Rows[0] : null;
+        var itemLines = cancelledDetails.Rows.Count > 0
+            ? cancelledDetails.Rows.Cast<DataRow>().Select(row =>
+            {
+                var code = GetReceiptText(row, "HSCode");
+                var description = GetReceiptText(row, "Description");
+                var productName = string.Join(" - ", new[] { code, description }.Where(value => !string.IsNullOrWhiteSpace(value)));
+                var quantity = GetReceiptDecimal(row, "Quantity");
+                var unitPrice = GetReceiptDecimal(row, "Unit_Selling_Price");
+                var tax = GetReceiptDecimal(row, "Tax");
+                var discount = GetReceiptDecimal(row, "DiscountAmt");
+                var total = quantity * unitPrice + tax;
+                var productComment = GetReceiptText(row, "Comments");
+                var line = $"{productName}\n{quantity:0.##} x {unitPrice:0.00} | Tax {tax:0.00} | Total {total:0.00}";
+                if (discount > 0m)
+                {
+                    line += $"\nDiscount per unit: {discount:0.00}";
+                }
+
+                if (!string.IsNullOrWhiteSpace(productComment))
+                {
+                    line += $"\n{productComment}";
+                }
+
+                return line;
+            }).ToList()
+            : stockLines.Select(line => $"{line.ProductName}\n{line.Quantity:0.##} x {line.UnitPrice:0.00} | Total {line.LineTotal:0.00}").ToList();
+
+        var subtotal = cancelledDetails.Rows.Count > 0
+            ? cancelledDetails.Rows.Cast<DataRow>().Sum(row => GetReceiptDecimal(row, "Sub_Total"))
+            : stockLines.Sum(line => line.Quantity * line.UnitPrice);
+        var taxTotal = cancelledDetails.Rows.Cast<DataRow>().Sum(row => GetReceiptDecimal(row, "Tax"));
+        var invoiceDiscount = details is null ? 0m : GetReceiptDecimal(details, "invdiscount");
+        var saleDate = details is null ? string.Empty : GetReceiptText(details, "Sale_Date");
+        if (DateTime.TryParseExact(saleDate, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedSaleDate)
+            || DateTime.TryParse(saleDate, CultureInfo.InvariantCulture, DateTimeStyles.None, out parsedSaleDate))
+        {
+            saleDate = parsedSaleDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        }
+
+        return new List<(string Label, string Value)>
+        {
+            ("Credit Note Number", details is null ? "Not provided by Quantum" : GetReceiptText(details, "CreditNoteNum")),
+            ("Comments", details is null ? "Cancelled from web" : GetReceiptText(details, "CreditNoteComment")),
+            ("Invoice Number", invoiceNum),
+            ("Invoice Date", saleDate),
+            ("Invoice Time", details is null ? string.Empty : GetReceiptText(details, "trantime")),
+            ("Customer", details is null ? string.Empty : GetReceiptText(details, "ref")),
+            ("Currency", details is null ? string.Empty : GetReceiptText(details, "Currency")),
+            ("Products", string.Join(Environment.NewLine, itemLines)),
+            ("Subtotal", subtotal.ToString("0.00", CultureInfo.InvariantCulture)),
+            ("Tax", taxTotal.ToString("0.00", CultureInfo.InvariantCulture)),
+            ("Invoice Discount", invoiceDiscount.ToString("0.00", CultureInfo.InvariantCulture)),
+            ("Total", (subtotal + taxTotal).ToString("0.00", CultureInfo.InvariantCulture)),
+            ("Cancelled By", Environment.UserName),
+            ("Branch", branchName),
+            ("Date", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture))
+        };
+    }
+
+    private static string GetReceiptText(DataRow row, string columnName)
+    {
+        return row.Table.Columns.Contains(columnName) && !row.IsNull(columnName)
+            ? Convert.ToString(row[columnName], CultureInfo.InvariantCulture) ?? string.Empty
+            : string.Empty;
+    }
+
+    private static decimal GetReceiptDecimal(DataRow row, string columnName)
+    {
+        if (!row.Table.Columns.Contains(columnName) || row.IsNull(columnName))
+        {
+            return 0m;
+        }
+
+        return decimal.TryParse(
+            Convert.ToString(row[columnName], CultureInfo.InvariantCulture),
+            NumberStyles.Number,
+            CultureInfo.InvariantCulture,
+            out var value)
+            ? value
+            : 0m;
+    }
+
     private async Task ApplyStockTransferAsync(StockTransfer transfer, HttpClient client, string branchName)
     {
         var success = false;
@@ -807,82 +1028,21 @@ public sealed class BranchSyncDashboardForm : Form
 
             branchName = configuredBranch;
             var isStockTake = decimal.TryParse(transfer.target_quantity, NumberStyles.Number, CultureInfo.InvariantCulture, out var targetQuantity);
-            if (!decimal.TryParse(transfer.quantity, NumberStyles.Number, CultureInfo.InvariantCulture, out var quantity) || quantity < 0 || (isStockTake && targetQuantity < 0))
+            if (!decimal.TryParse(transfer.quantity, NumberStyles.Number, CultureInfo.InvariantCulture, out var quantity) || quantity < 0 || (!isStockTake && quantity == 0) || (isStockTake && targetQuantity < 0))
             {
                 throw new InvalidOperationException($"Invalid transfer quantity: {transfer.quantity}");
             }
 
-            var quantityParameter = isStockTake ? targetQuantity : quantity;
             _syncQueueListBox.Items.Insert(0, isStockTake
                 ? $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Replacing branch stock for product {transfer.product_id} with exact quantity {targetQuantity}."
                 : $"[{DateTime.Now:HH:mm:ss}] [TRANSFER] Adding quantity {quantity} for product {transfer.product_id}.");
 
-            using var connection = new SqlConnection(_settings.BuildConnectionString());
-            await connection.OpenAsync();
-            var branchCoid = BranchCompanyId;
-                        const string updateSql = @"
-                                IF @isStockTake = 1
-                                BEGIN
-                                    UPDATE [dbo].[ProductStockBalances]
-                                    SET StockBal = 0, coid = @coid
-                                    WHERE UPPER(LTRIM(RTRIM(CAST(branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
-                                        AND coid = @coid
-                                        AND ProductID = @productId;
-
-                                    UPDATE TOP (1) [dbo].[ProductStockBalances]
-                                    SET StockBal = @quantity, coid = @coid
-                                    WHERE UPPER(LTRIM(RTRIM(CAST(branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
-                                        AND coid = @coid
-                                        AND ProductID = @productId;
-                                END
-                                ELSE
-                                BEGIN
-                                    UPDATE [dbo].[ProductStockBalances]
-                                    SET StockBal = StockBal + @quantity, coid = @coid
-                                    WHERE UPPER(LTRIM(RTRIM(CAST(branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
-                                        AND coid = @coid
-                                        AND ProductID = @productId;
-                                END";
-
-            using var command = new SqlCommand(updateSql, connection);
-            command.Parameters.AddWithValue("@quantity", quantityParameter);
-            command.Parameters.AddWithValue("@isStockTake", isStockTake ? 1 : 0);
-            command.Parameters.AddWithValue("@branch", branchName);
-            command.Parameters.AddWithValue("@productId", transfer.product_id);
-            command.Parameters.AddWithValue("@coid", branchCoid);
-            var affected = await command.ExecuteNonQueryAsync();
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK DB] Updated {affected} balance row(s) for product {transfer.product_id}.");
-            if (affected == 0)
-            {
-                const string createBranchRowSql = @"
-                    INSERT INTO [dbo].[ProductStockBalances]
-                        (ProductID, StockBal, MvtEntryNo, coid, branch, batchnumber, expirydate)
-                                        SELECT TOP 1
-                        @productId,
-                        @quantity,
-                        ISNULL(MAX(MvtEntryNo), 0) + 1,
-                        @coid,
-                        @branch,
-                        MAX(batchnumber),
-                        MAX(expirydate)
-                    FROM [dbo].[ProductStockBalances]
-                                        WHERE ProductID = @productId;";
-                using var createBranchRowCommand = new SqlCommand(createBranchRowSql, connection);
-                createBranchRowCommand.Parameters.AddWithValue("@quantity", quantity);
-                createBranchRowCommand.Parameters.AddWithValue("@branch", branchName);
-                createBranchRowCommand.Parameters.AddWithValue("@productId", transfer.product_id);
-                createBranchRowCommand.Parameters.AddWithValue("@coid", branchCoid);
-                affected = await createBranchRowCommand.ExecuteNonQueryAsync();
-            }
-            if (affected == 0)
-            {
-                throw new InvalidOperationException($"No ProductStockBalances row exists for product {transfer.product_id} at {branchName}.");
-            }
+            var finalBalance = await RecordStockMovementAsync(transfer, branchName, isStockTake, quantity, targetQuantity);
 
             success = true;
             _syncQueueListBox.Items.Insert(0, isStockTake
-                ? $"[{DateTime.Now:HH:mm:ss}] ✓ STOCK TAKE APPLIED: {transfer.product_name} (Product {transfer.product_id}), exact quantity {targetQuantity}"
-                : $"[{DateTime.Now:HH:mm:ss}] ✓ STOCK RECEIVED: {transfer.product_name} (Product {transfer.product_id}), quantity {quantity}");
+                ? $"[{DateTime.Now:HH:mm:ss}] ✓ STOCK TAKE APPLIED: {transfer.product_name} (Product {transfer.product_id}), exact quantity {finalBalance} recorded in product movement."
+                : $"[{DateTime.Now:HH:mm:ss}] ✓ STOCK RECEIVED: {transfer.product_name} (Product {transfer.product_id}), quantity {quantity}; movement balance {finalBalance}.");
         }
         catch (Exception ex)
         {
@@ -900,6 +1060,289 @@ public sealed class BranchSyncDashboardForm : Form
         using var content = new StringContent(JsonSerializer.Serialize(completion), Encoding.UTF8, "application/json");
         var completionResponse = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/stock/transfers/complete/", content);
         _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [TRANSFER] API acknowledgement for {transfer.id}: {(completionResponse.IsSuccessStatusCode ? "accepted" : completionResponse.StatusCode)}");
+    }
+
+    private async Task<decimal> RecordStockMovementAsync(
+        StockTransfer transfer,
+        string branchName,
+        bool isStockTake,
+        decimal quantity,
+        decimal targetQuantity)
+    {
+        if (string.IsNullOrWhiteSpace(transfer.id))
+        {
+            throw new InvalidOperationException("The stock command has no ID and cannot be safely processed more than once.");
+        }
+
+        using var connection = new SqlConnection(_settings.BuildConnectionString());
+        await connection.OpenAsync();
+        using var transaction = connection.BeginTransaction();
+        try
+        {
+            var commandMarker = $"PV:{transfer.id}";
+            const string existingMovementSql = @"
+                SELECT TOP (1) EntryNo
+                FROM [dbo].[Movement] WITH (UPDLOCK, HOLDLOCK)
+                WHERE OtherDetail = @commandMarker
+                  AND ProductID = @productId
+                  AND coid = @coid
+                  AND UPPER(LTRIM(RTRIM(CAST(Branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
+                ORDER BY EntryNo DESC;";
+            using (var existingMovementCommand = new SqlCommand(existingMovementSql, connection, transaction))
+            {
+                existingMovementCommand.Parameters.AddWithValue("@commandMarker", commandMarker);
+                existingMovementCommand.Parameters.AddWithValue("@productId", transfer.product_id);
+                existingMovementCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
+                existingMovementCommand.Parameters.AddWithValue("@branch", branchName);
+                var existingMovement = await existingMovementCommand.ExecuteScalarAsync();
+                if (existingMovement is not null and not DBNull)
+                {
+                    var existingBalance = await GetProductStockBalanceAsync(connection, transaction, transfer.product_id, branchName);
+                    await transaction.CommitAsync();
+                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] Existing movement found for command {transfer.id}; skipped duplicate stock update.");
+                    return existingBalance;
+                }
+            }
+
+            const string productSql = @"
+                SELECT TOP (1) COALESCE(Cost, 0) AS Cost
+                FROM [dbo].[Products]
+                WHERE ProductID = @productId AND coid = @coid;";
+            decimal productCost;
+            using (var productCommand = new SqlCommand(productSql, connection, transaction))
+            {
+                productCommand.Parameters.AddWithValue("@productId", transfer.product_id);
+                productCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
+                var cost = await productCommand.ExecuteScalarAsync();
+                if (cost is null or DBNull)
+                {
+                    throw new InvalidOperationException($"Product {transfer.product_id} was not found for company {BranchCompanyId}.");
+                }
+
+                productCost = Convert.ToDecimal(cost, CultureInfo.InvariantCulture);
+            }
+
+            var currentBalance = await GetProductStockBalanceAsync(connection, transaction, transfer.product_id, branchName);
+            var expectedBalance = isStockTake ? targetQuantity : currentBalance + quantity;
+            var invoiceNumber = await GetStockMovementInvoiceNumberAsync(connection, transaction, transfer.id, branchName, isStockTake);
+            var today = int.Parse(DateTime.Today.ToString("yyyyMMdd", CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
+            var time = int.Parse(DateTime.Now.ToString("HHmm", CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
+            var reference = isStockTake
+                ? targetQuantity > currentBalance ? "STOCK INCREASED" : targetQuantity < currentBalance ? "STOCK REDUCED" : "STOCK MAINTAINED"
+                : "NEW STOCK IN";
+
+            if (!isStockTake)
+            {
+                using var movementCommand = new SqlCommand("InsertNewStock", connection, transaction)
+                {
+                    CommandType = CommandType.StoredProcedure
+                };
+                movementCommand.Parameters.AddWithValue("@trandate", today);
+                movementCommand.Parameters.AddWithValue("@invoicenum", invoiceNumber);
+                movementCommand.Parameters.AddWithValue("@productid", transfer.product_id);
+                movementCommand.Parameters.AddWithValue("@isstockin", 1);
+                movementCommand.Parameters.AddWithValue("@ref", reference);
+                movementCommand.Parameters.AddWithValue("@quantity", quantity);
+                movementCommand.Parameters.AddWithValue("@cost", productCost);
+                movementCommand.Parameters.AddWithValue("@doneby", Environment.UserName);
+                movementCommand.Parameters.AddWithValue("@donewhen", today);
+                movementCommand.Parameters.AddWithValue("@trancode", 1);
+                movementCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
+                movementCommand.Parameters.AddWithValue("@branch", branchName);
+                movementCommand.Parameters.AddWithValue("@suppliername", string.Empty);
+                await movementCommand.ExecuteNonQueryAsync();
+            }
+            else if (targetQuantity < currentBalance)
+            {
+                using var movementCommand = new SqlCommand("InsertNewSaleStockTake", connection, transaction)
+                {
+                    CommandType = CommandType.StoredProcedure
+                };
+                movementCommand.Parameters.AddWithValue("@trandate", today);
+                movementCommand.Parameters.AddWithValue("@invoicenum", invoiceNumber);
+                movementCommand.Parameters.AddWithValue("@productid", transfer.product_id);
+                movementCommand.Parameters.AddWithValue("@isstockin", 0);
+                movementCommand.Parameters.AddWithValue("@ref", reference);
+                movementCommand.Parameters.AddWithValue("@quantity", currentBalance - targetQuantity);
+                movementCommand.Parameters.AddWithValue("@unitcost", productCost);
+                movementCommand.Parameters.AddWithValue("@salesprice", 0m);
+                movementCommand.Parameters.AddWithValue("@paymentmethod", 0);
+                movementCommand.Parameters.AddWithValue("@doneby", Environment.UserName);
+                movementCommand.Parameters.AddWithValue("@donewhen", today);
+                movementCommand.Parameters.AddWithValue("@trancode", 2);
+                movementCommand.Parameters.AddWithValue("@TranTime", time);
+                movementCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
+                movementCommand.Parameters.AddWithValue("@branch", branchName);
+                movementCommand.Parameters.AddWithValue("@details", commandMarker);
+                movementCommand.Parameters.AddWithValue("@stockbal", expectedBalance);
+                movementCommand.Parameters.AddWithValue("@machinename", Environment.MachineName);
+                await movementCommand.ExecuteNonQueryAsync();
+            }
+            else
+            {
+                using var movementCommand = new SqlCommand("InsertNewStockStockTake", connection, transaction)
+                {
+                    CommandType = CommandType.StoredProcedure
+                };
+                movementCommand.Parameters.AddWithValue("@trandate", today);
+                movementCommand.Parameters.AddWithValue("@invoicenum", invoiceNumber);
+                movementCommand.Parameters.AddWithValue("@productid", transfer.product_id);
+                movementCommand.Parameters.AddWithValue("@isstockin", 1);
+                movementCommand.Parameters.AddWithValue("@ref", reference);
+                movementCommand.Parameters.AddWithValue("@quantity", targetQuantity - currentBalance);
+                movementCommand.Parameters.AddWithValue("@cost", productCost);
+                movementCommand.Parameters.AddWithValue("@doneby", Environment.UserName);
+                movementCommand.Parameters.AddWithValue("@donewhen", today);
+                movementCommand.Parameters.AddWithValue("@trancode", 2);
+                movementCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
+                movementCommand.Parameters.AddWithValue("@branch", branchName);
+                movementCommand.Parameters.AddWithValue("@details", commandMarker);
+                movementCommand.Parameters.AddWithValue("@stockbal", expectedBalance);
+                movementCommand.Parameters.AddWithValue("@machinename", Environment.MachineName);
+                movementCommand.Parameters.AddWithValue("@trantime", DateTime.Now.ToString("HH:mm", CultureInfo.InvariantCulture));
+                await movementCommand.ExecuteNonQueryAsync();
+            }
+
+            using (var refreshBalanceCommand = new SqlCommand("SetQuickStockBalForOne", connection, transaction)
+            {
+                CommandType = CommandType.StoredProcedure
+            })
+            {
+                refreshBalanceCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
+                refreshBalanceCommand.Parameters.AddWithValue("@branch", branchName);
+                refreshBalanceCommand.Parameters.AddWithValue("@iswarehouse", 0);
+                refreshBalanceCommand.Parameters.AddWithValue("@productid", transfer.product_id);
+                await refreshBalanceCommand.ExecuteNonQueryAsync();
+            }
+
+            var actualBalance = await GetProductStockBalanceAsync(connection, transaction, transfer.product_id, branchName);
+            if (actualBalance != expectedBalance)
+            {
+                throw new InvalidOperationException($"Movement procedure produced stock balance {actualBalance}, but expected {expectedBalance}; the command was rolled back.");
+            }
+
+            const string updateMovementSql = @"
+                ;WITH NewMovement AS (
+                    SELECT TOP (1) *
+                    FROM [dbo].[Movement]
+                    WHERE InvoiceNum = @invoiceNum
+                      AND ProductID = @productId
+                      AND coid = @coid
+                      AND UPPER(LTRIM(RTRIM(CAST(Branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
+                    ORDER BY EntryNo DESC
+                )
+                UPDATE NewMovement
+                SET OtherDetail = @commandMarker;";
+            using (var updateMovementCommand = new SqlCommand(updateMovementSql, connection, transaction))
+            {
+                updateMovementCommand.Parameters.AddWithValue("@invoiceNum", invoiceNumber);
+                updateMovementCommand.Parameters.AddWithValue("@productId", transfer.product_id);
+                updateMovementCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
+                updateMovementCommand.Parameters.AddWithValue("@branch", branchName);
+                updateMovementCommand.Parameters.AddWithValue("@commandMarker", commandMarker);
+                if (await updateMovementCommand.ExecuteNonQueryAsync() == 0)
+                {
+                    throw new InvalidOperationException($"The movement row for command {transfer.id} could not be found after insertion.");
+                }
+            }
+
+            await transaction.CommitAsync();
+            return actualBalance;
+        }
+        catch
+        {
+            try
+            {
+                await transaction.RollbackAsync();
+            }
+            catch
+            {
+            }
+
+            throw;
+        }
+    }
+
+    private static async Task<decimal> GetProductStockBalanceAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int productId,
+        string branchName)
+    {
+        using (var movementCommand = new SqlCommand("ProductMovement", connection, transaction)
+        {
+            CommandType = CommandType.StoredProcedure
+        })
+        {
+            movementCommand.Parameters.AddWithValue("@startdate", 0);
+            movementCommand.Parameters.AddWithValue("@enddate", 99991231);
+            movementCommand.Parameters.AddWithValue("@productid", productId);
+            movementCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
+            movementCommand.Parameters.AddWithValue("@isbatch", 0);
+            movementCommand.Parameters.AddWithValue("@branch", branchName);
+            movementCommand.Parameters.AddWithValue("@nobal", 0);
+
+            using var reader = await movementCommand.ExecuteReaderAsync();
+            if (reader.HasRows)
+            {
+                var entryNumberOrdinal = reader.GetOrdinal("Entry_No");
+                var stockBalanceOrdinal = reader.GetOrdinal("Stock_Balance");
+                var latestEntryNumber = int.MinValue;
+                decimal latestBalance = 0m;
+                while (await reader.ReadAsync())
+                {
+                    var entryNumber = Convert.ToInt32(reader.GetValue(entryNumberOrdinal), CultureInfo.InvariantCulture);
+                    if (entryNumber < latestEntryNumber)
+                    {
+                        continue;
+                    }
+
+                    latestEntryNumber = entryNumber;
+                    latestBalance = reader.IsDBNull(stockBalanceOrdinal)
+                        ? 0m
+                        : Convert.ToDecimal(reader.GetValue(stockBalanceOrdinal), CultureInfo.InvariantCulture);
+                }
+
+                return latestBalance;
+            }
+        }
+
+        return 0m;
+    }
+
+    private static async Task<int> GetStockMovementInvoiceNumberAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        string transferId,
+        string branchName,
+        bool isStockTake)
+    {
+        var procedureName = isStockTake ? "GetNextStockTakeNumber" : "GetNewInvoiceNumber";
+        using var command = new SqlCommand(procedureName, connection, transaction)
+        {
+            CommandType = CommandType.StoredProcedure
+        };
+
+        if (isStockTake)
+        {
+            command.Parameters.AddWithValue("@coid", BranchCompanyId);
+            command.Parameters.AddWithValue("@branch", branchName);
+            command.Parameters.AddWithValue("@details", $"PV:{transferId}");
+            command.Parameters.AddWithValue("@new_id", 0);
+        }
+        else
+        {
+            command.Parameters.AddWithValue("@desc", $"PV:{transferId}");
+            command.Parameters.AddWithValue("@newinvoicenum", 0);
+        }
+
+        var invoiceNumber = await command.ExecuteScalarAsync();
+        if (invoiceNumber is null or DBNull)
+        {
+            throw new InvalidOperationException($"Quantum did not allocate an invoice number for stock command {transferId}.");
+        }
+
+        return Convert.ToInt32(invoiceNumber, CultureInfo.InvariantCulture);
     }
 
     private async Task ApplyBranchPriceUpdateAsync(BranchPriceUpdate priceUpdate, HttpClient client, string branchName)
