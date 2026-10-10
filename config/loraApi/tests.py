@@ -743,6 +743,8 @@ class StockTransferTests(TestCase):
 		self.assertEqual(product['movement_balance'], '-3')
 
 	def test_pos_stock_snapshot_updates_negative_balance_and_is_idempotent(self):
+		from django.utils import timezone
+
 		ProductCatalog.objects.create(
 			branch='BranchA', product_id=1004, product_name='TEST PRODUCT',
 			product_code='1005', available_quantity=300,
@@ -761,8 +763,8 @@ class StockTransferTests(TestCase):
 		)
 		payload = {'branch': 'BranchA', 'products': [{
 			'product_id': 1004, 'product_name': 'TEST PRODUCT', 'product_code': '1005',
-			'available_quantity': -700,
-		}]}
+			'available_quantity': -700, 'sold_quantity': 1011, 'received_quantity': 1200,
+		}], 'movement_date': timezone.localdate().isoformat()}
 
 		first_response = self.client.post(
 			'/api/stock/snapshot/', data=json.dumps(payload), content_type='application/json',
@@ -782,7 +784,8 @@ class StockTransferTests(TestCase):
 		product = next(item for item in summary['products'] if item['product_id'] == 1004)
 		self.assertEqual(product['available_quantity'], '-700')
 		self.assertEqual(product['movement_balance'], '-700')
-		self.assertEqual(product['sold_quantity'], '300')
+		self.assertEqual(product['sold_quantity'], '1011')
+		self.assertEqual(product['received_quantity'], '1200')
 
 	def test_stock_page_highlights_products_with_negative_movement_balance(self):
 		response = self.client.get('/stock/')

@@ -19,7 +19,7 @@ public sealed class BranchSyncDashboardForm : Form
     private readonly Button _backButton = new();
     private readonly System.Windows.Forms.Timer _autoPollTimer = new();
     private readonly SemaphoreSlim _syncGate = new(1, 1);
-    private readonly Dictionary<int, decimal> _publishedStockBalances = new();
+    private readonly Dictionary<int, (decimal Balance, decimal Sold, decimal Received, string Date)> _publishedStockStates = new();
     private DateTimeOffset? _sharedProductCatalogSince;
     private string? _publishedStockSnapshotBranch;
 
@@ -316,7 +316,7 @@ public sealed class BranchSyncDashboardForm : Form
         {
             if (!string.Equals(_publishedStockSnapshotBranch, branchName, StringComparison.OrdinalIgnoreCase))
             {
-                _publishedStockBalances.Clear();
+                _publishedStockStates.Clear();
                 _publishedStockSnapshotBranch = branchName;
             }
 
@@ -324,7 +324,9 @@ public sealed class BranchSyncDashboardForm : Form
             await connection.OpenAsync();
             const string query = @"
                 SELECT p.ProductID, p.ProductDesc, p.ProductCode, p.BarCode, p.SellingPrice,
-                    COALESCE(branch_stock.AvailableQuantity, 0) AS AvailableQuantity
+                    COALESCE(branch_stock.AvailableQuantity, 0) AS AvailableQuantity,
+                    COALESCE(daily_movements.SoldQuantity, 0) AS SoldQuantity,
+                    COALESCE(daily_movements.ReceivedQuantity, 0) AS ReceivedQuantity
                 FROM [dbo].[Products] AS p
                 OUTER APPLY (
                     SELECT SUM(stock.StockBal) AS AvailableQuantity
@@ -333,23 +335,41 @@ public sealed class BranchSyncDashboardForm : Form
                         AND stock.coid = @companyId
                         AND UPPER(LTRIM(RTRIM(stock.branch))) = UPPER(@branch)
                 ) AS branch_stock
+                LEFT JOIN (
+                    SELECT movement.ProductID,
+                        SUM(CASE WHEN movement.TranCode = 3 AND movement.DateCancelled IS NULL THEN movement.Quantity ELSE 0 END) AS SoldQuantity,
+                        SUM(CASE WHEN movement.TranCode = 1 THEN movement.Quantity ELSE 0 END) AS ReceivedQuantity
+                    FROM [dbo].[Movement] AS movement
+                    WHERE movement.coid = @companyId
+                        AND UPPER(LTRIM(RTRIM(movement.branch))) = UPPER(@branch)
+                        AND movement.TranDate = @movementDate
+                        AND movement.TranCode IN (1, 3)
+                    GROUP BY movement.ProductID
+                ) AS daily_movements ON daily_movements.ProductID = p.ProductID
                 WHERE p.ProductID IS NOT NULL
                     AND p.ProductDesc IS NOT NULL
                     AND LTRIM(RTRIM(p.ProductDesc)) <> '';";
             using var command = new SqlCommand(query, connection);
             command.Parameters.AddWithValue("@companyId", BranchCompanyId);
             command.Parameters.AddWithValue("@branch", branchName);
+            var movementDate = DateTime.Now.Date;
+            var movementDateNumber = int.Parse(movementDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
+            var movementDateText = movementDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            command.Parameters.AddWithValue("@movementDate", movementDateNumber);
 
             var products = new List<object>();
-            var changedBalances = new Dictionary<int, decimal>();
+            var changedStates = new Dictionary<int, (decimal Balance, decimal Sold, decimal Received, string Date)>();
             using (var reader = await command.ExecuteReaderAsync())
             {
                 while (await reader.ReadAsync())
                 {
                     var productId = Convert.ToInt32(reader["ProductID"], CultureInfo.InvariantCulture);
                     var availableQuantity = Convert.ToDecimal(reader["AvailableQuantity"], CultureInfo.InvariantCulture);
-                    if (_publishedStockBalances.TryGetValue(productId, out var previousBalance)
-                        && previousBalance == availableQuantity)
+                    var soldQuantity = Convert.ToDecimal(reader["SoldQuantity"], CultureInfo.InvariantCulture);
+                    var receivedQuantity = Convert.ToDecimal(reader["ReceivedQuantity"], CultureInfo.InvariantCulture);
+                    var currentState = (availableQuantity, soldQuantity, receivedQuantity, movementDateText);
+                    if (_publishedStockStates.TryGetValue(productId, out var previousState)
+                        && previousState == currentState)
                     {
                         continue;
                     }
@@ -362,8 +382,10 @@ public sealed class BranchSyncDashboardForm : Form
                         barcode = reader["BarCode"]?.ToString()?.Trim() ?? string.Empty,
                         selling_price = Convert.ToDecimal(reader["SellingPrice"], CultureInfo.InvariantCulture),
                         available_quantity = availableQuantity,
+                        sold_quantity = soldQuantity,
+                        received_quantity = receivedQuantity,
                     });
-                    changedBalances[productId] = availableQuantity;
+                    changedStates[productId] = currentState;
                 }
             }
 
@@ -374,7 +396,7 @@ public sealed class BranchSyncDashboardForm : Form
 
             foreach (var batch in products.Chunk(200))
             {
-                var payload = JsonSerializer.Serialize(new { branch = branchName, products = batch });
+                var payload = JsonSerializer.Serialize(new { branch = branchName, movement_date = movementDateText, products = batch });
                 using var content = new StringContent(payload, Encoding.UTF8, "application/json");
                 using var response = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/stock/snapshot/", content);
                 var responseBody = await response.Content.ReadAsStringAsync();
@@ -385,9 +407,9 @@ public sealed class BranchSyncDashboardForm : Form
                 }
             }
 
-            foreach (var item in changedBalances)
+            foreach (var item in changedStates)
             {
-                _publishedStockBalances[item.Key] = item.Value;
+                _publishedStockStates[item.Key] = item.Value;
             }
             _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK] Published {products.Count} changed POS stock balance(s) for {branchName}.");
         }

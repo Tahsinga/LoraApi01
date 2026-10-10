@@ -815,14 +815,22 @@ def stock_summary(request):
         ).values_list('product_id', 'total')
     )
     summary = []
+    summary_date = timezone.localdate()
     for product in products:
         movement_balance = latest_adjustment_by_product.get(product.product_id, 0) + movement_deltas.get(product.product_id, 0)
+        has_pos_daily_totals = product.pos_movement_date == summary_date
         summary.append({
             **product_payload(product),
             'main_quantity': str(balance_by_product.get(product.product_id, Decimal('0'))),
-            'received_quantity': str(received_by_product.get(product.product_id, 0)),
+            'received_quantity': str(
+                product.pos_received_quantity if has_pos_daily_totals and product.pos_received_quantity is not None
+                else received_by_product.get(product.product_id, 0)
+            ),
             'sent_quantity': str(sent_by_product.get(product.product_id, 0)),
-            'sold_quantity': str(sold_by_product.get(product.product_id, 0)),
+            'sold_quantity': str(
+                product.pos_sold_quantity if has_pos_daily_totals and product.pos_sold_quantity is not None
+                else sold_by_product.get(product.product_id, 0)
+            ),
             'available_quantity': str(product.available_quantity),
             'movement_balance': str(movement_balance),
         })
@@ -1075,7 +1083,11 @@ def publish_branch_stock_snapshot(request):
         payload = json.loads(request.body or '{}')
         branch = str(payload.get('branch', '')).strip()
         products = payload.get('products', [])
+        movement_date_value = payload.get('movement_date')
+        movement_date = parse_date(str(movement_date_value)) if movement_date_value else timezone.localdate()
         if not isinstance(products, list):
+            raise ValueError
+        if movement_date is None:
             raise ValueError
 
         snapshots = []
@@ -1085,7 +1097,13 @@ def publish_branch_stock_snapshot(request):
             product_id = int(item.get('product_id'))
             product_name = str(item.get('product_name', '')).strip()
             quantity = Decimal(str(item.get('available_quantity')))
+            sold_quantity = Decimal(str(item.get('sold_quantity', 0) or 0)) if 'sold_quantity' in item else None
+            received_quantity = Decimal(str(item.get('received_quantity', 0) or 0)) if 'received_quantity' in item else None
             if product_id <= 0 or not product_name or quantity != whole_quantity(quantity):
+                raise ValueError
+            if sold_quantity is not None and sold_quantity != whole_quantity(sold_quantity):
+                raise ValueError
+            if received_quantity is not None and received_quantity != whole_quantity(received_quantity):
                 raise ValueError
             snapshots.append({
                 'product_id': product_id,
@@ -1094,6 +1112,9 @@ def publish_branch_stock_snapshot(request):
                 'barcode': str(item.get('barcode', '')).strip(),
                 'selling_price': Decimal(str(item.get('selling_price', 0) or 0)),
                 'available_quantity': quantity,
+                'pos_movement_date': movement_date if sold_quantity is not None or received_quantity is not None else None,
+                'pos_sold_quantity': sold_quantity,
+                'pos_received_quantity': received_quantity,
             })
     except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
         return JsonResponse({'status': 'error', 'message': 'Branch and valid product stock snapshots are required.'}, status=400)
@@ -1121,6 +1142,10 @@ def publish_branch_stock_snapshot(request):
             changed_fields = []
             for field in ('product_name', 'product_code', 'barcode', 'selling_price'):
                 if getattr(product, field) != snapshot[field]:
+                    setattr(product, field, snapshot[field])
+                    changed_fields.append(field)
+            for field in ('pos_movement_date', 'pos_sold_quantity', 'pos_received_quantity'):
+                if snapshot[field] is not None and getattr(product, field) != snapshot[field]:
                     setattr(product, field, snapshot[field])
                     changed_fields.append(field)
             if quantity_changed:
