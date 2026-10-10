@@ -762,6 +762,7 @@ def stock_summary(request):
     movement_totals = StockMovement.objects.filter(
         branch__iexact=branch,
         product_id__in=product_ids,
+        movement_type__in=['received', 'sold'],
         created_at__gte=today_start,
         created_at__lt=tomorrow_start,
     ).values('product_id', 'movement_type').annotate(total=Sum(Cast('quantity', IntegerField())))
