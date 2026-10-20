@@ -27,6 +27,21 @@ from django.views.decorators.csrf import csrf_exempt
 from .models import BranchHeartbeat, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
 from .state_store import sync_users_to_state
 
+WHATSAPP_STOCK_BRANCHES = (
+    'COMPLEX',
+    'CROSS COUNTRY',
+    'DZOVANI',
+    'INVESTMENTS',
+    'Mini Market',
+    'PERFECT',
+    'SISK',
+    'The Place',
+    'VEES',
+    'WEST',
+    'YEUKAI',
+    'ZBS',
+)
+
 """
 ================================================================================
 LORA POS RETURNS - DELETION TRIGGER SYSTEM
@@ -1227,15 +1242,20 @@ def whatsapp_stock_lookup(request):
     if action == 'branches':
         catalog_branches = ProductCatalog.objects.filter(branch_confirmed=True).exclude(branch='')
         transfer_branches = StockTransfer.objects.exclude(branch='')
-        branches = {
-            name for name in catalog_branches.values_list('branch', flat=True).distinct()
-            if name.casefold() != 'main'
+        branches_by_key = {
+            name.casefold(): name
+            for name in WHATSAPP_STOCK_BRANCHES
         }
-        branches.update(
-            name for name in transfer_branches.values_list('branch', flat=True).distinct()
-            if name.casefold() != 'main'
-        )
-        return JsonResponse({'status': 'ok', 'branches': sorted(branches, key=str.casefold)})
+        for name in catalog_branches.values_list('branch', flat=True).distinct():
+            if name and name.casefold() != 'main':
+                branches_by_key.setdefault(name.casefold(), name)
+        for name in transfer_branches.values_list('branch', flat=True).distinct():
+            if name and name.casefold() != 'main':
+                branches_by_key.setdefault(name.casefold(), name)
+        return JsonResponse({
+            'status': 'ok',
+            'branches': sorted(branches_by_key.values(), key=str.casefold),
+        })
 
     if action != 'transfers':
         return JsonResponse({'status': 'error', 'message': 'Unknown action'}, status=400)

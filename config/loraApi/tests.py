@@ -253,6 +253,36 @@ class StockTransferTests(TestCase):
 		)
 		self.assertEqual(invalid_date.status_code, 400)
 
+	@override_settings(WHATSAPP_STOCK_API_TOKEN='test-whatsapp-token')
+	def test_whatsapp_branch_list_includes_required_branches_and_live_branches(self):
+		ProductCatalog.objects.create(branch='Extra Branch', product_id=8101, product_name='Catalog product')
+		ProductCatalog.objects.create(branch='sisk', product_id=8102, product_name='SISK product')
+		ProductCatalog.objects.create(branch='MAIN', product_id=8103, product_name='Main product')
+		StockTransfer.objects.create(
+			transfer_id='WA_BRANCH_ONLY',
+			branch='Transfer Only Branch',
+			product_id=8104,
+			product_name='Transfer product',
+			quantity=1,
+		)
+
+		response = self.client.get(
+			'/api/whatsapp/stock/?action=branches',
+			HTTP_X_WHATSAPP_TOKEN='test-whatsapp-token',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		branches = response.json()['branches']
+		for branch in (
+			'COMPLEX', 'CROSS COUNTRY', 'DZOVANI', 'INVESTMENTS',
+			'Mini Market', 'PERFECT', 'SISK', 'The Place', 'VEES',
+			'WEST', 'YEUKAI', 'ZBS', 'Extra Branch', 'Transfer Only Branch',
+		):
+			with self.subTest(branch=branch):
+				self.assertIn(branch, branches)
+		self.assertEqual(sum(branch.casefold() == 'sisk' for branch in branches), 1)
+		self.assertNotIn('MAIN', branches)
+
 	@override_settings(STORAGES={
 		'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
 		'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
