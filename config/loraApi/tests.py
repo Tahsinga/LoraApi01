@@ -37,33 +37,66 @@ class ProductDeletionTests(TestCase):
 				self.assertEqual(response.status_code, 403)
 		self.assertFalse(ProductDeletionRequest.objects.exists())
 
-	def test_deletion_is_queued_polled_and_completed_for_only_one_branch(self):
+	def test_deletion_is_queued_for_all_branches_and_completed_independently(self):
 		response = self.client.post(
 			'/api/products/delete/',
 			data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': self.password}),
 			content_type='application/json',
 		)
 		self.assertEqual(response.status_code, 202)
-		request_id = response.json()['request_id']
+		deletions = response.json()['deletions']
+		self.assertEqual(response.json()['branches'], ['BranchA', 'BranchB'])
+		request_ids = {item['branch']: item['request_id'] for item in deletions}
 		self.assertEqual(self.client.get('/api/products/?branch=BranchA').json()['products'], [])
+		self.assertEqual(self.client.get('/api/products/?branch=BranchB').json()['products'], [])
+		self.assertEqual(len(self.client.get('/api/products/?branch=MAIN').json()['products']), 1)
 		self.assertEqual(self.client.get('/api/branch-sync/?branch=BranchA').json()['pending_product_deletions'], [{
-			'request_id': request_id,
+			'request_id': request_ids['BranchA'],
 			'branch': 'BranchA',
 			'product_id': 3001,
 			'product_name': 'Branch Product',
 		}])
+		self.assertEqual(self.client.get('/api/branch-sync/?branch=BranchB').json()['pending_product_deletions'], [{
+			'request_id': request_ids['BranchB'],
+			'branch': 'BranchB',
+			'product_id': 3001,
+			'product_name': 'Branch Product',
+		}])
 
-		complete = self.client.post(
-			'/api/products/delete/complete/',
-			data=json.dumps({'request_id': request_id, 'branch': 'BranchA', 'success': True}),
+		for branch in ('BranchA', 'BranchB'):
+			with self.subTest(branch=branch):
+				complete = self.client.post(
+					'/api/products/delete/complete/',
+					data=json.dumps({'request_id': request_ids[branch], 'branch': branch, 'success': True}),
+					content_type='application/json',
+				)
+				self.assertEqual(complete.status_code, 200)
+				self.assertEqual(ProductDeletionRequest.objects.get(pk=request_ids[branch]).status, 'completed')
+
+		self.assertFalse(ProductCatalog.objects.filter(branch='BranchA', product_id=3001).exists())
+		self.assertFalse(ProductCatalog.objects.filter(branch='BranchB', product_id=3001).exists())
+		self.assertTrue(ProductCatalog.objects.filter(branch='MAIN', product_id=3001).exists())
+
+	def test_deletion_is_rejected_if_any_branch_has_an_active_transfer(self):
+		StockTransfer.objects.create(
+			transfer_id='branch-b-transfer',
+			branch='BranchB',
+			product_id=3001,
+			product_name='Branch Product',
+			quantity=1,
+			status='processing',
+		)
+
+		response = self.client.post(
+			'/api/products/delete/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': self.password}),
 			content_type='application/json',
 		)
 
-		self.assertEqual(complete.status_code, 200)
-		self.assertEqual(ProductDeletionRequest.objects.get(pk=request_id).status, 'completed')
-		self.assertFalse(ProductCatalog.objects.filter(branch='BranchA', product_id=3001).exists())
-		self.assertTrue(ProductCatalog.objects.filter(branch='BranchB', product_id=3001).exists())
-		self.assertTrue(ProductCatalog.objects.filter(branch='MAIN', product_id=3001).exists())
+		self.assertEqual(response.status_code, 409)
+		self.assertFalse(ProductDeletionRequest.objects.exists())
+		self.assertEqual(len(self.client.get('/api/products/?branch=BranchA').json()['products']), 1)
+		self.assertEqual(len(self.client.get('/api/products/?branch=BranchB').json()['products']), 1)
 
 	def test_deleted_products_page_and_api_show_completed_deletions(self):
 		completed = ProductDeletionRequest.objects.create(
@@ -86,7 +119,7 @@ class ProductDeletionTests(TestCase):
 		response = self.client.get('/stock/')
 
 		self.assertEqual(response.status_code, 200)
-		self.assertContains(response, 'Delete at branch')
+		self.assertContains(response, 'Delete from all branches')
 		self.assertContains(response, 'Your account password')
 		self.assertContains(response, 'Save tax')
 		self.assertContains(response, '/products/deleted/')
