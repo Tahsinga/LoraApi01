@@ -253,6 +253,66 @@ class StockTransferTests(TestCase):
 		)
 		self.assertEqual(invalid_date.status_code, 400)
 
+	@override_settings(WHATSAPP_STOCK_API_TOKEN='test-whatsapp-token', WHATSAPP_STOCK_TIME_ZONE='UTC')
+	def test_whatsapp_stock_lookup_returns_received_movements_for_branch_and_date(self):
+		StockMovement.objects.create(
+			branch='BranchA', product_id=999, product_name='Received Product',
+			movement_type='received', quantity=6, source='POS receiving',
+		)
+		yesterday_receipt = StockMovement.objects.create(
+			branch='BranchA', product_id=1000, product_name='Yesterday Receipt',
+			movement_type='received', quantity=8, source='POS receiving',
+		)
+		StockMovement.objects.filter(pk=yesterday_receipt.pk).update(
+			created_at=timezone.now() - timedelta(days=1),
+		)
+		StockMovement.objects.create(
+			branch='BranchB', product_id=1001, product_name='Other Branch Receipt',
+			movement_type='received', quantity=10, source='POS receiving',
+		)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=1002, product_name='Sold Product',
+			movement_type='sold', quantity=2, source='POS sale',
+		)
+
+		response = self.client.get(
+			'/api/whatsapp/stock/?action=received&branch=brancha',
+			HTTP_X_WHATSAPP_TOKEN='test-whatsapp-token',
+		)
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()['date'], timezone.localdate().isoformat())
+		self.assertEqual(
+			[row['product_name'] for row in response.json()['receipts']],
+			['Received Product'],
+		)
+		self.assertEqual(response.json()['receipts'][0]['quantity'], '6')
+		self.assertIn('received_at', response.json()['receipts'][0])
+
+		yesterday = (timezone.localdate() - timedelta(days=1)).isoformat()
+		historical = self.client.get(
+			f'/api/whatsapp/stock/?action=received&branch=BranchA&date={yesterday}',
+			HTTP_X_WHATSAPP_TOKEN='test-whatsapp-token',
+		)
+		self.assertEqual(historical.status_code, 200)
+		self.assertEqual(
+			[row['product_name'] for row in historical.json()['receipts']],
+			['Yesterday Receipt'],
+		)
+
+	@override_settings(WHATSAPP_STOCK_API_TOKEN='test-whatsapp-token')
+	def test_whatsapp_stock_lookup_rejects_unknown_action_and_invalid_date(self):
+		unknown_action = self.client.get(
+			'/api/whatsapp/stock/?action=unknown&branch=BranchA',
+			HTTP_X_WHATSAPP_TOKEN='test-whatsapp-token',
+		)
+		self.assertEqual(unknown_action.status_code, 400)
+
+		invalid_date = self.client.get(
+			'/api/whatsapp/stock/?action=received&branch=BranchA&date=not-a-date',
+			HTTP_X_WHATSAPP_TOKEN='test-whatsapp-token',
+		)
+		self.assertEqual(invalid_date.status_code, 400)
+
 	@override_settings(WHATSAPP_STOCK_API_TOKEN='test-whatsapp-token')
 	def test_whatsapp_branch_list_includes_required_branches_and_live_branches(self):
 		ProductCatalog.objects.create(branch='Extra Branch', product_id=8101, product_name='Catalog product')
@@ -275,7 +335,7 @@ class StockTransferTests(TestCase):
 		branches = response.json()['branches']
 		for branch in (
 			'COMPLEX', 'CROSS COUNTRY', 'DZOVANI', 'INVESTMENTS',
-			'Mini Market', 'PERFECT', 'SISK', 'The Place', 'VEES',
+			'Mini Market', 'PERFECT', 'RUJEKO B', 'SISK', 'The Place', 'VEES',
 			'WEST', 'YEUKAI', 'ZBS', 'Extra Branch', 'Transfer Only Branch',
 		):
 			with self.subTest(branch=branch):

@@ -34,6 +34,7 @@ WHATSAPP_STOCK_BRANCHES = (
     'INVESTMENTS',
     'Mini Market',
     'PERFECT',
+    'RUJEKO B',
     'SISK',
     'The Place',
     'VEES',
@@ -1257,7 +1258,7 @@ def whatsapp_stock_lookup(request):
             'branches': sorted(branches_by_key.values(), key=str.casefold),
         })
 
-    if action != 'transfers':
+    if action not in {'transfers', 'received'}:
         return JsonResponse({'status': 'error', 'message': 'Unknown action'}, status=400)
 
     branch = request.GET.get('branch', '').strip()
@@ -1269,10 +1270,32 @@ def whatsapp_stock_lookup(request):
     selected_date_text = request.GET.get('date', '').strip()
     selected_date = parse_date(selected_date_text) if selected_date_text else today
     if selected_date is None:
-        return JsonResponse({'status': 'error', 'message': 'Use a valid transfer date in YYYY-MM-DD format.'}, status=400)
+        return JsonResponse({'status': 'error', 'message': 'Use a valid date in YYYY-MM-DD format.'}, status=400)
 
     day_start = datetime.combine(selected_date, datetime.min.time(), tzinfo=stock_timezone)
     day_end = day_start + timedelta(days=1)
+    if action == 'received':
+        receipts = StockMovement.objects.filter(
+            branch__iexact=branch,
+            movement_type='received',
+            created_at__gte=day_start,
+            created_at__lt=day_end,
+        ).order_by('created_at', 'product_name')
+        return JsonResponse({
+            'status': 'ok',
+            'branch': branch,
+            'date': selected_date.isoformat(),
+            'receipts': [
+                {
+                    'product_id': receipt.product_id,
+                    'product_name': receipt.product_name,
+                    'quantity': str(receipt.quantity),
+                    'received_at': receipt.created_at.astimezone(stock_timezone).isoformat(),
+                }
+                for receipt in receipts
+            ],
+        })
+
     transfers = StockTransfer.objects.filter(
         branch__iexact=branch,
         created_at__gte=day_start,
