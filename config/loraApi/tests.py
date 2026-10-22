@@ -37,7 +37,7 @@ class ProductDeletionTests(TestCase):
 				self.assertEqual(response.status_code, 403)
 		self.assertFalse(ProductDeletionRequest.objects.exists())
 
-	def test_deletion_is_queued_only_for_the_selected_branch(self):
+	def test_deletion_is_queued_for_all_branches_with_the_selected_product_id(self):
 		response = self.client.post(
 			'/api/products/delete/',
 			data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': self.password}),
@@ -45,33 +45,49 @@ class ProductDeletionTests(TestCase):
 		)
 		self.assertEqual(response.status_code, 202)
 		self.assertEqual(response.json()['branch'], 'BranchA')
-		self.assertEqual(response.json()['branches'], ['BranchA'])
-		request_id = response.json()['request_id']
+		deletions = response.json()['deletions']
+		self.assertEqual(response.json()['branches'], ['BranchA', 'BranchB'])
+		request_ids = {item['branch']: item['request_id'] for item in deletions}
 		self.assertEqual(self.client.get('/api/products/?branch=BranchA').json()['products'], [])
-		self.assertEqual(len(self.client.get('/api/products/?branch=BranchB').json()['products']), 1)
+		self.assertEqual(self.client.get('/api/products/?branch=BranchB').json()['products'], [])
 		self.assertEqual(len(self.client.get('/api/products/?branch=MAIN').json()['products']), 1)
 		self.assertEqual(self.client.get('/api/branch-sync/?branch=BranchA').json()['pending_product_deletions'], [{
-			'request_id': request_id,
+			'request_id': request_ids['BranchA'],
 			'branch': 'BranchA',
 			'product_id': 3001,
 			'product_name': 'Branch Product',
 		}])
-		self.assertEqual(self.client.get('/api/branch-sync/?branch=BranchB').json()['pending_product_deletions'], [])
+		self.assertEqual(self.client.get('/api/branch-sync/?branch=BranchB').json()['pending_product_deletions'], [{
+			'request_id': request_ids['BranchB'],
+			'branch': 'BranchB',
+			'product_id': 3001,
+			'product_name': 'Branch Product',
+		}])
 
-		complete = self.client.post(
-			'/api/products/delete/complete/',
-			data=json.dumps({'request_id': request_id, 'branch': 'BranchA', 'success': True}),
-			content_type='application/json',
-		)
-		self.assertEqual(complete.status_code, 200)
-		self.assertEqual(ProductDeletionRequest.objects.get(pk=request_id).status, 'completed')
+		for target_branch in ('BranchA', 'BranchB'):
+			with self.subTest(branch=target_branch):
+				complete = self.client.post(
+					'/api/products/delete/complete/',
+					data=json.dumps({
+						'request_id': request_ids[target_branch],
+						'branch': target_branch,
+						'success': True,
+					}),
+					content_type='application/json',
+				)
+				self.assertEqual(complete.status_code, 200)
+				self.assertEqual(
+					ProductDeletionRequest.objects.get(pk=request_ids[target_branch]).status,
+					'completed',
+				)
 
 		self.assertFalse(ProductCatalog.objects.filter(branch='BranchA', product_id=3001).exists())
-		self.assertTrue(ProductCatalog.objects.filter(branch='BranchB', product_id=3001).exists())
+		self.assertFalse(ProductCatalog.objects.filter(branch='BranchB', product_id=3001).exists())
 		self.assertTrue(ProductCatalog.objects.filter(branch='MAIN', product_id=3001).exists())
 
 	def test_deletion_targets_product_id_not_product_name(self):
 		ProductCatalog.objects.create(branch='BranchA', product_id=3002, product_name='Branch Product')
+		ProductCatalog.objects.create(branch='BranchB', product_id=3002, product_name='Branch Product')
 
 		response = self.client.post(
 			'/api/products/delete/',
@@ -82,15 +98,16 @@ class ProductDeletionTests(TestCase):
 		self.assertEqual(response.status_code, 202)
 		self.assertEqual(response.json()['product_id'], 3001)
 		self.assertTrue(ProductCatalog.objects.filter(branch='BranchA', product_id=3002).exists())
+		self.assertTrue(ProductCatalog.objects.filter(branch='BranchB', product_id=3002).exists())
 		self.assertEqual(
-			list(ProductDeletionRequest.objects.values_list('product_id', flat=True)),
-			[3001],
+			set(ProductDeletionRequest.objects.values_list('product_id', flat=True)),
+			{3001},
 		)
 
-	def test_deletion_is_rejected_if_the_selected_branch_has_an_active_transfer(self):
+	def test_deletion_is_rejected_if_any_branch_has_an_active_transfer(self):
 		StockTransfer.objects.create(
 			transfer_id='branch-b-transfer',
-			branch='BranchA',
+			branch='BranchB',
 			product_id=3001,
 			product_name='Branch Product',
 			quantity=1,
@@ -129,7 +146,7 @@ class ProductDeletionTests(TestCase):
 		response = self.client.get('/stock/')
 
 		self.assertEqual(response.status_code, 200)
-		self.assertContains(response, 'Delete at branch')
+		self.assertContains(response, 'Delete from all branches')
 		self.assertContains(response, 'Your account password')
 		self.assertContains(response, 'Save tax')
 		self.assertContains(response, '/products/deleted/')
