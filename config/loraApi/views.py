@@ -1930,61 +1930,52 @@ def delete_branch_product(request):
         return JsonResponse({'status': 'error', 'message': 'Select a branch product to delete.'}, status=400)
 
     with transaction.atomic():
-        branch_products = list(ProductCatalog.objects.select_for_update().filter(
+        product = ProductCatalog.objects.select_for_update().filter(
+            branch__iexact=branch,
             product_id=product_id,
             branch_confirmed=True,
-        ).exclude(branch__iexact='MAIN').order_by('branch'))
-        product = next(
-            (item for item in branch_products if item.branch.casefold() == branch.casefold()),
-            None,
-        )
+        ).exclude(branch__iexact='MAIN').first()
         if product is None:
             return JsonResponse({'status': 'error', 'message': 'The product was not found for this branch.'}, status=404)
         if ProductCatalog.objects.filter(
+            branch__iexact=product.branch,
             product_id=product_id,
             pending_product_creation=True,
-        ).exclude(branch__iexact='MAIN').exists():
+        ).exists():
             return JsonResponse({'status': 'error', 'message': 'Wait for product creation to finish before deleting it.'}, status=409)
         if ProductDeletionRequest.objects.filter(
+            branch__iexact=product.branch,
             product_id=product_id,
             status='pending',
         ).exists():
             return JsonResponse({'status': 'error', 'message': 'A deletion for this product is already queued.'}, status=409)
 
-        deletion_requests = []
-        for branch_product in branch_products:
-            if StockTransfer.objects.filter(
-                branch__iexact=branch_product.branch,
-                product_id=product_id,
-                status__in=['pending', 'processing'],
-            ).exists():
-                return JsonResponse({
-                    'status': 'error',
-                    'message': f"Wait for this product's stock transfers to finish at {branch_product.branch} before deleting it.",
-                }, status=409)
+        if StockTransfer.objects.filter(
+            branch__iexact=product.branch,
+            product_id=product_id,
+            status__in=['pending', 'processing'],
+        ).exists():
+            return JsonResponse({
+                'status': 'error',
+                'message': f"Wait for this product's stock transfers to finish at {product.branch} before deleting it.",
+            }, status=409)
 
-            deletion_requests.append(ProductDeletionRequest(
-                branch=branch_product.branch,
-                product_id=branch_product.product_id,
-                product_name=branch_product.product_name,
-                requested_by=request.user.get_username(),
-            ))
-        ProductDeletionRequest.objects.bulk_create(deletion_requests)
+        deletion = ProductDeletionRequest.objects.create(
+            branch=product.branch,
+            product_id=product.product_id,
+            product_name=product.product_name,
+            requested_by=request.user.get_username(),
+        )
 
     invalidate_product_catalog_cache()
     return JsonResponse({
         'status': 'accepted',
-        'request_id': next(
-            item.pk for item in deletion_requests
-            if item.branch.casefold() == product.branch.casefold()
-        ),
+        'request_id': deletion.pk,
+        'branch': deletion.branch,
         'product_id': product.product_id,
         'product_name': product.product_name,
-        'branches': [item.branch for item in deletion_requests],
-        'deletions': [
-            {'request_id': item.pk, 'branch': item.branch}
-            for item in deletion_requests
-        ],
+        'branches': [deletion.branch],
+        'deletions': [{'request_id': deletion.pk, 'branch': deletion.branch}],
     }, status=202)
 
 
