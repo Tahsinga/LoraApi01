@@ -701,11 +701,12 @@ class StockTransferTests(TestCase):
 		self.assertContains(response, 'API data received today')
 
 	def test_product_sync_inbox_returns_only_catalog_changes(self):
-		ProductCatalog.objects.create(branch='BranchA', product_id=1101, product_name='Old Product')
+		ProductCatalog.objects.create(branch='BranchA', product_id=1101, product_name='Old Product', product_code='')
 		ProductCatalog.objects.filter(product_id=1101).update(updated_at=timezone.now() - timedelta(minutes=10))
 		initial = self.client.get('/api/products/inbox/')
 		self.assertTrue(initial.json()['full'])
 		self.assertEqual([item['product_id'] for item in initial.json()['products']], [1101])
+		self.assertEqual(initial.json()['products'][0]['product_code'], '1101')
 
 		no_changes = self.client.get('/api/products/inbox/', {
 			'since': (timezone.now() - timedelta(minutes=1)).isoformat(),
@@ -828,6 +829,7 @@ class StockTransferTests(TestCase):
 			'/api/products/publish/',
 			data=json.dumps({'products': [{
 				'branch': 'BranchA', 'product_id': 1002, 'product_name': 'Published Product',
+				'product_code': '',
 				'available_quantity': 8, 'selling_price': '12.50', 'tax_rate': '5',
 			}]}),
 			content_type='application/json',
@@ -838,7 +840,22 @@ class StockTransferTests(TestCase):
 		product = ProductCatalog.objects.get(branch='BranchA', product_id=1002)
 		self.assertEqual(product.product_name, 'Published Product')
 		self.assertEqual(product.available_quantity, 8)
+		self.assertEqual(product.product_code, '1002')
 		self.assertEqual(str(product.tax_rate), '5.00')
+
+	def test_product_catalog_and_shared_catalog_fall_back_to_product_id_for_blank_codes(self):
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=5086, product_name='Jumbo 35g', product_code='',
+		)
+
+		catalog = self.client.get('/api/products/?branch=BranchA&q=Jumbo')
+		self.assertEqual(catalog.status_code, 200)
+		self.assertEqual(catalog.json()['products'][0]['product_code'], '5086')
+
+		shared = self.client.get('/api/products/shared/')
+		self.assertEqual(shared.status_code, 200)
+		product = next(item for item in shared.json()['products'] if item['product_id'] == 5086)
+		self.assertEqual(product['product_code'], '5086')
 
 	def test_web_can_queue_branch_product_and_branch_can_acknowledge_it(self):
 		BranchHeartbeat.objects.create(branch='BranchB', last_seen=timezone.now())

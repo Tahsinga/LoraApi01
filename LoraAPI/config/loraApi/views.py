@@ -217,12 +217,16 @@ def transfer_payload(transfer):
     }
 
 
+def normalized_product_code(product_id, product_code):
+    return str(product_code or '').strip() or str(product_id)
+
+
 def product_payload(product):
     return {
         'branch': product.branch,
         'product_id': product.product_id,
         'product_name': product.product_name,
-        'product_code': product.product_code,
+        'product_code': normalized_product_code(product.product_id, product.product_code),
         'barcode': product.barcode,
         'available_quantity': str(product.available_quantity),
         'selling_price': str(product.selling_price),
@@ -1664,7 +1668,7 @@ def shared_product_catalog(request):
         shared_products.setdefault(product.product_id, {
             'product_id': product.product_id,
             'product_name': product.product_name,
-            'product_code': product.product_code,
+            'product_code': normalized_product_code(product.product_id, product.product_code),
             'barcode': product.barcode,
             'selling_price': str(product.selling_price),
             'tax_rate': str(product.tax_rate),
@@ -1713,7 +1717,7 @@ def publish_product_catalog(request):
             branch=str(item.get('branch', 'MAIN')).strip() or 'MAIN',
             product_id=product_id,
             product_name=product_name,
-            product_code=str(item.get('product_code', '')).strip(),
+            product_code=normalized_product_code(product_id, item.get('product_code')),
             barcode=str(item.get('barcode', '')).strip(),
             available_quantity=available_quantity,
             selling_price=selling_price,
