@@ -130,12 +130,16 @@ def transfer_payload(transfer):
     }
 
 
+def normalized_product_code(product_id, product_code):
+    return str(product_code or '').strip() or str(product_id)
+
+
 def product_payload(product):
     return {
         'branch': product.branch,
         'product_id': product.product_id,
         'product_name': product.product_name,
-        'product_code': product.product_code,
+        'product_code': normalized_product_code(product.product_id, product.product_code),
         'barcode': product.barcode,
         'available_quantity': str(product.available_quantity),
         'selling_price': str(product.selling_price),
@@ -1045,6 +1049,7 @@ def sync_product_catalog(request):
             product_name = str(item.get('product_name', '')).strip()
             if product_id <= 0 or not product_name:
                 continue
+            product_code = normalized_product_code(product_id, item.get('product_code'))
             available_quantity = whole_quantity(Decimal(str(item.get('available_quantity', 0) or 0)))
             selling_price = Decimal(str(item.get('selling_price', 0) or 0))
             sold_quantity_value = item.get('sold_quantity')
@@ -1121,7 +1126,7 @@ def sync_product_catalog(request):
                         source=entered_by,
                     )
             catalog.product_name = product_name
-            catalog.product_code = str(item.get('product_code', '')).strip()
+            catalog.product_code = product_code
             catalog.barcode = str(item.get('barcode', '')).strip()
             catalog.available_quantity = available_quantity
             catalog.selling_price = selling_price
@@ -1172,7 +1177,7 @@ def publish_product_catalog(request):
             branch=str(item.get('branch', 'MAIN')).strip() or 'MAIN',
             product_id=product_id,
             product_name=product_name,
-            product_code=str(item.get('product_code', '')).strip(),
+            product_code=normalized_product_code(product_id, item.get('product_code')),
             barcode=str(item.get('barcode', '')).strip(),
             available_quantity=available_quantity,
             selling_price=selling_price,
@@ -1429,7 +1434,7 @@ def branch_sync(request):
                     'branch': item['branch'],
                     'product_id': item['product_id'],
                     'product_name': item['product_name'],
-                    'product_code': item['product_code'],
+                    'product_code': normalized_product_code(item['product_id'], item['product_code']),
                     'barcode': item['barcode'],
                     'initial_quantity': str(item['pending_stock_quantity'] or 0),
                     'selling_price': str(item['selling_price']),

@@ -271,7 +271,7 @@ class StockTransferTests(TestCase):
 			'/api/products/publish/',
 			data=json.dumps({'products': [{
 				'branch': 'BranchA', 'product_id': 1002, 'product_name': 'Published Product',
-				'available_quantity': 8, 'selling_price': '12.50', 'tax_rate': '5',
+				'product_code': '', 'available_quantity': 8, 'selling_price': '12.50', 'tax_rate': '5',
 			}]}),
 			content_type='application/json',
 		)
@@ -281,6 +281,36 @@ class StockTransferTests(TestCase):
 		product = ProductCatalog.objects.get(branch='BranchA', product_id=1002)
 		self.assertEqual(product.product_name, 'Published Product')
 		self.assertEqual(product.available_quantity, 8)
+		self.assertEqual(product.product_code, '1002')
+
+	def test_product_sync_fills_missing_codes_for_jumbo_products(self):
+		response = self.client.post(
+			'/api/products/sync/',
+			data=json.dumps({'branch': 'BranchA', 'products': [
+				{'product_id': 5086, 'product_name': 'Jumbo 35g', 'available_quantity': 10},
+				{'product_id': 5087, 'product_name': 'Jumbo 35g Singles', 'available_quantity': 12},
+			]}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=5086).product_code, '5086')
+		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=5087).product_code, '5087')
+		inbox = self.client.get('/api/products/inbox/')
+		self.assertEqual(
+			{product['product_name']: product['product_code'] for product in inbox.json()['products']},
+			{'Jumbo 35g': '5086', 'Jumbo 35g Singles': '5087'},
+		)
+
+	def test_product_catalog_returns_product_id_when_existing_code_is_blank(self):
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=5086, product_name='Jumbo 35g', product_code='',
+		)
+
+		response = self.client.get('/api/products/?branch=BranchA&q=Jumbo')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()['products'][0]['product_code'], '5086')
 
 	def test_web_can_queue_branch_product_and_branch_can_acknowledge_it(self):
 		response = self.client.post(
