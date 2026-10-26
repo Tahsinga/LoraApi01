@@ -51,6 +51,7 @@
     const statusElement = document.querySelector('#status');
     const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
     let deletedProducts = [];
+    let historyLoading = false;
     function renderHistory() {
       const query = searchInput.value.trim().toLowerCase();
       const products = deletedProducts.filter(product => [product.product_name, product.product_id, product.branch, product.deleted_by].some(value => String(value ?? '').toLowerCase().includes(query)));
@@ -59,19 +60,32 @@
         : `<p class="empty">${query ? 'No deleted products match your search.' : 'No completed product deletions yet.'}</p>`;
     }
     searchInput.addEventListener('input', renderHistory);
-    fetch('/api/products/deleted/', { cache: 'no-store' })
-      .then(async response => {
+    async function loadDeletionHistory() {
+      if (historyLoading || document.visibilityState !== 'visible') return;
+      historyLoading = true;
+      try {
+        const response = await fetch('/api/products/deleted/', { cache: 'no-store' });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.message || 'Deletion history could not be loaded.');
         deletedProducts = data.products || [];
         statusElement.textContent = `${deletedProducts.length} completed deletion${deletedProducts.length === 1 ? '' : 's'}`;
+        statusElement.className = '';
         renderHistory();
-      })
-      .catch(error => {
+      } catch (error) {
         statusElement.textContent = error.message;
         statusElement.className = 'error';
-        historyElement.innerHTML = '<p class="empty error">Deletion history is unavailable. Refresh the page to try again.</p>';
-      });
+        if (!deletedProducts.length) {
+          historyElement.innerHTML = '<p class="empty error">Deletion history is unavailable. It will retry automatically.</p>';
+        }
+      } finally {
+        historyLoading = false;
+      }
+    }
+    loadDeletionHistory();
+    window.setInterval(loadDeletionHistory, 30000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') loadDeletionHistory();
+    });
   </script>
 </body>
 </html>

@@ -111,6 +111,7 @@
   const search = document.getElementById('product-search');
   let products = [];
   let branches = [];
+  let matrixLoading = false;
 
   function renderMatrix() {
     heading.replaceChildren();
@@ -160,11 +161,15 @@
     statusElement.classList.remove('error');
   }
 
-  async function loadMatrix() {
+  async function loadMatrix(silent = false) {
+    if (matrixLoading || (silent && document.visibilityState !== 'visible')) return;
+    matrixLoading = true;
     const refreshButton = document.getElementById('refresh');
-    refreshButton.disabled = true;
-    statusElement.textContent = 'Loading branch stock...';
-    statusElement.classList.remove('error');
+    if (!silent) {
+      refreshButton.disabled = true;
+      statusElement.textContent = 'Loading branch stock...';
+      statusElement.classList.remove('error');
+    }
     try {
       const response = await fetch('/api/stock/product-matrix/', {
         headers: {'Accept': 'application/json'},
@@ -184,13 +189,18 @@
       statusElement.textContent = error.message || 'Could not load branch stock.';
       statusElement.classList.add('error');
     } finally {
-      refreshButton.disabled = false;
+      matrixLoading = false;
+      if (!silent) refreshButton.disabled = false;
     }
   }
 
   search.addEventListener('input', renderMatrix);
-  document.getElementById('refresh').addEventListener('click', loadMatrix);
+  document.getElementById('refresh').addEventListener('click', () => loadMatrix());
   loadMatrix();
+  window.setInterval(() => loadMatrix(true), 15000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') loadMatrix(true);
+  });
 </script>
 </body>
 </html>

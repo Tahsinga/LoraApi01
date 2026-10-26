@@ -70,6 +70,7 @@
   const toDate = document.querySelector('#to-date');
   const movementStatus = document.querySelector('#movement-status');
   const movementTable = document.querySelector('#movement-table');
+  let productListLoading = false;
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
   const now = new Date();
   const today = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
@@ -114,22 +115,47 @@
       branchSelect.innerHTML = '<option value="">Branches unavailable</option>';
     }
   }
-  async function loadProducts() {
-    movementProducts.innerHTML = '';
-    productQuery.value = '';
+  async function loadProducts(preserveSelection = false) {
+    if (productListLoading) return;
+    const previousSelection = preserveSelection ? productQuery.value.trim() : '';
+    if (!preserveSelection) {
+      movementProducts.innerHTML = '';
+      productQuery.value = '';
+    }
     if (!branchSelect.value) return;
+    productListLoading = true;
     try {
       const response = await fetch(`/api/products/?branch=${encodeURIComponent(branchSelect.value)}`, { cache: 'no-store' });
-      const data = await response.json();
-      movementProducts.innerHTML = (data.products || []).map(product => `<option value="${escapeHtml(product.product_name)}">Product ${escapeHtml(product.product_name)}</option>`).join('');
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'Products unavailable.');
+      const products = data.products || [];
+      movementProducts.innerHTML = products.map(product => `<option value="${escapeHtml(product.product_name)}">Product ${escapeHtml(product.product_name)}</option>`).join('');
+      if (previousSelection) {
+        const stillAvailable = products.some(product => product.product_name.trim().toLocaleLowerCase() === previousSelection.toLocaleLowerCase());
+        if (stillAvailable) {
+          productQuery.value = previousSelection;
+        } else {
+          productQuery.value = '';
+          movementStatus.textContent = 'The selected product is no longer available for this branch.';
+          movementTable.innerHTML = '<p class="empty">Select an available product to view movements.</p>';
+        }
+      }
     } catch (error) {
-      movementStatus.textContent = 'Products unavailable.';
+      movementStatus.textContent = error.message || 'Products unavailable.';
+    } finally {
+      productListLoading = false;
     }
   }
   filters.addEventListener('submit', event => { event.preventDefault(); loadMovements(); });
   branchSelect.addEventListener('change', async () => { await loadProducts(); loadMovements(); });
   loadBranches();
   loadMovements();
+  window.setInterval(() => {
+    if (document.visibilityState === 'visible' && branchSelect.value) loadProducts(true);
+  }, 30000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && branchSelect.value) loadProducts(true);
+  });
 </script>
 {% include 'loraApi/_bandwidth_meter.html' %}
 </body>

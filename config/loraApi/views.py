@@ -875,7 +875,14 @@ def stock_summary(request):
     if selected_date is None:
         return JsonResponse({'status': 'error', 'message': 'Use a valid date.'}, status=400)
 
-    catalog = ProductCatalog.objects.filter(branch__iexact=branch, branch_confirmed=True)
+    pending_deletions = ProductDeletionRequest.objects.filter(
+        branch__iexact=branch,
+        status='pending',
+    )
+    catalog = ProductCatalog.objects.filter(
+        branch__iexact=branch,
+        branch_confirmed=True,
+    ).exclude(product_id__in=pending_deletions.values('product_id'))
     since = parse_datetime(str(request.GET.get('since', '')).strip())
     if since is not None and timezone.is_naive(since):
         since = timezone.make_aware(since, timezone.get_current_timezone())
@@ -887,8 +894,15 @@ def stock_summary(request):
 
     if full_snapshot:
         products = list(catalog)
+        removed_product_ids = []
     else:
         changed_since = since - timedelta(seconds=3)
+        removed_product_ids = set(pending_deletions.values_list('product_id', flat=True))
+        removed_product_ids.update(ProductDeletionRequest.objects.filter(
+            branch__iexact=branch,
+            status='completed',
+            updated_at__gte=changed_since,
+        ).values_list('product_id', flat=True))
         catalog_product_ids = catalog.values_list('product_id', flat=True)
         changed_product_ids = set(catalog.filter(
             updated_at__gte=changed_since,
@@ -915,10 +929,11 @@ def stock_summary(request):
             return JsonResponse({
                 'status': 'ok',
                 'branch': branch,
-                'changed': False,
+                'changed': bool(removed_product_ids),
                 'full': False,
                 'as_of': snapshot_time.isoformat(),
                 'products': [],
+                'removed_product_ids': sorted(removed_product_ids),
             })
         products = list(catalog.filter(product_id__in=changed_product_ids))
 
@@ -1010,6 +1025,7 @@ def stock_summary(request):
         'full': full_snapshot,
         'as_of': snapshot_time.isoformat(),
         'products': summary,
+        'removed_product_ids': sorted(removed_product_ids),
     })
 
 
@@ -1045,19 +1061,49 @@ def product_stock_matrix_data(request):
         )
         branch_data['online'] = heartbeat.last_seen >= now - timedelta(seconds=BRANCH_ONLINE_SECONDS)
 
+    pending_deletions = ProductDeletionRequest.objects.filter(status='pending').values(
+        'branch',
+        'product_id',
+    )
+    pending_pairs = {
+        (deletion['branch'].casefold(), deletion['product_id'])
+        for deletion in pending_deletions
+    }
+    online_branch_keys = {
+        branch['key']
+        for branch in branches.values()
+        if branch['online']
+    }
+
     for row in catalog_rows:
         product_id = row['product_id']
-        product = products.setdefault(product_id, {
-            'product_id': product_id,
-            'product_name': row['product_name'],
-            'quantities': {},
-        })
         branch = row['branch'].strip()
-        if branch.casefold() == 'main':
+        branch_key = branch.casefold()
+        if branch_key == 'main':
+            product = products.setdefault(product_id, {
+                'product_id': product_id,
+                'product_name': row['product_name'],
+                'quantities': {},
+            })
             if row['product_name']:
                 product['product_name'] = row['product_name']
-        elif branch and row['branch_confirmed']:
-            product['quantities'][branch.casefold()] = str(row['available_quantity'])
+        elif (
+            branch_key in online_branch_keys
+            and row['branch_confirmed']
+            and (branch_key, product_id) not in pending_pairs
+        ):
+            product = products.setdefault(product_id, {
+                'product_id': product_id,
+                'product_name': row['product_name'],
+                'quantities': {},
+            })
+            product['quantities'][branch_key] = str(row['available_quantity'])
+
+    products = {
+        product_id: product
+        for product_id, product in products.items()
+        if product['quantities']
+    }
 
     return JsonResponse({
         'branches': sorted(

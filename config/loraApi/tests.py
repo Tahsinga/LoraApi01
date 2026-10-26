@@ -301,6 +301,14 @@ class StockTransferTests(TestCase):
 			branch='BranchA', product_id=4200, product_name='Pending product',
 			available_quantity=50, branch_confirmed=False,
 		)
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=4300, product_name='Deleting product',
+			available_quantity=8, branch_confirmed=True,
+		)
+		ProductDeletionRequest.objects.create(
+			branch='BranchA', product_id=4300, product_name='Deleting product',
+			status='pending',
+		)
 		BranchHeartbeat.objects.create(branch='BranchA', last_seen=timezone.now())
 		BranchHeartbeat.objects.create(
 			branch='OfflineBranch', last_seen=timezone.now() - timedelta(hours=1),
@@ -321,7 +329,30 @@ class StockTransferTests(TestCase):
 		self.assertEqual(product_by_id[4100]['product_name'], 'Main catalog product')
 		self.assertEqual(product_by_id[4100]['quantities']['brancha'], '12')
 		self.assertNotIn('offlinebranch', product_by_id[4100]['quantities'])
-		self.assertNotIn('brancha', product_by_id[4200]['quantities'])
+		self.assertNotIn(4200, product_by_id)
+		self.assertNotIn(4300, product_by_id)
+
+	def test_stock_summary_ajax_returns_removals_for_pending_and_completed_deletions(self):
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=4400, product_name='Deleting product',
+			available_quantity=8, branch_confirmed=True,
+		)
+		deletion = ProductDeletionRequest.objects.create(
+			branch='BranchA', product_id=4400, product_name='Deleting product',
+			status='pending',
+		)
+
+		pending_response = self.client.get('/api/stock/summary/?branch=BranchA')
+		self.assertEqual(pending_response.status_code, 200)
+		self.assertNotIn(4400, [item['product_id'] for item in pending_response.json()['products']])
+
+		deletion.status = 'completed'
+		deletion.save(update_fields=['status', 'updated_at'])
+		ProductCatalog.objects.filter(branch='BranchA', product_id=4400).delete()
+		since = (timezone.now() - timedelta(minutes=1)).isoformat()
+		response = self.client.get('/api/stock/summary/', {'branch': 'BranchA', 'since': since})
+		self.assertEqual(response.status_code, 200)
+		self.assertIn(4400, response.json()['removed_product_ids'])
 
 	def test_product_stock_matrix_api_requires_login(self):
 		self.client.logout()
