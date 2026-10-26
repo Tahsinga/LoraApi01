@@ -26,13 +26,21 @@
     h2 { margin:0; font-size:24px; font-weight:500; }
     .toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
     .toolbar label { display:flex; flex:1 1 260px; flex-direction:column; gap:6px; color:#435153; font:700 10px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; }
-    input { width:100%; height:40px; padding:9px 11px; color:var(--ink); background:#fbfcfa; border:1px solid #cbd7d2; border-radius:2px; outline:none; font:14px Arial,sans-serif; }
+    input, select { width:100%; height:40px; padding:9px 11px; color:var(--ink); background:#fbfcfa; border:1px solid #cbd7d2; border-radius:2px; outline:none; font:14px Arial,sans-serif; }
     input:focus { border-color:var(--teal); box-shadow:0 0 0 3px #d9efeb; }
+    select:focus { border-color:var(--teal); box-shadow:0 0 0 3px #d9efeb; }
     button { width:auto; margin:0; padding:11px 16px; color:#fff; background:var(--coral); border:0; border-radius:2px; cursor:pointer; font:700 11px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; }
     button:hover { background:#bd4e3e; }
     button:disabled { opacity:.6; cursor:wait; }
     #status { flex:1 1 100%; min-height:18px; margin:0; color:var(--muted); font:12px Arial,sans-serif; }
     #status.error { color:#a53b2e; }
+    .update-controls { display:flex; align-items:flex-end; flex-wrap:wrap; gap:10px; margin:0 0 12px; padding:12px; background:#f5f9f6; border:1px solid var(--line); }
+    .update-controls label { display:flex; flex:0 1 220px; flex-direction:column; gap:6px; color:#435153; font:700 10px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; }
+    .update-summary { flex:1 1 220px; min-height:18px; margin:0; color:var(--muted); font:12px Arial,sans-serif; }
+    .update-message { flex:1 1 100%; min-height:18px; margin:0; color:var(--teal-dark); font:12px Arial,sans-serif; }
+    .update-message.error { color:#a53b2e; }
+    .clear-button { color:var(--teal-dark); background:#e6efea; }
+    .clear-button:hover { background:#d7e5dd; }
     .table-wrap { width:100%; overflow-x:hidden; overflow-y:auto; border:1px solid var(--line); background:#fff; }
     table { width:100%; table-layout:fixed; border-collapse:collapse; }
     th, td { min-width:0; padding:7px 4px; border-right:1px solid #e3e9e5; border-bottom:1px solid #e3e9e5; overflow-wrap:anywhere; }
@@ -44,6 +52,10 @@
     .branch-name { display:block; }
     .branch-state { display:block; margin-top:3px; color:#d6e7df; font:400 8px Arial,sans-serif; }
     .empty { color:#8a9690; }
+    td.quantity[data-product-id] { cursor:pointer; }
+    td.quantity[data-product-id]:hover { color:var(--teal-dark); background:#e9f5ef; }
+    .cell-preview { display:block; margin-top:4px; color:var(--teal-dark); font:700 9px/1.25 Arial,sans-serif; }
+    .cell-editor { display:block; min-width:0; height:32px; margin-top:4px; padding:5px; text-align:center; font-size:12px; }
     @media (max-width:760px) {
       header { display:grid; gap:16px; margin-top:22px; padding:21px 14px 15px; }
       h1 { font-size:32px; white-space:normal; }
@@ -57,6 +69,9 @@
       .toolbar { width:100%; }
       .toolbar label { flex-basis:100%; }
       .toolbar button { min-height:40px; }
+      .update-controls { align-items:stretch; }
+      .update-controls label { flex-basis:100%; }
+      .update-controls button { flex:1 1 auto; min-height:40px; }
       .table-wrap { max-height:calc(100vh - 330px); }
       thead th:first-child, tbody th { width:24%; }
       th, td { padding:6px 2px; }
@@ -83,7 +98,7 @@
     </nav>
   </header>
   <main>
-    <p class="intro">Current product quantities for branches that are online.</p>
+    <p class="intro">Current product quantities for branches that are online. Click a branch quantity to stage a stocktake or stock addition; stocktakes replace the count, while additions show current stock plus the amount entered.</p>
     <section class="panel">
       <div class="browser-heading">
         <h2>Branch quantities</h2>
@@ -93,6 +108,18 @@
           </label>
           <button id="refresh" type="button">Refresh</button>
         </div>
+      </div>
+      <div class="update-controls" aria-label="Branch stock update controls">
+        <label for="update-mode">Update type
+          <select id="update-mode">
+            <option value="stocktake">Stocktake — replace current quantity</option>
+            <option value="add">Add stock — send more to branch</option>
+          </select>
+        </label>
+        <p id="update-summary" class="update-summary">Click a branch quantity to stage an update.</p>
+        <button id="clear-updates" class="clear-button" type="button" disabled>Clear staged edits</button>
+        <button id="submit-updates" type="button" disabled>Submit stock updates</button>
+        <p id="update-message" class="update-message" role="status" aria-live="polite"></p>
       </div>
       <p id="status" role="status" aria-live="polite">Loading branch stock...</p>
       <div class="table-wrap">
@@ -109,9 +136,72 @@
   const heading = document.getElementById('matrix-heading');
   const body = document.getElementById('matrix-body');
   const search = document.getElementById('product-search');
+  const updateMode = document.getElementById('update-mode');
+  const updateSummary = document.getElementById('update-summary');
+  const updateMessage = document.getElementById('update-message');
+  const submitButton = document.getElementById('submit-updates');
+  const clearButton = document.getElementById('clear-updates');
   let products = [];
   let branches = [];
   let matrixLoading = false;
+  let submittingUpdates = false;
+  let editingKey = '';
+  const stagedUpdates = new Map();
+
+  function draftKey(branchKey, productId) {
+    return `${branchKey}:${productId}`;
+  }
+
+  function formatPreview(current, mode, value) {
+    const entered = BigInt(value);
+    if (mode === 'stocktake') return `Replace ${current} with ${entered}`;
+    return `${current} + ${entered} = ${BigInt(current) + entered}`;
+  }
+
+  function updateDraftSummary() {
+    const stocktakes = [...stagedUpdates.values()].filter(update => update.mode === 'stocktake').length;
+    const additions = stagedUpdates.size - stocktakes;
+    updateSummary.textContent = stagedUpdates.size
+      ? `${stagedUpdates.size} staged: ${stocktakes} stocktake${stocktakes === 1 ? '' : 's'}, ${additions} stock addition${additions === 1 ? '' : 's'}.`
+      : 'Click a branch quantity to stage an update.';
+    submitButton.disabled = submittingUpdates || stagedUpdates.size === 0;
+    clearButton.disabled = submittingUpdates || stagedUpdates.size === 0;
+  }
+
+  function showCellValue(cell, current, update) {
+    cell.replaceChildren();
+    cell.textContent = current;
+    if (update) {
+      const preview = document.createElement('span');
+      preview.className = 'cell-preview';
+      preview.textContent = formatPreview(current, update.mode, update.quantity);
+      cell.append(preview);
+    }
+  }
+
+  function renderCellEditor(cell, current, branchKey, productId, update) {
+    cell.replaceChildren();
+    const input = document.createElement('input');
+    const mode = update ? update.mode : updateMode.value;
+    input.type = 'number';
+    input.min = mode === 'add' ? '1' : '0';
+    input.step = '1';
+    input.inputMode = 'numeric';
+    input.className = 'cell-editor';
+    input.setAttribute('aria-label', `${mode === 'stocktake' ? 'Stocktake' : 'Add stock'} quantity for product ${productId}`);
+    input.value = update ? update.quantity : '';
+    input.placeholder = mode === 'stocktake' ? 'Counted total' : 'Amount to add';
+    input.dataset.branchKey = branchKey;
+    input.dataset.productId = productId;
+    input.dataset.mode = mode;
+
+    const preview = document.createElement('span');
+    preview.className = 'cell-preview';
+    if (update) preview.textContent = formatPreview(current, update.mode, update.quantity);
+    else preview.textContent = updateMode.value === 'stocktake' ? `Current ${current} → counted total` : `Current ${current} + amount`;
+    cell.append(input, preview);
+    input.focus();
+  }
 
   function renderMatrix() {
     heading.replaceChildren();
@@ -151,7 +241,16 @@
           cell.classList.add('empty');
           cell.textContent = '—';
         } else {
-          cell.textContent = quantity;
+          const key = draftKey(branch.key, product.product_id);
+          cell.dataset.productId = product.product_id;
+          cell.dataset.branchKey = branch.key;
+          cell.dataset.currentQuantity = quantity;
+          cell.tabIndex = 0;
+          cell.setAttribute('aria-label', `${product.product_name}, ${branch.name}: ${quantity}. Activate to edit stock.`);
+          cell.title = 'Click to stage a stock take or stock addition';
+          const update = stagedUpdates.get(key);
+          if (editingKey === key) renderCellEditor(cell, quantity, branch.key, product.product_id, update);
+          else showCellValue(cell, quantity, update);
         }
         row.append(cell);
       });
@@ -194,13 +293,125 @@
     }
   }
 
+  body.addEventListener('click', event => {
+    const cell = event.target.closest('td.quantity[data-product-id]');
+    if (!cell || event.target instanceof HTMLInputElement || submittingUpdates) return;
+    editingKey = draftKey(cell.dataset.branchKey, cell.dataset.productId);
+    renderMatrix();
+  });
+
+  body.addEventListener('keydown', event => {
+    const cell = event.target.closest('td.quantity[data-product-id]');
+    if (cell && event.target === cell && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault();
+      editingKey = draftKey(cell.dataset.branchKey, cell.dataset.productId);
+      renderMatrix();
+    }
+    if (event.target instanceof HTMLInputElement && event.key === 'Enter') {
+      event.preventDefault();
+      editingKey = '';
+      renderMatrix();
+    }
+    if (event.target instanceof HTMLInputElement && event.key === 'Escape') {
+      editingKey = '';
+      renderMatrix();
+    }
+  });
+
+  body.addEventListener('input', event => {
+    if (!(event.target instanceof HTMLInputElement) || !event.target.classList.contains('cell-editor')) return;
+    const {branchKey, productId, mode} = event.target.dataset;
+    const key = draftKey(branchKey, productId);
+    const cell = event.target.closest('td.quantity');
+    const current = cell.dataset.currentQuantity;
+    const value = event.target.value;
+    const preview = event.target.nextElementSibling;
+    if (!/^\d+$/.test(value) || (mode === 'add' && BigInt(value || '0') === 0n)) {
+      stagedUpdates.delete(key);
+      preview.textContent = mode === 'stocktake'
+        ? `Current ${current} → counted total`
+        : 'Added stock must be greater than zero.';
+    } else {
+      const update = {branchKey, productId, quantity: value, mode};
+      stagedUpdates.set(key, update);
+      preview.textContent = formatPreview(current, update.mode, value);
+    }
+    updateDraftSummary();
+    updateMessage.textContent = '';
+    updateMessage.classList.remove('error');
+  });
+
+  updateMode.addEventListener('change', () => {
+    editingKey = '';
+    renderMatrix();
+  });
+
+  clearButton.addEventListener('click', () => {
+    stagedUpdates.clear();
+    editingKey = '';
+    updateMessage.textContent = 'Staged edits cleared.';
+    updateMessage.classList.remove('error');
+    renderMatrix();
+    updateDraftSummary();
+  });
+
+  submitButton.addEventListener('click', async () => {
+    if (submittingUpdates || stagedUpdates.size === 0) return;
+    const updates = [...stagedUpdates.values()].map(update => {
+      const product = products.find(item => String(item.product_id) === update.productId);
+      const branch = branches.find(item => item.key === update.branchKey);
+      return {
+        branch: branch?.name,
+        product_id: Number(update.productId),
+        product_name: product?.product_name || `Unnamed product (${update.productId})`,
+        mode: update.mode,
+        quantity: update.quantity,
+      };
+    });
+    if (updates.some(update => !update.branch || !update.product_name)) {
+      updateMessage.textContent = 'Some staged products are no longer in the matrix. Refresh and clear or restage them.';
+      updateMessage.classList.add('error');
+      return;
+    }
+
+    submittingUpdates = true;
+    submitButton.disabled = true;
+    clearButton.disabled = true;
+    updateMessage.textContent = 'Submitting stock updates...';
+    updateMessage.classList.remove('error');
+    try {
+      const response = await fetch('/api/stock/branch/updates/', {
+        method: 'POST',
+        headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify({updates}),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Could not submit stock updates (HTTP ${response.status}).`);
+      stagedUpdates.clear();
+      editingKey = '';
+      updateMessage.textContent = `${data.queued} stock update${data.queued === 1 ? '' : 's'} queued. Branches will apply them when they sync.`;
+      await loadMatrix();
+    } catch (error) {
+      updateMessage.textContent = error.message || 'Could not submit stock updates.';
+      updateMessage.classList.add('error');
+    } finally {
+      submittingUpdates = false;
+      updateDraftSummary();
+      renderMatrix();
+    }
+  });
+
   search.addEventListener('input', renderMatrix);
   document.getElementById('refresh').addEventListener('click', () => loadMatrix());
   loadMatrix();
-  window.setInterval(() => loadMatrix(true), 15000);
+  window.setInterval(() => {
+    if (stagedUpdates.size === 0 && !body.querySelector('.cell-editor')) loadMatrix(true);
+  }, 15000);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') loadMatrix(true);
+    if (document.visibilityState === 'visible' && stagedUpdates.size === 0) loadMatrix(true);
   });
+  updateDraftSummary();
 </script>
 </body>
 </html>

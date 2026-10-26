@@ -318,6 +318,8 @@ class StockTransferTests(TestCase):
 		self.assertEqual(page.status_code, 200)
 		self.assertContains(page, 'Branch stock matrix')
 		self.assertContains(page, '/api/stock/product-matrix/')
+		self.assertContains(page, 'Submit stock updates')
+		self.assertContains(page, 'Stocktake — replace current quantity')
 
 		response = self.client.get('/api/stock/product-matrix/')
 		self.assertEqual(response.status_code, 200)
@@ -358,6 +360,74 @@ class StockTransferTests(TestCase):
 		self.client.logout()
 		response = self.client.get('/api/stock/product-matrix/')
 		self.assertEqual(response.status_code, 302)
+
+	def test_branch_matrix_submits_stocktakes_and_additions_as_one_batch(self):
+		BranchHeartbeat.objects.create(branch='BranchA', last_seen=timezone.now())
+		BranchHeartbeat.objects.create(branch='BranchB', last_seen=timezone.now())
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=2401, product_name='Counted product', available_quantity=12,
+		)
+		ProductCatalog.objects.create(
+			branch='BranchB', product_id=2402, product_name='New stock product', available_quantity=5,
+		)
+		main_balance = MainStockBalance.objects.get(product_id=999).quantity
+
+		response = self.client.post(
+			'/api/stock/branch/updates/',
+			data=json.dumps({
+				'updates': [
+					{
+						'branch': 'BranchA', 'product_id': 2401, 'product_name': 'Counted product',
+						'mode': 'stocktake', 'quantity': '8',
+					},
+					{
+						'branch': 'BranchB', 'product_id': 2402, 'product_name': 'New stock product',
+						'mode': 'add', 'quantity': '3',
+					},
+				],
+			}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 202)
+		self.assertEqual(response.json()['queued'], 2)
+		self.assertEqual(response.json()['status'], 'accepted')
+		transfers = {
+			(transfer.branch, transfer.product_id): transfer
+			for transfer in StockTransfer.objects.order_by('product_id')
+		}
+		stocktake = transfers[('BranchA', 2401)]
+		self.assertEqual(stocktake.quantity, 8)
+		self.assertEqual(stocktake.target_quantity, 8)
+		addition = transfers[('BranchB', 2402)]
+		self.assertEqual(addition.quantity, 3)
+		self.assertIsNone(addition.target_quantity)
+		self.assertEqual(ProductCatalog.objects.get(branch='BranchB', product_id=2402).available_quantity, 5)
+		self.assertEqual(MainStockBalance.objects.get(product_id=999).quantity, main_balance)
+
+	def test_branch_matrix_batch_rejects_offline_branch_without_partial_updates(self):
+		BranchHeartbeat.objects.create(
+			branch='OfflineBranch',
+			last_seen=timezone.now() - timedelta(hours=1),
+		)
+		ProductCatalog.objects.create(
+			branch='OfflineBranch', product_id=2403, product_name='Offline product',
+		)
+
+		response = self.client.post(
+			'/api/stock/branch/updates/',
+			data=json.dumps({
+				'updates': [{
+					'branch': 'OfflineBranch', 'product_id': 2403, 'product_name': 'Offline product',
+					'mode': 'stocktake', 'quantity': '0',
+				}],
+			}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 409)
+		self.assertIn('offline', response.json()['message'])
+		self.assertFalse(StockTransfer.objects.exists())
 
 	@override_settings(WHATSAPP_STOCK_API_TOKEN='test-whatsapp-token', WHATSAPP_STOCK_TIME_ZONE='UTC')
 	def test_whatsapp_stock_lookup_requires_token_and_filters_transfers_by_branch(self):

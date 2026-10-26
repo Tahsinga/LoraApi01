@@ -791,6 +791,122 @@ def stocktake_branch_products(request):
 
 @login_required(login_url='/login/')
 @csrf_exempt
+@retry_on_database_lock
+def submit_branch_stock_updates(request):
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+
+    try:
+        payload = json.loads(request.body or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'status': 'error', 'message': 'Invalid JSON'}, status=400)
+
+    updates = payload.get('updates') if isinstance(payload, dict) else None
+    if not isinstance(updates, list) or not updates:
+        return JsonResponse({'status': 'error', 'message': 'Add at least one stock update before submitting.'}, status=400)
+
+    now = timezone.now()
+    online_branches = {
+        branch.casefold(): branch
+        for branch in BranchHeartbeat.objects.filter(
+            last_seen__gte=now - timedelta(seconds=BRANCH_ONLINE_SECONDS),
+        ).values_list('branch', flat=True)
+    }
+    batch_id = uuid.uuid4().hex
+    validated_updates = []
+    seen_pairs = set()
+
+    for item in updates:
+        if not isinstance(item, dict):
+            return JsonResponse({'status': 'error', 'message': 'Each stock update must be an object.'}, status=400)
+
+        branch = str(item.get('branch', '')).strip()
+        product_name = str(item.get('product_name', '')).strip()
+        mode = str(item.get('mode', '')).strip()
+        try:
+            product_id = int(item.get('product_id'))
+            quantity = Decimal(str(item.get('quantity')))
+        except (TypeError, ValueError, InvalidOperation):
+            return JsonResponse({'status': 'error', 'message': 'Each update needs a valid product ID and whole-number quantity.'}, status=400)
+
+        if (
+            not branch
+            or branch.casefold() == 'main'
+            or not product_name
+            or product_id <= 0
+            or product_id > 2_147_483_647
+            or mode not in {'stocktake', 'add'}
+            or not quantity.is_finite()
+            or quantity < 0
+            or quantity > Decimal('999999999999999999')
+            or quantity != whole_quantity(quantity)
+            or (mode == 'add' and quantity == 0)
+        ):
+            return JsonResponse({'status': 'error', 'message': 'Use a valid branch, product, mode, and whole-number quantity. Added stock must be greater than zero.'}, status=400)
+
+        branch_key = branch.casefold()
+        canonical_branch = online_branches.get(branch_key)
+        if canonical_branch is None:
+            return JsonResponse({'status': 'error', 'message': f'{branch} is offline or reconnecting. Refresh the matrix before submitting.'}, status=409)
+
+        pair = (branch_key, product_id)
+        if pair in seen_pairs:
+            return JsonResponse({'status': 'error', 'message': 'A product can only have one stock update per branch in a batch.'}, status=400)
+        seen_pairs.add(pair)
+        validated_updates.append({
+            'branch': canonical_branch,
+            'product_id': product_id,
+            'product_name': product_name,
+            'mode': mode,
+            'quantity': quantity,
+        })
+
+    with transaction.atomic():
+        transfers = []
+        for index, item in enumerate(validated_updates):
+            catalog = ProductCatalog.objects.select_for_update().filter(
+                branch__iexact=item['branch'],
+                product_id=item['product_id'],
+                branch_confirmed=True,
+            ).first()
+            if catalog is None:
+                return JsonResponse({'status': 'error', 'message': f'{item["product_name"]} is no longer available at {item["branch"]}.'}, status=409)
+            if ProductDeletionRequest.objects.filter(
+                branch__iexact=item['branch'],
+                product_id=item['product_id'],
+                status='pending',
+            ).exists():
+                return JsonResponse({'status': 'error', 'message': f'{item["product_name"]} is pending deletion at {item["branch"]}.'}, status=409)
+            if StockTransfer.objects.filter(
+                branch__iexact=item['branch'],
+                product_id=item['product_id'],
+                status__in=['pending', 'processing'],
+            ).exists():
+                return JsonResponse({'status': 'error', 'message': f'{item["product_name"]} already has a stock update waiting at {item["branch"]}.'}, status=409)
+
+            is_stocktake = item['mode'] == 'stocktake'
+            transfers.append(StockTransfer(
+                transfer_id=f'MATRIX_{batch_id}_{index}',
+                branch=catalog.branch,
+                product_id=item['product_id'],
+                product_name=catalog.product_name or item['product_name'],
+                quantity=item['quantity'],
+                target_quantity=item['quantity'] if is_stocktake else None,
+                created_by=request.user.get_username(),
+            ))
+
+        StockTransfer.objects.bulk_create(transfers)
+
+    return JsonResponse({
+        'status': 'accepted',
+        'batch_id': batch_id,
+        'queued': len(transfers),
+        'message': f'{len(transfers)} stock update{"s" if len(transfers) != 1 else ""} queued for branch sync.',
+    }, status=202)
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
 def stocktake_branch_batch(request, batch_id):
     if request.method not in {'GET', 'POST'}:
         return JsonResponse({'status': 'error', 'message': 'Use GET or POST method'}, status=405)
