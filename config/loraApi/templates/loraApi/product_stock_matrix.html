@@ -50,6 +50,8 @@
     tbody th { width:18%; color:var(--ink); background:#f7faf8; text-align:left; font:11px/1.2 Arial,sans-serif; font-weight:600; }
     tbody td { color:var(--ink); text-align:center; font:11px/1.2 Arial,sans-serif; font-variant-numeric:tabular-nums; }
     tbody tr:hover td, tbody tr:hover th { background:#f1f7f3; }
+    tbody tr.has-staged-update th[scope="row"] { color:#713800; background:#ffcc80; }
+    tbody tr.has-staged-update:hover th[scope="row"] { background:#ffb74d; }
     .branch-name { display:block; }
     .branch-state { display:block; margin-top:3px; color:#d6e7df; font:400 8px Arial,sans-serif; }
     .empty { color:#8a9690; }
@@ -230,6 +232,9 @@
     );
     visibleProducts.forEach(product => {
       const row = document.createElement('tr');
+      row.classList.toggle('has-staged-update', [...stagedUpdates.values()].some(
+        update => String(update.productId) === String(product.product_id)
+      ));
       const label = document.createElement('th');
       label.scope = 'row';
       label.textContent = `${product.product_name || 'Unnamed product'} (${product.product_id})`;
@@ -337,6 +342,9 @@
       stagedUpdates.set(key, update);
       preview.textContent = formatPreview(current, update.mode, value);
     }
+    cell.parentElement.classList.toggle('has-staged-update', [...stagedUpdates.values()].some(
+      update => String(update.productId) === productId
+    ));
     updateDraftSummary();
     updateMessage.textContent = '';
     updateMessage.classList.remove('error');
