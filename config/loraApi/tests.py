@@ -289,7 +289,7 @@ class StockTransferTests(TestCase):
 			logout_response = client.post('/logout/', {'csrfmiddlewaretoken': csrf_token.group(1)})
 			self.assertRedirects(logout_response, '/login/', fetch_redirect_response=False)
 
-	def test_product_stock_matrix_includes_offline_branches_and_confirmed_quantities(self):
+	def test_product_stock_matrix_shows_only_online_branches_and_confirmed_quantities(self):
 		ProductCatalog.objects.create(
 			branch='MAIN', product_id=4100, product_name='Main catalog product',
 		)
@@ -316,8 +316,7 @@ class StockTransferTests(TestCase):
 		data = response.json()
 		branch_by_name = {branch['name']: branch for branch in data['branches']}
 		self.assertTrue(branch_by_name['BranchA']['online'])
-		self.assertFalse(branch_by_name['OfflineBranch']['online'])
-		self.assertIn('OfflineBranch', branch_by_name)
+		self.assertNotIn('OfflineBranch', branch_by_name)
 		product_by_id = {product['product_id']: product for product in data['products']}
 		self.assertEqual(product_by_id[4100]['product_name'], 'Main catalog product')
 		self.assertEqual(product_by_id[4100]['quantities']['brancha'], '12')

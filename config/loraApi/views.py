@@ -1060,7 +1060,10 @@ def product_stock_matrix_data(request):
             product['quantities'][branch.casefold()] = str(row['available_quantity'])
 
     return JsonResponse({
-        'branches': sorted(branches.values(), key=lambda branch: branch['name'].casefold()),
+        'branches': sorted(
+            (branch for branch in branches.values() if branch['online']),
+            key=lambda branch: branch['name'].casefold(),
+        ),
         'products': sorted(
             products.values(),
             key=lambda product: (product['product_name'].casefold(), product['product_id']),
