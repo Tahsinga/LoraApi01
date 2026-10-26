@@ -1373,6 +1373,15 @@ def complete_branch_product_creation(request):
             product.branch_confirmed = True
             product.pending_product_creation = False
             product.save(update_fields=['product_id', 'product_code', 'branch_confirmed', 'pending_product_creation', 'updated_at'])
+            ProductDeletionRequest.objects.filter(
+                branch__iexact=product.branch,
+                product_id=product_id,
+                status='pending',
+            ).update(
+                product_id=actual_product_id,
+                product_name=product.product_name,
+                updated_at=timezone.now(),
+            )
             ProductCatalog.objects.update_or_create(
                 branch='MAIN',
                 product_id=actual_product_id,

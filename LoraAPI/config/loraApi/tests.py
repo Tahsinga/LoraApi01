@@ -112,6 +112,37 @@ class ProductDeletionTests(TestCase):
 		self.assertEqual(branch_sync['pending_product_creations'][0]['product_id'], 3001)
 		self.assertEqual(branch_sync['pending_product_deletions'][0]['product_id'], 3001)
 
+	def test_pending_deletion_tracks_final_id_when_branch_creation_completes(self):
+		pending_product = ProductCatalog.objects.get(branch='BranchB', product_id=3001)
+		pending_product.branch_confirmed = False
+		pending_product.pending_product_creation = True
+		pending_product.save(update_fields=['branch_confirmed', 'pending_product_creation', 'updated_at'])
+		delete_response = self.client.post(
+			'/api/products/delete/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': 'ProductDeletePass4182!'}),
+			content_type='application/json',
+		)
+		self.assertEqual(delete_response.status_code, 202)
+
+		created = self.client.post(
+			'/api/products/create/complete/',
+			data=json.dumps({
+				'branch': 'BranchB',
+				'product_id': 3001,
+				'actual_product_id': 9001,
+				'success': True,
+			}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(created.status_code, 200)
+		deletion = ProductDeletionRequest.objects.get(branch='BranchB')
+		self.assertEqual(deletion.product_id, 9001)
+		self.assertEqual(
+			self.client.get('/api/branch-sync/?branch=BranchB').json()['pending_product_deletions'][0]['product_id'],
+			9001,
+		)
+
 	def test_failed_branch_deletion_restores_product_to_web_catalog(self):
 		response = self.client.post(
 			'/api/products/delete/',
