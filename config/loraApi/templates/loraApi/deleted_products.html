@@ -26,6 +26,10 @@
     th { padding:11px 13px; color:var(--muted); border-bottom:1px solid var(--line); text-align:left; font:700 10px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; }
     td { padding:13px; border-bottom:1px solid var(--line); font:14px Arial,sans-serif; }
     tr:last-child td { border-bottom:0; }
+    .movement-link { display:inline-block; padding:9px 12px; color:#fff; background:var(--teal); border-radius:2px; font:700 10px Arial,sans-serif; letter-spacing:.7px; text-decoration:none; text-transform:uppercase; white-space:nowrap; }
+    .movement-link:hover { color:#fff; background:var(--teal-dark); }
+    .status-pending { color:#8a5a00; font-weight:700; }
+    .status-failed { color:#a53b2e; font-weight:700; }
     .empty { padding:24px 13px; color:var(--muted); font:14px Arial,sans-serif; }
     .error { color:#a53b2e; }
     @media (max-width:650px) { header { display:block; padding:28px 16px 24px; } nav { margin-top:20px; } main { padding:0 16px 36px; } .panel { padding:18px; } .toolbar { display:grid; } }
@@ -56,8 +60,8 @@
       const query = searchInput.value.trim().toLowerCase();
       const products = deletedProducts.filter(product => [product.product_name, product.product_id, product.branch, product.deleted_by].some(value => String(value ?? '').toLowerCase().includes(query)));
       historyElement.innerHTML = products.length
-        ? `<table><thead><tr><th>Product</th><th>Product ID</th><th>Branch</th><th>Deleted by</th><th>Deleted at</th></tr></thead><tbody>${products.map(product => `<tr><td>${escapeHtml(product.product_name)}</td><td>${escapeHtml(product.product_id)}</td><td>${escapeHtml(product.branch)}</td><td>${escapeHtml(product.deleted_by)}</td><td>${escapeHtml(new Date(product.deleted_at).toLocaleString())}</td></tr>`).join('')}</tbody></table>`
-        : `<p class="empty">${query ? 'No deleted products match your search.' : 'No completed product deletions yet.'}</p>`;
+        ? `<table><thead><tr><th>Product</th><th>Product ID</th><th>Branch</th><th>Sync status</th><th>Deleted by</th><th>Requested at</th><th>Movements</th></tr></thead><tbody>${products.map(product => { const movementUrl = new URL('/stock/movements/history/', window.location.origin); movementUrl.searchParams.set('branch', product.branch); movementUrl.searchParams.set('product_id', product.product_id); movementUrl.searchParams.set('product_name', product.product_name); const status = product.status || 'completed'; return `<tr><td>${escapeHtml(product.product_name)}</td><td>${escapeHtml(product.product_id)}</td><td>${escapeHtml(product.branch)}</td><td class="status-${escapeHtml(status)}">${escapeHtml(status)}</td><td>${escapeHtml(product.deleted_by)}</td><td>${escapeHtml(new Date(product.deleted_at).toLocaleString())}</td><td><a class="movement-link" href="${escapeHtml(movementUrl.toString())}">Movements</a></td></tr>`; }).join('')}</tbody></table>`
+        : `<p class="empty">${query ? 'No deleted products match your search.' : 'No product deletion requests yet.'}</p>`;
     }
     searchInput.addEventListener('input', renderHistory);
     async function loadDeletionHistory() {
@@ -68,7 +72,7 @@
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.message || 'Deletion history could not be loaded.');
         deletedProducts = data.products || [];
-        statusElement.textContent = `${deletedProducts.length} completed deletion${deletedProducts.length === 1 ? '' : 's'}`;
+        statusElement.textContent = `${deletedProducts.length} deletion request${deletedProducts.length === 1 ? '' : 's'}`;
         statusElement.className = '';
         renderHistory();
       } catch (error) {

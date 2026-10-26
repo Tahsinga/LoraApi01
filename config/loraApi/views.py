@@ -121,6 +121,10 @@ def get_or_create_branch_catalog(branch, product_id, defaults):
     return catalog, False
 
 
+def deleted_product_id_subquery():
+    return ProductDeletionRequest.objects.order_by().values('product_id')
+
+
 def retry_on_database_lock(view_func):
     @wraps(view_func)
     def wrapped_view(request, *args, **kwargs):
@@ -750,6 +754,8 @@ def stocktake_branch_products(request):
         products = list(ProductCatalog.objects.select_for_update().filter(
             branch__iexact=branch,
             branch_confirmed=True,
+        ).exclude(
+            product_id__in=deleted_product_id_subquery(),
         ).order_by('product_id'))
         product_ids = [product.product_id for product in products]
         pending_product_ids = set(StockTransfer.objects.filter(
@@ -872,11 +878,9 @@ def submit_branch_stock_updates(request):
             if catalog is None:
                 return JsonResponse({'status': 'error', 'message': f'{item["product_name"]} is no longer available at {item["branch"]}.'}, status=409)
             if ProductDeletionRequest.objects.filter(
-                branch__iexact=item['branch'],
                 product_id=item['product_id'],
-                status='pending',
             ).exists():
-                return JsonResponse({'status': 'error', 'message': f'{item["product_name"]} is pending deletion at {item["branch"]}.'}, status=409)
+                return JsonResponse({'status': 'error', 'message': f'{item["product_name"]} has a deletion request and cannot receive stock updates.'}, status=409)
             if StockTransfer.objects.filter(
                 branch__iexact=item['branch'],
                 product_id=item['product_id'],
@@ -991,14 +995,10 @@ def stock_summary(request):
     if selected_date is None:
         return JsonResponse({'status': 'error', 'message': 'Use a valid date.'}, status=400)
 
-    pending_deletions = ProductDeletionRequest.objects.filter(
-        branch__iexact=branch,
-        status='pending',
-    )
     catalog = ProductCatalog.objects.filter(
         branch__iexact=branch,
         branch_confirmed=True,
-    ).exclude(product_id__in=pending_deletions.values('product_id'))
+    ).exclude(product_id__in=deleted_product_id_subquery())
     since = parse_datetime(str(request.GET.get('since', '')).strip())
     if since is not None and timezone.is_naive(since):
         since = timezone.make_aware(since, timezone.get_current_timezone())
@@ -1013,12 +1013,7 @@ def stock_summary(request):
         removed_product_ids = []
     else:
         changed_since = since - timedelta(seconds=3)
-        removed_product_ids = set(pending_deletions.values_list('product_id', flat=True))
-        removed_product_ids.update(ProductDeletionRequest.objects.filter(
-            branch__iexact=branch,
-            status='completed',
-            updated_at__gte=changed_since,
-        ).values_list('product_id', flat=True))
+        removed_product_ids = set(ProductDeletionRequest.objects.values_list('product_id', flat=True))
         catalog_product_ids = catalog.values_list('product_id', flat=True)
         changed_product_ids = set(catalog.filter(
             updated_at__gte=changed_since,
@@ -1150,7 +1145,9 @@ def product_stock_matrix_data(request):
     if request.method != 'GET':
         return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
 
-    catalog_rows = list(ProductCatalog.objects.order_by('updated_at', 'pk').values(
+    catalog_rows = list(ProductCatalog.objects.exclude(
+        product_id__in=deleted_product_id_subquery(),
+    ).order_by('updated_at', 'pk').values(
         'branch',
         'product_id',
         'product_name',
@@ -1177,14 +1174,6 @@ def product_stock_matrix_data(request):
         )
         branch_data['online'] = heartbeat.last_seen >= now - timedelta(seconds=BRANCH_ONLINE_SECONDS)
 
-    pending_deletions = ProductDeletionRequest.objects.filter(status='pending').values(
-        'branch',
-        'product_id',
-    )
-    pending_pairs = {
-        (deletion['branch'].casefold(), deletion['product_id'])
-        for deletion in pending_deletions
-    }
     online_branch_keys = {
         branch['key']
         for branch in branches.values()
@@ -1206,7 +1195,6 @@ def product_stock_matrix_data(request):
         elif (
             branch_key in online_branch_keys
             and row['branch_confirmed']
-            and (branch_key, product_id) not in pending_pairs
         ):
             product = products.setdefault(product_id, {
                 'product_id': product_id,
@@ -1759,8 +1747,6 @@ def publish_branch_stock_snapshot(request):
     movements_recorded = 0
     with transaction.atomic():
         deleted_product_ids = set(ProductDeletionRequest.objects.filter(
-            branch__iexact=branch,
-            status__in=['pending', 'completed'],
             product_id__in=[snapshot['product_id'] for snapshot in snapshots],
         ).values_list('product_id', flat=True))
         for snapshot in snapshots:
@@ -2349,14 +2335,11 @@ def product_catalog(request):
     if cached_products is not None:
         return JsonResponse({'status': 'ok', 'products': cached_products})
 
-    products = ProductCatalog.objects.filter(branch__iexact=branch or 'MAIN')
+    products = ProductCatalog.objects.filter(branch__iexact=branch or 'MAIN').exclude(
+        product_id__in=deleted_product_id_subquery(),
+    )
     if branch and branch.casefold() != 'main':
-        products = products.filter(branch_confirmed=True).exclude(
-            product_id__in=ProductDeletionRequest.objects.filter(
-                branch__iexact=branch,
-                status='pending',
-            ).values('product_id'),
-        )
+        products = products.filter(branch_confirmed=True)
     if query:
         query_value = query.strip()
         product_filters = (
@@ -2383,7 +2366,7 @@ def deleted_products(request):
     if request.method != 'GET':
         return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
 
-    deletions = ProductDeletionRequest.objects.filter(status='completed').order_by('-updated_at')[:500]
+    deletions = ProductDeletionRequest.objects.order_by('-updated_at')[:500]
     return JsonResponse({
         'status': 'ok',
         'products': [
@@ -2393,6 +2376,7 @@ def deleted_products(request):
                 'product_name': item.product_name,
                 'deleted_by': item.requested_by,
                 'deleted_at': item.updated_at.isoformat(),
+                'status': item.status,
             }
             for item in deletions
         ],
@@ -2412,7 +2396,13 @@ def product_sync_inbox(request):
     if request.method != 'GET':
         return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
 
-    products = ProductCatalog.objects.exclude(branch__iexact='MAIN').filter(branch_confirmed=True)
+    products = ProductCatalog.objects.exclude(
+        branch__iexact='MAIN',
+    ).filter(
+        branch_confirmed=True,
+    ).exclude(
+        product_id__in=deleted_product_id_subquery(),
+    )
     since = parse_datetime(str(request.GET.get('since', '')).strip())
     full_snapshot = since is None
     if not full_snapshot:
@@ -2435,7 +2425,9 @@ def shared_product_catalog(request):
 
     since = parse_datetime(str(request.GET.get('since', '')).strip())
     full_snapshot = since is None
-    products = ProductCatalog.objects.filter(branch_confirmed=True).order_by(
+    products = ProductCatalog.objects.filter(branch_confirmed=True).exclude(
+        product_id__in=deleted_product_id_subquery(),
+    ).order_by(
         Case(When(branch__iexact='MAIN', then=0), default=1, output_field=IntegerField()),
         'product_id',
         '-updated_at',
@@ -2515,6 +2507,11 @@ def publish_product_catalog(request):
             pending_product_creation=False,
             updated_at=timezone.now(),
         ))
+
+    deleted_ids = set(ProductDeletionRequest.objects.filter(
+        product_id__in={row.product_id for row in catalog_rows},
+    ).values_list('product_id', flat=True))
+    catalog_rows = [row for row in catalog_rows if row.product_id not in deleted_ids]
 
     for attempt in range(5):
         try:

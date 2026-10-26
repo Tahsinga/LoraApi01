@@ -50,7 +50,8 @@ class ProductDeletionTests(TestCase):
 		request_ids = {item['branch']: item['request_id'] for item in deletions}
 		self.assertEqual(self.client.get('/api/products/?branch=BranchA').json()['products'], [])
 		self.assertEqual(self.client.get('/api/products/?branch=BranchB').json()['products'], [])
-		self.assertEqual(len(self.client.get('/api/products/?branch=MAIN').json()['products']), 1)
+		self.assertEqual(self.client.get('/api/products/?branch=MAIN').json()['products'], [])
+		self.assertTrue(ProductCatalog.objects.filter(branch='MAIN', product_id=3001).exists())
 		self.assertEqual(self.client.get('/api/branch-sync/?branch=BranchA').json()['pending_product_deletions'], [{
 			'request_id': request_ids['BranchA'],
 			'branch': 'BranchA',
@@ -238,8 +239,78 @@ class ProductDeletionTests(TestCase):
 
 		self.assertEqual(page.status_code, 200)
 		self.assertContains(page, 'Deleted products')
-		self.assertEqual(response.json()['products'][0]['product_name'], 'Branch Product')
-		self.assertEqual(len(response.json()['products']), 1)
+		self.assertEqual(len(response.json()['products']), 2)
+		self.assertEqual(
+			{item['status'] for item in response.json()['products']},
+			{'completed', 'pending'},
+		)
+		self.assertIn(
+			'Branch Product',
+			{item['product_name'] for item in response.json()['products']},
+		)
+		self.assertContains(page, 'Sync status')
+		self.assertContains(page, 'Movements')
+
+	def test_deleted_product_is_hidden_globally_while_its_movements_remain(self):
+		deletion = ProductDeletionRequest.objects.create(
+			branch='BranchA', product_id=3001, product_name='Branch Product',
+		)
+		StockMovement.objects.create(
+			branch='BranchB', product_id=3001, product_name='Branch Product',
+			movement_type='received', quantity=4, source='historical receipt',
+		)
+
+		completed = self.client.post(
+			'/api/products/delete/complete/',
+			data=json.dumps({
+				'request_id': deletion.pk,
+				'branch': 'BranchA',
+				'success': True,
+			}),
+			content_type='application/json',
+		)
+		self.assertEqual(completed.status_code, 200)
+
+		self.assertEqual(self.client.get('/api/products/?branch=MAIN').json()['products'], [])
+		self.assertEqual(self.client.get('/api/products/?branch=BranchB').json()['products'], [])
+		self.assertNotIn(
+			3001,
+			[item['product_id'] for item in self.client.get('/api/products/shared/').json()['products']],
+		)
+		self.assertNotIn(
+			3001,
+			[item['product_id'] for item in self.client.get('/api/products/inbox/').json()['products']],
+		)
+		self.assertNotIn(
+			3001,
+			[item['product_id'] for item in self.client.get('/api/stock/product-matrix/').json()['products']],
+		)
+		self.assertNotIn(
+			3001,
+			[item['product_id'] for item in self.client.get('/api/stock/summary/?branch=BranchB').json()['products']],
+		)
+
+		movements = self.client.get('/api/stock/movements/history/', {
+			'branch': 'BranchB',
+			'product_id': 3001,
+		})
+		self.assertEqual(movements.status_code, 200)
+		self.assertEqual(len(movements.json()['movements']), 1)
+		self.assertEqual(movements.json()['movements'][0]['source'], 'historical receipt')
+
+		published = self.client.post(
+			'/api/products/publish/',
+			data=json.dumps({'products': [{
+				'branch': 'BranchC',
+				'product_id': 3001,
+				'product_name': 'Branch Product',
+				'available_quantity': 7,
+			}]}),
+			content_type='application/json',
+		)
+		self.assertEqual(published.status_code, 200)
+		self.assertEqual(published.json()['updated'], 0)
+		self.assertFalse(ProductCatalog.objects.filter(branch='BranchC', product_id=3001).exists())
 
 	def test_stock_page_shows_delete_password_tax_and_history_controls(self):
 		response = self.client.get('/stock/')

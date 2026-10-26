@@ -70,12 +70,17 @@
   const toDate = document.querySelector('#to-date');
   const movementStatus = document.querySelector('#movement-status');
   const movementTable = document.querySelector('#movement-table');
+  const initialParams = new URLSearchParams(window.location.search);
+  const initialBranch = initialParams.get('branch') || '';
+  const initialProductId = Number(initialParams.get('product_id'));
+  const initialProductName = initialParams.get('product_name') || '';
+  let selectedProductId = Number.isSafeInteger(initialProductId) && initialProductId > 0 ? initialProductId : null;
   let productListLoading = false;
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
   const now = new Date();
   const today = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
-  fromDate.value = today;
-  toDate.value = today;
+  fromDate.value = selectedProductId ? (initialParams.get('from') || '') : today;
+  toDate.value = selectedProductId ? (initialParams.get('to') || '') : today;
   function renderMovements(movements) {
     movementTable.innerHTML = movements.length
       ? `<table><thead><tr><th>Product</th><th>Movement</th><th>Quantity</th><th>Stock balance</th><th>Branch</th><th>Added by / source</th><th>When</th></tr></thead><tbody>${movements.map(item => { const labels = {stocktake:'Movement adjustment'}; return `<tr><td class="product">${escapeHtml(item.product_name)}<small> ID ${escapeHtml(item.product_id)}</small></td><td class="${escapeHtml(item.movement_type)}">${escapeHtml(labels[item.movement_type] || item.movement_type)}</td><td>${escapeHtml(item.quantity)}</td><td><strong>${escapeHtml(item.balance)}</strong></td><td>${escapeHtml(item.branch)}</td><td>${escapeHtml(item.source)}</td><td>${escapeHtml(new Intl.DateTimeFormat(undefined, {dateStyle:'medium', timeStyle:'short'}).format(new Date(item.created_at)))}</td></tr>`; }).join('')}</tbody></table>`
@@ -87,12 +92,17 @@
       movementTable.innerHTML = '<p class="empty">No branch selected. Nothing to show.</p>';
       return;
     }
-    if (!productQuery.value.trim()) {
+    if (!selectedProductId && !productQuery.value.trim()) {
       movementStatus.textContent = 'Select a product to view movements.';
       movementTable.innerHTML = '<p class="empty">No product selected. Nothing to show.</p>';
       return;
     }
-    const params = new URLSearchParams({ branch: branchSelect.value, product: productQuery.value.trim(), from: fromDate.value, to: toDate.value, _: Date.now() });
+    const params = new URLSearchParams({ branch: branchSelect.value, from: fromDate.value, to: toDate.value, _: Date.now() });
+    if (selectedProductId) {
+      params.set('product_id', selectedProductId);
+    } else {
+      params.set('product', productQuery.value.trim());
+    }
     movementStatus.textContent = 'Loading movements...';
     try {
       const response = await fetch(`/api/stock/movements/history/?${params}`, { cache: 'no-store' });
@@ -110,9 +120,21 @@
       const response = await fetch('/api/branches/', { cache: 'no-store' });
       const data = await response.json();
       const branches = data.branches || [];
+      if (initialBranch && !branches.some(branch => branch.name.toLocaleLowerCase() === initialBranch.toLocaleLowerCase())) {
+        branches.push({ name: initialBranch });
+      }
       branchSelect.innerHTML = '<option value="">Select branch first</option><option value="MAIN">Main stock</option>' + branches.map(branch => `<option value="${escapeHtml(branch.name)}">${escapeHtml(branch.name)}</option>`).join('');
+      if (initialBranch) {
+        const matchingBranch = Array.from(branchSelect.options).find(option =>
+          option.value.toLocaleLowerCase() === initialBranch.toLocaleLowerCase(),
+        );
+        if (matchingBranch) branchSelect.value = matchingBranch.value;
+      }
     } catch (error) {
-      branchSelect.innerHTML = '<option value="">Branches unavailable</option>';
+      branchSelect.innerHTML = initialBranch
+        ? `<option value="${escapeHtml(initialBranch)}">${escapeHtml(initialBranch)}</option>`
+        : '<option value="">Branches unavailable</option>';
+      if (initialBranch) branchSelect.value = initialBranch;
     }
   }
   async function loadProducts(preserveSelection = false) {
@@ -130,7 +152,9 @@
       if (!response.ok) throw new Error(data.message || 'Products unavailable.');
       const products = data.products || [];
       movementProducts.innerHTML = products.map(product => `<option value="${escapeHtml(product.product_name)}">Product ${escapeHtml(product.product_name)}</option>`).join('');
-      if (previousSelection) {
+      if (selectedProductId && branchSelect.value.toLocaleLowerCase() === initialBranch.toLocaleLowerCase()) {
+        productQuery.value = initialProductName;
+      } else if (previousSelection) {
         const stillAvailable = products.some(product => product.product_name.trim().toLocaleLowerCase() === previousSelection.toLocaleLowerCase());
         if (stillAvailable) {
           productQuery.value = previousSelection;
@@ -147,9 +171,19 @@
     }
   }
   filters.addEventListener('submit', event => { event.preventDefault(); loadMovements(); });
-  branchSelect.addEventListener('change', async () => { await loadProducts(); loadMovements(); });
-  loadBranches();
-  loadMovements();
+  productQuery.addEventListener('input', () => { selectedProductId = null; });
+  branchSelect.addEventListener('change', async () => { selectedProductId = null; await loadProducts(); loadMovements(); });
+  async function initialize() {
+    await loadBranches();
+    if (selectedProductId && branchSelect.value) {
+      productQuery.value = initialProductName;
+      await loadProducts(true);
+      await loadMovements();
+    } else {
+      await loadMovements();
+    }
+  }
+  initialize();
   window.setInterval(() => {
     if (document.visibilityState === 'visible' && branchSelect.value) loadProducts(true);
   }, 30000);
