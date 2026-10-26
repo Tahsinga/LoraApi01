@@ -318,6 +318,14 @@ def main_stock(request):
 
 
 @login_required(login_url='/login/')
+def product_stock_matrix(request):
+    response = render(request, 'loraApi/product_stock_matrix.html')
+    response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response['Pragma'] = 'no-cache'
+    return response
+
+
+@login_required(login_url='/login/')
 def deleted_products_page(request):
     return render(request, 'loraApi/deleted_products.html')
 
@@ -1002,6 +1010,61 @@ def stock_summary(request):
         'full': full_snapshot,
         'as_of': snapshot_time.isoformat(),
         'products': summary,
+    })
+
+
+@login_required(login_url='/login/')
+def product_stock_matrix_data(request):
+    if request.method != 'GET':
+        return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
+
+    catalog_rows = list(ProductCatalog.objects.order_by('updated_at', 'pk').values(
+        'branch',
+        'product_id',
+        'product_name',
+        'available_quantity',
+        'branch_confirmed',
+    ))
+    branches = {}
+    products = {}
+    for row in catalog_rows:
+        branch = row['branch'].strip()
+        if branch and branch.casefold() != 'main':
+            branch_key = branch.casefold()
+            branches.setdefault(branch_key, {'key': branch_key, 'name': branch, 'online': False})
+
+    now = timezone.now()
+    for heartbeat in BranchHeartbeat.objects.only('branch', 'last_seen'):
+        branch = heartbeat.branch.strip()
+        if not branch or branch.casefold() == 'main':
+            continue
+        branch_key = branch.casefold()
+        branch_data = branches.setdefault(
+            branch_key,
+            {'key': branch_key, 'name': branch, 'online': False},
+        )
+        branch_data['online'] = heartbeat.last_seen >= now - timedelta(seconds=BRANCH_ONLINE_SECONDS)
+
+    for row in catalog_rows:
+        product_id = row['product_id']
+        product = products.setdefault(product_id, {
+            'product_id': product_id,
+            'product_name': row['product_name'],
+            'quantities': {},
+        })
+        branch = row['branch'].strip()
+        if branch.casefold() == 'main':
+            if row['product_name']:
+                product['product_name'] = row['product_name']
+        elif branch and row['branch_confirmed']:
+            product['quantities'][branch.casefold()] = str(row['available_quantity'])
+
+    return JsonResponse({
+        'branches': sorted(branches.values(), key=lambda branch: branch['name'].casefold()),
+        'products': sorted(
+            products.values(),
+            key=lambda product: (product['product_name'].casefold(), product['product_id']),
+        ),
     })
 
 

@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Branch stock matrix | Lora operations</title>
+  <style>
+    :root { color-scheme:light; font-family:Arial,sans-serif; color:#20312d; background:#f3f6f3; }
+    * { box-sizing:border-box; }
+    body { margin:0; }
+    .shell { max-width:1600px; margin:0 auto; padding:24px; }
+    header { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px; }
+    h1 { margin:4px 0 0; font-size:28px; }
+    .eyebrow { margin:0; color:#62736d; font-size:12px; letter-spacing:.08em; text-transform:uppercase; }
+    nav { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+    .nav-link, button { display:inline-block; border:0; border-radius:6px; padding:10px 13px; color:#fff; background:#176b52; font:inherit; text-decoration:none; cursor:pointer; }
+    .nav-link:hover, button:hover { background:#10543f; }
+    .logout-form { display:inline; margin:0; }
+    .toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:14px; padding:16px; border:1px solid #dce5df; border-radius:8px; background:#fff; }
+    .toolbar label { display:flex; flex:1 1 260px; flex-direction:column; gap:6px; color:#52635d; font-size:13px; }
+    input { width:100%; min-height:40px; padding:8px 10px; border:1px solid #cbd6cf; border-radius:5px; font:inherit; }
+    #status { flex:1 1 100%; min-height:18px; margin:0; color:#52635d; font-size:13px; }
+    #status.error { color:#a4262c; }
+    .table-wrap { overflow:auto; max-height:calc(100vh - 235px); border:1px solid #dce5df; border-radius:8px; background:#fff; }
+    table { width:100%; border-collapse:separate; border-spacing:0; }
+    th, td { min-width:125px; padding:11px 13px; border-right:1px solid #e3e9e5; border-bottom:1px solid #e3e9e5; text-align:right; white-space:nowrap; }
+    thead th { position:sticky; top:0; z-index:2; color:#fff; background:#176b52; text-align:center; }
+    th:first-child, td:first-child { position:sticky; left:0; z-index:1; min-width:260px; text-align:left; background:#f7faf8; }
+    thead th:first-child { z-index:3; color:#fff; background:#10543f; }
+    tbody tr:hover td { background:#f1f7f3; }
+    tbody tr:hover td:first-child { background:#e9f3ec; }
+    .branch-name { display:block; }
+    .branch-state { display:block; margin-top:4px; color:#d6e7df; font-size:11px; font-weight:normal; }
+    .quantity { font-variant-numeric:tabular-nums; }
+    .empty { color:#8a9690; }
+    @media (max-width:700px) {
+      .shell { padding:14px; }
+      header { align-items:flex-start; }
+      h1 { font-size:23px; }
+      .table-wrap { max-height:calc(100vh - 290px); }
+      th:first-child, td:first-child { min-width:190px; }
+      th, td { min-width:100px; padding:10px; }
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div><p class="eyebrow">Lora operations</p><h1>Branch stock matrix</h1></div>
+    <nav aria-label="Main navigation">
+      <a class="nav-link" href="/stock/">Main stock</a>
+      <a class="nav-link" href="/stock/product-matrix/" aria-current="page">Branch stock matrix</a>
+      <a class="nav-link" href="/">Sale control</a>
+      <form method="post" action="/logout/" class="logout-form">{% csrf_token %}<button type="submit">Sign out</button></form>
+    </nav>
+  </header>
+  <section class="toolbar" aria-label="Stock matrix controls">
+    <label for="product-search">Search products
+      <input id="product-search" type="search" placeholder="Product name or ID">
+    </label>
+    <button id="refresh" type="button">Refresh</button>
+    <p id="status" role="status" aria-live="polite">Loading branch stock...</p>
+  </section>
+  <div class="table-wrap">
+    <table id="matrix">
+      <thead><tr id="matrix-heading"><th scope="col">Product</th></tr></thead>
+      <tbody id="matrix-body"></tbody>
+    </table>
+  </div>
+</div>
+<script>
+  const statusElement = document.getElementById('status');
+  const heading = document.getElementById('matrix-heading');
+  const body = document.getElementById('matrix-body');
+  const search = document.getElementById('product-search');
+  let products = [];
+  let branches = [];
+
+  function renderMatrix() {
+    heading.replaceChildren();
+    const productHeading = document.createElement('th');
+    productHeading.scope = 'col';
+    productHeading.textContent = 'Product';
+    heading.append(productHeading);
+    branches.forEach(branch => {
+      const cell = document.createElement('th');
+      cell.scope = 'col';
+      const name = document.createElement('span');
+      name.className = 'branch-name';
+      name.textContent = branch.name;
+      const state = document.createElement('span');
+      state.className = 'branch-state';
+      state.textContent = branch.online ? 'Online' : 'Offline';
+      cell.append(name, state);
+      heading.append(cell);
+    });
+
+    const query = search.value.trim().toLocaleLowerCase();
+    body.replaceChildren();
+    const visibleProducts = products.filter(product =>
+      `${product.product_name} ${product.product_id}`.toLocaleLowerCase().includes(query)
+    );
+    visibleProducts.forEach(product => {
+      const row = document.createElement('tr');
+      const label = document.createElement('th');
+      label.scope = 'row';
+      label.textContent = `${product.product_name || 'Unnamed product'} (${product.product_id})`;
+      row.append(label);
+      branches.forEach(branch => {
+        const cell = document.createElement('td');
+        cell.className = 'quantity';
+        const quantity = product.quantities[branch.key];
+        if (quantity === undefined) {
+          cell.classList.add('empty');
+          cell.textContent = '—';
+        } else {
+          cell.textContent = quantity;
+        }
+        row.append(cell);
+      });
+      body.append(row);
+    });
+    statusElement.textContent = `${visibleProducts.length} of ${products.length} products · ${branches.length} branches`;
+    statusElement.classList.remove('error');
+  }
+
+  async function loadMatrix() {
+    const refreshButton = document.getElementById('refresh');
+    refreshButton.disabled = true;
+    statusElement.textContent = 'Loading branch stock...';
+    statusElement.classList.remove('error');
+    try {
+      const response = await fetch('/api/stock/product-matrix/', {
+        headers: {'Accept': 'application/json'},
+        credentials: 'same-origin',
+      });
+      if (!response.ok) {
+        throw new Error(`Could not load branch stock (HTTP ${response.status}).`);
+      }
+      const data = await response.json();
+      if (!Array.isArray(data.branches) || !Array.isArray(data.products)) {
+        throw new Error('The stock response was not in the expected format.');
+      }
+      branches = data.branches;
+      products = data.products;
+      renderMatrix();
+    } catch (error) {
+      statusElement.textContent = error.message || 'Could not load branch stock.';
+      statusElement.classList.add('error');
+    } finally {
+      refreshButton.disabled = false;
+    }
+  }
+
+  search.addEventListener('input', renderMatrix);
+  document.getElementById('refresh').addEventListener('click', loadMatrix);
+  loadMatrix();
+</script>
+</body>
+</html>

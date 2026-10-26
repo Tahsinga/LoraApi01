@@ -271,7 +271,7 @@ class StockTransferTests(TestCase):
 
 	def test_sign_out_works_from_each_page_with_csrf_enforced(self):
 		client = self.client_class(enforce_csrf_checks=True)
-		for page in ('/', '/stock/', '/history/', '/stock/movements/history/', '/stock/movement-adjustments/', '/users/'):
+		for page in ('/', '/stock/', '/stock/product-matrix/', '/history/', '/stock/movements/history/', '/stock/movement-adjustments/', '/users/'):
 			client.force_login(self.admin)
 			page_response = client.get(page)
 			self.assertEqual(page_response.status_code, 200, page)
@@ -288,6 +288,46 @@ class StockTransferTests(TestCase):
 			self.assertIsNotNone(csrf_token, page)
 			logout_response = client.post('/logout/', {'csrfmiddlewaretoken': csrf_token.group(1)})
 			self.assertRedirects(logout_response, '/login/', fetch_redirect_response=False)
+
+	def test_product_stock_matrix_includes_offline_branches_and_confirmed_quantities(self):
+		ProductCatalog.objects.create(
+			branch='MAIN', product_id=4100, product_name='Main catalog product',
+		)
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=4100, product_name='Branch product',
+			available_quantity=12, branch_confirmed=True,
+		)
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=4200, product_name='Pending product',
+			available_quantity=50, branch_confirmed=False,
+		)
+		BranchHeartbeat.objects.create(branch='BranchA', last_seen=timezone.now())
+		BranchHeartbeat.objects.create(
+			branch='OfflineBranch', last_seen=timezone.now() - timedelta(hours=1),
+		)
+
+		page = self.client.get('/stock/product-matrix/')
+		self.assertEqual(page.status_code, 200)
+		self.assertContains(page, 'Branch stock matrix')
+		self.assertContains(page, '/api/stock/product-matrix/')
+
+		response = self.client.get('/api/stock/product-matrix/')
+		self.assertEqual(response.status_code, 200)
+		data = response.json()
+		branch_by_name = {branch['name']: branch for branch in data['branches']}
+		self.assertTrue(branch_by_name['BranchA']['online'])
+		self.assertFalse(branch_by_name['OfflineBranch']['online'])
+		self.assertIn('OfflineBranch', branch_by_name)
+		product_by_id = {product['product_id']: product for product in data['products']}
+		self.assertEqual(product_by_id[4100]['product_name'], 'Main catalog product')
+		self.assertEqual(product_by_id[4100]['quantities']['brancha'], '12')
+		self.assertNotIn('offlinebranch', product_by_id[4100]['quantities'])
+		self.assertNotIn('brancha', product_by_id[4200]['quantities'])
+
+	def test_product_stock_matrix_api_requires_login(self):
+		self.client.logout()
+		response = self.client.get('/api/stock/product-matrix/')
+		self.assertEqual(response.status_code, 302)
 
 	@override_settings(WHATSAPP_STOCK_API_TOKEN='test-whatsapp-token', WHATSAPP_STOCK_TIME_ZONE='UTC')
 	def test_whatsapp_stock_lookup_requires_token_and_filters_transfers_by_branch(self):
