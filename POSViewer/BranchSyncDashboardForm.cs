@@ -369,6 +369,7 @@ public sealed class BranchSyncDashboardForm : Form
                     GROUP BY movement.ProductID
                 ) AS daily_movements ON daily_movements.ProductID = p.ProductID
                 WHERE p.ProductID IS NOT NULL
+                    AND p.IsActive = 1
                     AND p.ProductDesc IS NOT NULL
                     AND LTRIM(RTRIM(p.ProductDesc)) <> '';";
             using var command = new SqlCommand(query, connection);

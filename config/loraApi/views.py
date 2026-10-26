@@ -1758,7 +1758,15 @@ def publish_branch_stock_snapshot(request):
     updated = 0
     movements_recorded = 0
     with transaction.atomic():
+        deleted_product_ids = set(ProductDeletionRequest.objects.filter(
+            branch__iexact=branch,
+            status__in=['pending', 'completed'],
+            product_id__in=[snapshot['product_id'] for snapshot in snapshots],
+        ).values_list('product_id', flat=True))
         for snapshot in snapshots:
+            if snapshot['product_id'] in deleted_product_ids:
+                continue
+
             product, created = ProductCatalog.objects.select_for_update().get_or_create(
                 branch=branch,
                 product_id=snapshot['product_id'],

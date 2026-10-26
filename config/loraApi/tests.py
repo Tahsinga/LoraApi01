@@ -104,6 +104,39 @@ class ProductDeletionTests(TestCase):
 			{3001},
 		)
 
+	def test_reconnected_branch_snapshot_does_not_restore_a_deleted_product(self):
+		deletion = ProductDeletionRequest.objects.create(
+			branch='BranchB', product_id=3001, product_name='Branch Product',
+		)
+		completed = self.client.post(
+			'/api/products/delete/complete/',
+			data=json.dumps({
+				'request_id': deletion.pk,
+				'branch': 'BranchB',
+				'success': True,
+			}),
+			content_type='application/json',
+		)
+		self.assertEqual(completed.status_code, 200)
+
+		response = self.client.post(
+			'/api/stock/snapshot/',
+			data=json.dumps({
+				'branch': 'BranchB',
+				'products': [{
+					'product_id': 3001,
+					'product_name': 'Branch Product',
+					'available_quantity': '0',
+				}],
+			}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()['updated'], 0)
+		self.assertFalse(ProductCatalog.objects.filter(branch='BranchB', product_id=3001).exists())
+		self.assertEqual(ProductDeletionRequest.objects.get(pk=deletion.pk).status, 'completed')
+
 	def test_deletion_includes_registered_and_historical_offline_branches(self):
 		BranchHeartbeat.objects.create(branch='Offline Heartbeat Branch', last_seen=timezone.now() - timedelta(days=30))
 		StockMovement.objects.create(
