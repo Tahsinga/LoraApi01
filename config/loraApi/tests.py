@@ -319,6 +319,7 @@ class StockTransferTests(TestCase):
 		self.assertContains(page, 'Branch stock matrix')
 		self.assertContains(page, '/api/stock/product-matrix/')
 		self.assertContains(page, 'Submit stock updates')
+		self.assertContains(page, '<option value="" selected>Select update type</option>', html=True)
 		self.assertContains(page, 'Stocktake — replace current quantity')
 
 		response = self.client.get('/api/stock/product-matrix/')

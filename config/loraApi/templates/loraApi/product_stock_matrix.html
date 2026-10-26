@@ -101,7 +101,7 @@
     </nav>
   </header>
   <main>
-    <p class="intro">Current product quantities for branches that are online. Click a branch quantity to stage a stocktake or stock addition; stocktakes replace the count, while additions show current stock plus the amount entered.</p>
+    <p class="intro">Current product quantities for branches that are online. Select an update type before editing: stocktakes replace the count, while additions show current stock plus the amount entered.</p>
     <section class="panel">
       <div class="browser-heading">
         <h2>Branch quantities</h2>
@@ -115,6 +115,7 @@
       <div class="update-controls" aria-label="Branch stock update controls">
         <label for="update-mode">Update type
           <select id="update-mode">
+            <option value="" selected>Select update type</option>
             <option value="stocktake">Stocktake — replace current quantity</option>
             <option value="add">Add stock — send more to branch</option>
           </select>
@@ -166,8 +167,10 @@
     const additions = stagedUpdates.size - stocktakes;
     updateSummary.textContent = stagedUpdates.size
       ? `${stagedUpdates.size} staged: ${stocktakes} stocktake${stocktakes === 1 ? '' : 's'}, ${additions} stock addition${additions === 1 ? '' : 's'}.`
-      : 'Click a branch quantity to stage an update.';
-    submitButton.disabled = submittingUpdates || stagedUpdates.size === 0;
+      : updateMode.value
+        ? 'Click a branch quantity to stage an update.'
+        : 'Select an update type before editing stock.';
+    submitButton.disabled = submittingUpdates || stagedUpdates.size === 0 || !updateMode.value;
     clearButton.disabled = submittingUpdates || stagedUpdates.size === 0;
   }
 
@@ -302,6 +305,11 @@
   body.addEventListener('click', event => {
     const cell = event.target.closest('td.quantity[data-product-id]');
     if (!cell || event.target instanceof HTMLInputElement || submittingUpdates) return;
+    if (!updateMode.value) {
+      updateMessage.textContent = 'Select an update type before editing stock.';
+      updateMessage.classList.remove('error');
+      return;
+    }
     editingKey = draftKey(cell.dataset.branchKey, cell.dataset.productId);
     renderMatrix();
   });
@@ -310,6 +318,11 @@
     const cell = event.target.closest('td.quantity[data-product-id]');
     if (cell && event.target === cell && (event.key === 'Enter' || event.key === ' ')) {
       event.preventDefault();
+      if (!updateMode.value) {
+        updateMessage.textContent = 'Select an update type before editing stock.';
+        updateMessage.classList.remove('error');
+        return;
+      }
       editingKey = draftKey(cell.dataset.branchKey, cell.dataset.productId);
       renderMatrix();
     }
@@ -352,6 +365,9 @@
 
   updateMode.addEventListener('change', () => {
     editingKey = '';
+    updateMessage.textContent = '';
+    updateMessage.classList.remove('error');
+    updateDraftSummary();
     renderMatrix();
   });
 
@@ -365,7 +381,7 @@
   });
 
   submitButton.addEventListener('click', async () => {
-    if (submittingUpdates || stagedUpdates.size === 0) return;
+    if (submittingUpdates || stagedUpdates.size === 0 || !updateMode.value) return;
     const updates = [...stagedUpdates.values()].map(update => {
       const product = products.find(item => String(item.product_id) === update.productId);
       const branch = branches.find(item => item.key === update.branchKey);
