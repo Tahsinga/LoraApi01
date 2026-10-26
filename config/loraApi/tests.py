@@ -7,7 +7,7 @@ from django.contrib.auth import authenticate, get_user_model
 from django.core.management import call_command
 from loraApi.state_store import load_state
 from django.utils import timezone
-from loraApi.models import BranchHeartbeat, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
+from loraApi.models import BranchHeartbeat, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
 import json
 
 
@@ -103,6 +103,72 @@ class ProductDeletionTests(TestCase):
 			set(ProductDeletionRequest.objects.values_list('product_id', flat=True)),
 			{3001},
 		)
+
+	def test_deletion_includes_registered_and_historical_offline_branches(self):
+		BranchHeartbeat.objects.create(branch='Offline Heartbeat Branch', last_seen=timezone.now() - timedelta(days=30))
+		StockMovement.objects.create(
+			branch='Legacy Stock Branch',
+			product_id=900,
+			product_name='Unrelated product',
+			movement_type='received',
+			quantity=1,
+		)
+		DeletionRecord.objects.create(
+			deletion_id='legacy-branch-cancel',
+			branch='Legacy Cancellation Branch',
+			invoice='INV-OLD',
+			status='processed',
+		)
+
+		response = self.client.post(
+			'/api/products/delete/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': self.password}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 202)
+		self.assertEqual(
+			set(response.json()['branches']),
+			{'BranchA', 'BranchB', 'Offline Heartbeat Branch', 'Legacy Stock Branch', 'Legacy Cancellation Branch'},
+		)
+		self.assertEqual(
+			set(ProductDeletionRequest.objects.values_list('branch', flat=True)),
+			set(response.json()['branches']),
+		)
+
+	def test_deletion_queues_during_creation_and_waits_for_final_product_id(self):
+		pending_product = ProductCatalog.objects.get(branch='BranchB', product_id=3001)
+		pending_product.branch_confirmed = False
+		pending_product.pending_product_creation = True
+		pending_product.save(update_fields=['branch_confirmed', 'pending_product_creation', 'updated_at'])
+
+		response = self.client.post(
+			'/api/products/delete/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': 3001, 'password': self.password}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 202)
+		branch_poll = self.client.get('/api/branch-sync/?branch=BranchB').json()
+		self.assertEqual(branch_poll['pending_product_creations'][0]['product_id'], 3001)
+		self.assertEqual(branch_poll['pending_product_deletions'], [])
+
+		creation_complete = self.client.post(
+			'/api/products/create/complete/',
+			data=json.dumps({
+				'branch': 'BranchB',
+				'product_id': 3001,
+				'actual_product_id': 9001,
+				'success': True,
+			}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(creation_complete.status_code, 200)
+		deletion = ProductDeletionRequest.objects.get(branch='BranchB')
+		self.assertEqual(deletion.product_id, 9001)
+		next_poll = self.client.get('/api/branch-sync/?branch=BranchB').json()
+		self.assertEqual(next_poll['pending_product_deletions'][0]['product_id'], 9001)
 
 	def test_deletion_is_rejected_if_any_branch_has_an_active_transfer(self):
 		StockTransfer.objects.create(

@@ -1888,6 +1888,15 @@ def complete_branch_product_creation(request):
             product.branch_confirmed = True
             product.pending_product_creation = False
             product.save(update_fields=['product_id', 'product_code', 'branch_confirmed', 'pending_product_creation', 'updated_at'])
+            ProductDeletionRequest.objects.filter(
+                branch__iexact=product.branch,
+                product_id=product_id,
+                status='pending',
+            ).update(
+                product_id=actual_product_id,
+                product_name=product.product_name,
+                updated_at=timezone.now(),
+            )
             ProductCatalog.objects.update_or_create(
                 branch='MAIN',
                 product_id=actual_product_id,
@@ -1932,7 +1941,6 @@ def delete_branch_product(request):
     with transaction.atomic():
         branch_products = list(ProductCatalog.objects.select_for_update().filter(
             product_id=product_id,
-            branch_confirmed=True,
         ).exclude(branch__iexact='MAIN').order_by('branch'))
         product = next(
             (item for item in branch_products if item.branch.casefold() == branch.casefold()),
@@ -1940,33 +1948,67 @@ def delete_branch_product(request):
         )
         if product is None:
             return JsonResponse({'status': 'error', 'message': 'The product was not found for this branch.'}, status=404)
-        if ProductCatalog.objects.filter(
-            product_id=product_id,
-            pending_product_creation=True,
-        ).exclude(branch__iexact='MAIN').exists():
-            return JsonResponse({'status': 'error', 'message': 'Wait for product creation to finish before deleting it.'}, status=409)
         if ProductDeletionRequest.objects.filter(
             product_id=product_id,
             status='pending',
         ).exists():
             return JsonResponse({'status': 'error', 'message': 'A deletion for this product is already queued.'}, status=409)
 
+        branch_targets = {item.branch for item in branch_products}
+        if BRANCH_HEARTBEAT_DB_AVAILABLE:
+            try:
+                branch_targets.update(BranchHeartbeat.objects.values_list('branch', flat=True))
+            except ProgrammingError:
+                branch_targets.update(item['name'] for item in CONNECTED_BRANCHES.values())
+        else:
+            branch_targets.update(item['name'] for item in CONNECTED_BRANCHES.values())
+        branch_targets.update(
+            StockMovement.objects.exclude(branch='').values_list('branch', flat=True).distinct()
+        )
+        branch_targets.update(
+            StockTransfer.objects.exclude(branch='').values_list('branch', flat=True).distinct()
+        )
+        branch_targets.update(
+            DeletionRecord.objects.exclude(branch='').values_list('branch', flat=True).distinct()
+        )
+        branch_targets.update(
+            SalesReportRequest.objects.exclude(branch='').values_list('branch', flat=True).distinct()
+        )
+        branch_targets.update(
+            InvoiceReprintRequest.objects.exclude(branch='').values_list('branch', flat=True).distinct()
+        )
+        branches_by_key = {}
+        for target in branch_targets:
+            target = str(target).strip()
+            if target and target.casefold() not in {'main', 'unknown'}:
+                branches_by_key.setdefault(target.casefold(), target)
+        branches = sorted(branches_by_key.values(), key=str.casefold)
+
+        products_by_branch = {item.branch.casefold(): item for item in branch_products}
         deletions = []
-        for branch_product in branch_products:
+        for target_branch in branches:
             if StockTransfer.objects.filter(
-                branch__iexact=branch_product.branch,
+                branch__iexact=target_branch,
                 product_id=product_id,
                 status__in=['pending', 'processing'],
             ).exists():
                 return JsonResponse({
                     'status': 'error',
-                    'message': f"Wait for this product's stock transfers to finish at {branch_product.branch} before deleting it.",
+                    'message': f"Wait for this product's stock transfers to finish at {target_branch} before deleting it.",
                 }, status=409)
 
+            branch_product = products_by_branch.get(target_branch.casefold())
             deletions.append(ProductDeletionRequest(
-                branch=branch_product.branch,
-                product_id=branch_product.product_id,
-                product_name=branch_product.product_name,
+                branch=target_branch,
+                product_id=product_id,
+                product_name=branch_product.product_name if branch_product else product.product_name,
+                requested_by=request.user.get_username(),
+            ))
+        if not any(item.branch.casefold() == product.branch.casefold() for item in deletions):
+            deletions.append(ProductDeletionRequest(
+                branch=product.branch,
+                product_id=product_id,
+                product_name=product.product_name,
                 requested_by=request.user.get_username(),
             ))
         ProductDeletionRequest.objects.bulk_create(deletions)
@@ -2609,6 +2651,11 @@ def branch_sync(request):
         pending_product_deletions = list(ProductDeletionRequest.objects.filter(
             branch__iexact=branch_name,
             status='pending',
+        ).exclude(
+            product_id__in=ProductCatalog.objects.filter(
+                branch__iexact=branch_name,
+                pending_product_creation=True,
+            ).values('product_id'),
         ).values('id', 'branch', 'product_id', 'product_name'))
         with transaction.atomic():
             reprint = InvoiceReprintRequest.objects.select_for_update().filter(
