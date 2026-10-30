@@ -1436,6 +1436,7 @@ def stock_transfer_logs(request):
     date_value = request.GET.get('date', '').strip()
     branch = request.GET.get('branch', '').strip()
     product_query = request.GET.get('product', '').strip()
+    product_id_value = request.GET.get('product_id', '').strip()
     start_value = request.GET.get('start_datetime', '').strip()
     end_value = request.GET.get('end_datetime', '').strip()
     try:
@@ -1469,7 +1470,15 @@ def stock_transfer_logs(request):
         transfers = transfers.filter(created_at__gte=day_start, created_at__lt=day_end)
     if branch:
         transfers = transfers.filter(branch__iexact=branch)
-    if product_query:
+    if product_id_value:
+        try:
+            product_id = int(product_id_value)
+        except ValueError:
+            return JsonResponse({'status': 'error', 'message': 'Use a valid product ID.'}, status=400)
+        if product_id <= 0:
+            return JsonResponse({'status': 'error', 'message': 'Use a valid product ID.'}, status=400)
+        transfers = transfers.filter(product_id=product_id)
+    elif product_query:
         product_filter = Q(product_name__icontains=product_query)
         if product_query.isdigit():
             product_filter |= Q(product_id=int(product_query))

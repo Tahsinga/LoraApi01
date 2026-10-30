@@ -1496,6 +1496,7 @@ class StockTransferTests(TestCase):
 
 		by_name = self.client.get('/api/stock/transfers/log/', {'product': 'tea'})
 		by_id = self.client.get('/api/stock/transfers/log/', {'product': '2002'})
+		selected_product = self.client.get('/api/stock/transfers/log/', {'product_id': '2002'})
 
 		self.assertEqual(
 			[item['transfer_id'] for item in by_name.json()['transfers']],
@@ -1503,6 +1504,11 @@ class StockTransferTests(TestCase):
 		)
 		self.assertEqual(
 			[item['transfer_id'] for item in by_id.json()['transfers']],
+			['TRANSFER_SEARCH_ID'],
+		)
+		self.assertEqual(selected_product.status_code, 200)
+		self.assertEqual(
+			[item['transfer_id'] for item in selected_product.json()['transfers']],
 			['TRANSFER_SEARCH_ID'],
 		)
 
@@ -1530,6 +1536,8 @@ class StockTransferTests(TestCase):
 		self.assertContains(response, 'From date &amp; time')
 		self.assertContains(response, 'To date &amp; time')
 		self.assertContains(response, 'Product search')
+		self.assertContains(response, 'Type to find and select a product')
+		self.assertContains(response, 'product-options')
 
 	def test_stock_summary_returns_only_changed_products(self):
 		ProductCatalog.objects.create(branch='BranchA', product_id=1001, product_name='Test Product')

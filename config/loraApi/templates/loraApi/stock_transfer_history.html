@@ -16,6 +16,14 @@
     .filters { display:grid; grid-template-columns:repeat(4,minmax(130px,1fr)) auto auto; align-items:end; gap:12px; margin:0 0 16px; }
     label { display:grid; gap:6px; color:#435153; font:700 10px Arial,sans-serif; letter-spacing:.7px; text-transform:uppercase; }
     input, select { width:100%; min-width:0; height:40px; padding:8px 10px; color:var(--ink); background:#fbfcfa; border:1px solid #cbd7d2; border-radius:2px; font:13px Arial,sans-serif; }
+    .product-search-wrap { position:relative; }
+    .product-options { position:absolute; top:calc(100% + 4px); right:0; left:0; z-index:5; display:none; max-height:260px; overflow:auto; padding:4px; background:#fff; border:1px solid var(--line); box-shadow:0 8px 20px rgba(28,62,54,.14); }
+    .product-options.is-open { display:grid; gap:2px; }
+    .product-option { width:100%; height:auto; padding:9px 10px; color:var(--ink); background:#fff; border-radius:2px; text-align:left; text-transform:none; letter-spacing:0; font:12px Arial,sans-serif; }
+    .product-option:hover, .product-option:focus { color:#fff; background:var(--teal); outline:none; }
+    .product-option small { display:block; margin-top:3px; color:var(--muted); font-size:10px; }
+    .product-option:hover small, .product-option:focus small { color:#e4f3f0; }
+    .product-options-message { padding:9px 10px; color:var(--muted); font:11px Arial,sans-serif; }
     button { height:40px; padding:0 14px; color:#fff; background:var(--teal); border:0; border-radius:2px; cursor:pointer; font:700 10px Arial,sans-serif; letter-spacing:.5px; text-transform:uppercase; }
     button:hover { background:var(--teal-dark); }
     .clear-button { color:var(--ink); background:#e8eeea; }
@@ -55,7 +63,12 @@
         </label>
         <label>From date &amp; time<input id="start-datetime" type="datetime-local"></label>
         <label>To date &amp; time<input id="end-datetime" type="datetime-local"></label>
-        <label>Product search<input id="product-search" type="search" placeholder="Product name or ID" autocomplete="off"></label>
+        <label>Product search
+          <div class="product-search-wrap">
+            <input id="product-search" type="search" placeholder="Type to find and select a product" autocomplete="off" aria-autocomplete="list" aria-controls="product-options" aria-expanded="false">
+            <div class="product-options" id="product-options" role="listbox"></div>
+          </div>
+        </label>
         <button type="submit">Filter transfers</button>
         <button class="clear-button" id="clear-filters" type="button">Clear</button>
       </form>
@@ -69,6 +82,7 @@
     const startInput = document.querySelector('#start-datetime');
     const endInput = document.querySelector('#end-datetime');
     const productSearchInput = document.querySelector('#product-search');
+    const productOptions = document.querySelector('#product-options');
     const statusElement = document.querySelector('#status');
     const resultsElement = document.querySelector('#results');
     const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
@@ -77,6 +91,78 @@
       return local.toISOString().slice(0, 16);
     };
     const escapeAttribute = value => escapeHtml(value);
+    let selectedProductId = '';
+    let productSearchTimer;
+    let productSearchController;
+    let productSearchRequestId = 0;
+
+    function closeProductOptions() {
+      productOptions.classList.remove('is-open');
+      productSearchInput.setAttribute('aria-expanded', 'false');
+    }
+
+    function showProductOptions(message, products = []) {
+      productOptions.innerHTML = products.length
+        ? products.map(product => `<button class="product-option" type="button" role="option" data-product-id="${escapeHtml(product.product_id)}" data-product-name="${escapeHtml(product.product_name)}">${escapeHtml(product.product_name)}<small>Product ID ${escapeHtml(product.product_id)}</small></button>`).join('')
+        : `<span class="product-options-message">${escapeHtml(message)}</span>`;
+      productOptions.classList.add('is-open');
+      productSearchInput.setAttribute('aria-expanded', 'true');
+    }
+
+    function getTransferParams({ includeDateTime = true, includeProduct = true } = {}) {
+      const params = new URLSearchParams();
+      params.set('limit', '5000');
+      if (branchInput.value) params.set('branch', branchInput.value);
+      if (includeProduct && selectedProductId) {
+        params.set('product_id', selectedProductId);
+      } else if (includeProduct && productSearchInput.value.trim()) {
+        params.set('product', productSearchInput.value.trim());
+      }
+      if (includeDateTime && startInput.value && endInput.value) {
+        params.set('start_datetime', new Date(startInput.value).toISOString());
+        params.set('end_datetime', new Date(endInput.value).toISOString());
+      }
+      return params;
+    }
+
+    async function searchProducts(query) {
+      const requestId = ++productSearchRequestId;
+      productSearchController?.abort();
+      if (query.length < 2) {
+        closeProductOptions();
+        return;
+      }
+
+      const controller = new AbortController();
+      productSearchController = controller;
+      showProductOptions('Searching products...');
+      const params = getTransferParams({ includeDateTime: false, includeProduct: false });
+      params.set('product', query);
+
+      try {
+        const response = await fetch(`/api/stock/transfers/log/?${params}`, {
+          cache: 'no-store',
+          signal: controller.signal
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.message || 'Product options could not be loaded.');
+        if (requestId !== productSearchRequestId) return;
+        const uniqueProducts = new Map();
+        for (const transfer of data.transfers || []) {
+          uniqueProducts.set(String(transfer.product_id), {
+            product_id: transfer.product_id,
+            product_name: transfer.product_name
+          });
+        }
+        showProductOptions(
+          uniqueProducts.size ? '' : 'No matching products found in transfer history.',
+          [...uniqueProducts.values()].slice(0, 30)
+        );
+      } catch (error) {
+        if (error.name === 'AbortError' || requestId !== productSearchRequestId) return;
+        showProductOptions(error.message);
+      }
+    }
 
     function renderTransfers(transfers) {
       if (!transfers.length) {
@@ -107,14 +193,7 @@
       statusElement.textContent = 'Loading transfers...';
       statusElement.className = 'status';
       resultsElement.innerHTML = '<p class="empty">Loading transfers...</p>';
-      const params = new URLSearchParams();
-      params.set('limit', '5000');
-      if (branchInput.value) params.set('branch', branchInput.value);
-      if (productSearchInput.value.trim()) params.set('product', productSearchInput.value.trim());
-      if (startInput.value && endInput.value) {
-        params.set('start_datetime', new Date(startInput.value).toISOString());
-        params.set('end_datetime', new Date(endInput.value).toISOString());
-      }
+      const params = getTransferParams();
 
       try {
         const response = await fetch(`/api/stock/transfers/log/?${params}`, { cache: 'no-store' });
@@ -132,13 +211,36 @@
 
     form.addEventListener('submit', event => {
       event.preventDefault();
+      closeProductOptions();
       loadTransfers();
+    });
+    productSearchInput.addEventListener('input', () => {
+      selectedProductId = '';
+      window.clearTimeout(productSearchTimer);
+      const query = productSearchInput.value.trim();
+      productSearchTimer = window.setTimeout(() => searchProducts(query), 250);
+    });
+    productOptions.addEventListener('click', event => {
+      const option = event.target.closest('[data-product-id]');
+      if (!option) return;
+      selectedProductId = option.dataset.productId;
+      productSearchInput.value = option.dataset.productName;
+      closeProductOptions();
+      loadTransfers();
+    });
+    productSearchInput.addEventListener('keydown', event => {
+      if (event.key === 'Escape') closeProductOptions();
+    });
+    document.addEventListener('click', event => {
+      if (!event.target.closest('.product-search-wrap')) closeProductOptions();
     });
     document.querySelector('#clear-filters').addEventListener('click', () => {
       branchInput.value = '';
       startInput.value = '';
       endInput.value = '';
       productSearchInput.value = '';
+      selectedProductId = '';
+      closeProductOptions();
       loadTransfers();
     });
 
