@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lora | Stock transfer history</title>
+  <style>
+    :root { --ink:#182326; --muted:#6d7b7d; --line:#dbe3df; --paper:#f5f7f4; --white:#fff; --teal:#087f78; --teal-dark:#075d5a; --coral:#d95f4d; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:radial-gradient(circle at 90% 0, #dceee7 0, transparent 34%), linear-gradient(135deg, #f8faf7 0, #edf3ef 100%); font-family:Georgia, 'Times New Roman', serif; }
+    header { display:flex; justify-content:space-between; align-items:center; gap:20px; max-width:1416px; margin:30px auto 0; padding:22px 28px 18px; border-bottom:1px solid rgba(201,221,213,.8); }
+    h1 { margin:0; font-size:26px; font-weight:500; }
+    main { max-width:1416px; margin:auto; padding:22px 28px 50px; }
+    .back-link { color:var(--teal-dark); font:700 10px Arial,sans-serif; letter-spacing:.5px; text-decoration:none; text-transform:uppercase; }
+    .panel { padding:22px; background:var(--white); border:1px solid var(--line); box-shadow:0 12px 35px rgba(28,62,54,.06); }
+    .filters { display:grid; grid-template-columns:repeat(5,minmax(130px,1fr)) auto auto; align-items:end; gap:12px; margin:0 0 16px; }
+    label { display:grid; gap:6px; color:#435153; font:700 10px Arial,sans-serif; letter-spacing:.7px; text-transform:uppercase; }
+    input, select { width:100%; min-width:0; height:40px; padding:8px 10px; color:var(--ink); background:#fbfcfa; border:1px solid #cbd7d2; border-radius:2px; font:13px Arial,sans-serif; }
+    button { height:40px; padding:0 14px; color:#fff; background:var(--teal); border:0; border-radius:2px; cursor:pointer; font:700 10px Arial,sans-serif; letter-spacing:.5px; text-transform:uppercase; }
+    button:hover { background:var(--teal-dark); }
+    .clear-button { color:var(--ink); background:#e8eeea; }
+    .clear-button:hover { background:#dce5df; }
+    .status { min-height:20px; margin:0 0 12px; color:var(--muted); font:12px Arial,sans-serif; }
+    .status.error { color:#a53b2e; }
+    .table-wrap { overflow-x:auto; border:1px solid var(--line); }
+    table { width:100%; min-width:1000px; border-collapse:collapse; }
+    th { padding:10px 11px; color:var(--muted); border-bottom:1px solid var(--line); text-align:left; font:700 9px Arial,sans-serif; letter-spacing:.5px; text-transform:uppercase; white-space:nowrap; }
+    td { padding:10px 11px; border-bottom:1px solid var(--line); font:11px Arial,sans-serif; vertical-align:top; }
+    tr:last-child td { border-bottom:0; }
+    .kind { color:var(--teal-dark); font-weight:700; }
+    .status-value { display:inline-block; padding:4px 7px; background:#eef2ef; border-radius:3px; text-transform:capitalize; }
+    .status-value.completed { color:#176342; background:#dff2e7; }
+    .status-value.failed { color:#a53b2e; background:#f9dfda; }
+    .status-value.pending, .status-value.processing { color:#78570b; background:#fff1c7; }
+    .empty { padding:20px; color:var(--muted); font:12px Arial,sans-serif; }
+    @media (max-width:900px) { .filters { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @media (max-width:600px) { header { margin-top:14px; padding:18px 14px 14px; } main { padding:14px 12px 30px; } .panel { padding:14px; } .filters { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Stock transfer history</h1>
+    <a class="back-link" href="/stock/">Back to main stock</a>
+  </header>
+  <main>
+    <section class="panel" aria-label="Stock transfer history">
+      <form class="filters" id="transfer-filters">
+        <label>Branch
+          <select id="branch">
+            <option value="">All branches</option>
+            {% for branch in branches %}
+            <option value="{{ branch }}"{% if branch == selected_branch %} selected{% endif %}>{{ branch }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>From date &amp; time<input id="start-datetime" type="datetime-local"></label>
+        <label>To date &amp; time<input id="end-datetime" type="datetime-local"></label>
+        <span></span>
+        <button type="submit">Filter transfers</button>
+        <button class="clear-button" id="clear-filters" type="button">Clear</button>
+      </form>
+      <p class="status" id="status" role="status">Choose a time range and branch to view transfers.</p>
+      <div class="table-wrap" id="results"><p class="empty">Loading transfers...</p></div>
+    </section>
+  </main>
+  <script>
+    const form = document.querySelector('#transfer-filters');
+    const branchInput = document.querySelector('#branch');
+    const startInput = document.querySelector('#start-datetime');
+    const endInput = document.querySelector('#end-datetime');
+    const statusElement = document.querySelector('#status');
+    const resultsElement = document.querySelector('#results');
+    const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
+    const formatLocalInput = date => {
+      const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+      return local.toISOString().slice(0, 16);
+    };
+    const escapeAttribute = value => escapeHtml(value);
+
+    function renderTransfers(transfers) {
+      if (!transfers.length) {
+        resultsElement.innerHTML = '<p class="empty">No transfers match the selected branch and date/time range.</p>';
+        return;
+      }
+
+      resultsElement.innerHTML = `<table><thead><tr><th>Type</th><th>Product</th><th>Product ID</th><th>Quantity / target</th><th>From</th><th>To</th><th>Status</th><th>Transferred at</th><th>Completed at</th><th>Recorded by</th></tr></thead><tbody>${transfers.map(transfer => {
+        const isStocktake = transfer.target_quantity !== null;
+        const quantity = isStocktake ? `Set to ${escapeHtml(transfer.target_quantity)}` : escapeHtml(transfer.quantity);
+        const status = String(transfer.status || 'pending').toLowerCase();
+        return `<tr><td class="kind">${isStocktake ? 'Stocktake' : 'Stock transfer'}</td><td>${escapeHtml(transfer.product_name)}</td><td>${escapeHtml(transfer.product_id)}</td><td>${quantity}</td><td>Main stock</td><td>${escapeHtml(transfer.branch)}</td><td><span class="status-value ${escapeAttribute(status)}">${escapeHtml(status)}</span></td><td>${escapeHtml(new Date(transfer.created_at).toLocaleString())}</td><td>${transfer.completed_at ? escapeHtml(new Date(transfer.completed_at).toLocaleString()) : '-'}</td><td>${escapeHtml(transfer.created_by)}</td></tr>`;
+      }).join('')}</tbody></table>`;
+    }
+
+    async function loadTransfers() {
+      if (Boolean(startInput.value) !== Boolean(endInput.value)) {
+        statusElement.textContent = 'Choose both a start and end date/time, or clear both.';
+        statusElement.className = 'status error';
+        return;
+      }
+      if (startInput.value && endInput.value && new Date(startInput.value) > new Date(endInput.value)) {
+        statusElement.textContent = 'The start date and time must be before the end date and time.';
+        statusElement.className = 'status error';
+        return;
+      }
+
+      statusElement.textContent = 'Loading transfers...';
+      statusElement.className = 'status';
+      resultsElement.innerHTML = '<p class="empty">Loading transfers...</p>';
+      const params = new URLSearchParams();
+      params.set('limit', '5000');
+      if (branchInput.value) params.set('branch', branchInput.value);
+      if (startInput.value && endInput.value) {
+        params.set('start_datetime', new Date(startInput.value).toISOString());
+        params.set('end_datetime', new Date(endInput.value).toISOString());
+      }
+
+      try {
+        const response = await fetch(`/api/stock/transfers/log/?${params}`, { cache: 'no-store' });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.message || 'Transfer history could not be loaded.');
+        renderTransfers(data.transfers || []);
+        const count = (data.transfers || []).length;
+        statusElement.textContent = `${count} transfer${count === 1 ? '' : 's'} found${data.truncated ? ' (showing the latest 5,000; narrow the date/time range for more)' : ''}.`;
+      } catch (error) {
+        statusElement.textContent = error.message;
+        statusElement.className = 'status error';
+        resultsElement.innerHTML = '<p class="empty">Transfer history is unavailable.</p>';
+      }
+    }
+
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      loadTransfers();
+    });
+    document.querySelector('#clear-filters').addEventListener('click', () => {
+      branchInput.value = '';
+      startInput.value = '';
+      endInput.value = '';
+      loadTransfers();
+    });
+
+    const now = new Date();
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
+    startInput.value = formatLocalInput(startOfToday);
+    endInput.value = formatLocalInput(now);
+    loadTransfers();
+  </script>
+</body>
+</html>

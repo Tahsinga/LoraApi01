@@ -1449,6 +1449,61 @@ class StockTransferTests(TestCase):
 		self.assertEqual(response.json()['date'], selected_date.isoformat())
 		self.assertEqual([item['transfer_id'] for item in response.json()['transfers']], ['TRANSFER_DATE_FILTER'])
 
+	def test_stock_transfer_log_filters_by_branch_and_datetime_range(self):
+		start = timezone.now() - timedelta(days=1)
+		end = start + timedelta(hours=2)
+		in_range = StockTransfer.objects.create(
+			transfer_id='TRANSFER_RANGE_MATCH', branch='BranchA', product_id=1001,
+			product_name='Range Match Product', quantity=3,
+		)
+		wrong_branch = StockTransfer.objects.create(
+			transfer_id='TRANSFER_RANGE_BRANCH', branch='BranchB', product_id=1002,
+			product_name='Wrong Branch Product', quantity=2,
+		)
+		out_of_range = StockTransfer.objects.create(
+			transfer_id='TRANSFER_RANGE_TIME', branch='BranchA', product_id=1003,
+			product_name='Outside Range Product', quantity=1,
+		)
+		StockTransfer.objects.filter(pk=in_range.pk).update(created_at=start + timedelta(minutes=30))
+		StockTransfer.objects.filter(pk=wrong_branch.pk).update(created_at=start + timedelta(minutes=45))
+		StockTransfer.objects.filter(pk=out_of_range.pk).update(created_at=end + timedelta(minutes=1))
+
+		response = self.client.get('/api/stock/transfers/log/', {
+			'branch': 'brancha',
+			'start_datetime': start.isoformat(),
+			'end_datetime': end.isoformat(),
+		})
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(
+			[item['transfer_id'] for item in response.json()['transfers']],
+			['TRANSFER_RANGE_MATCH'],
+		)
+
+	def test_stock_transfer_log_rejects_incomplete_or_reversed_datetime_range(self):
+		incomplete = self.client.get('/api/stock/transfers/log/', {'start_datetime': timezone.now().isoformat()})
+		reversed_range = self.client.get('/api/stock/transfers/log/', {
+			'start_datetime': (timezone.now() + timedelta(hours=1)).isoformat(),
+			'end_datetime': timezone.now().isoformat(),
+		})
+
+		self.assertEqual(incomplete.status_code, 400)
+		self.assertEqual(reversed_range.status_code, 400)
+
+	def test_stock_transfer_history_page_shows_branch_and_time_filters(self):
+		StockTransfer.objects.create(
+			transfer_id='TRANSFER_HISTORY_PAGE', branch='Offline Branch', product_id=1001,
+			product_name='History Page Product', quantity=1,
+		)
+
+		response = self.client.get('/stock/transfers/history/')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, 'Stock transfer history')
+		self.assertContains(response, 'Offline Branch')
+		self.assertContains(response, 'From date &amp; time')
+		self.assertContains(response, 'To date &amp; time')
+
 	def test_stock_summary_returns_only_changed_products(self):
 		ProductCatalog.objects.create(branch='BranchA', product_id=1001, product_name='Test Product')
 		ProductCatalog.objects.filter(product_id=1001).update(updated_at=timezone.now() - timedelta(minutes=10))

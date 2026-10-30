@@ -50,6 +50,8 @@
     .activity-date-label { flex-direction:row; align-items:center; gap:8px; white-space:nowrap; }
     .activity-date-label input { width:auto; min-width:145px; }
     .catalog-status { color:var(--muted); font:11px Arial,sans-serif; }
+    .movement-history-link { display:inline-block; padding:8px 11px; color:#fff; background:var(--teal); border-radius:2px; font:700 10px Arial,sans-serif; letter-spacing:.5px; text-decoration:none; text-transform:uppercase; }
+    .movement-history-link:hover { color:#fff; background:var(--teal-dark); }
     .refresh-stock-button { width:auto; margin:0; padding:9px 12px; background:var(--teal); }
     .refresh-stock-button:hover { background:var(--teal-dark); }
     .selected-branch { margin:0 0 20px; padding:14px 16px; background:#e7f2ee; border:1px solid #c9ddd5; border-left:4px solid var(--teal); }
@@ -343,7 +345,7 @@
         <div id="branch-products" class="stock-table-wrap"><p class="empty">Select a branch to see its products.</p></div>
       </div>
       <div id="stock-activity-panel" class="panel panel-wide branch-data-card" data-branch-loading-card>
-        <div class="browser-heading"><div><h2>Stock activity</h2><p class="sub">The newest stock movements for the selected branch.</p></div><div class="browser-actions"><label class="activity-branch-label">Branch<select id="activity-branch"><option value="">Select branch</option></select></label><label class="activity-date-label">Date<input id="activity-date" type="date"></label><span id="movement-status" class="catalog-status">Select a branch.</span></div></div>
+        <div class="browser-heading"><div><h2>Stock activity</h2><p class="sub">The newest stock movements for the selected branch.</p><a id="transfer-history-link" class="movement-history-link" href="/stock/transfers/history/">View transfer history</a></div><div class="browser-actions"><label class="activity-branch-label">Branch<select id="activity-branch"><option value="">Select branch</option></select></label><label class="activity-date-label">Date<input id="activity-date" type="date"></label><span id="movement-status" class="catalog-status">Select a branch.</span></div></div>
         <div id="stock-movements" class="stock-table-wrap"><p class="empty">Loading stock activity...</p></div>
       </div>
       <div class="panel panel-wide">
@@ -449,6 +451,7 @@
   const stockActivityPanel = document.querySelector('#stock-activity-panel');
   const sectionJumpButton = document.querySelector('#section-jump-button');
   const activityBranch = document.querySelector('#activity-branch');
+  const transferHistoryLink = document.querySelector('#transfer-history-link');
   const activityDate = document.querySelector('#activity-date');
   const selectedBranchName = document.querySelector('#selected-branch-name');
   const movementStatus = document.querySelector('#movement-status');
@@ -970,6 +973,7 @@
       stockMovements.innerHTML = '<p class="empty">Select a branch to view stock activity.</p>';
       return;
     }
+
     const branch = activityBranch.value;
     const date = activityDate.value;
     const timezoneOffset = new Date().getTimezoneOffset();
@@ -996,6 +1000,11 @@
         stockMovementsController = null;
       }
     }
+  }
+  function updateTransferHistoryLink() {
+    const url = new URL('/stock/transfers/history/', window.location.origin);
+    if (activityBranch.value) url.searchParams.set('branch', activityBranch.value);
+    transferHistoryLink.href = `${url.pathname}${url.search}`;
   }
   async function loadStockTransfers() {
     const requestId = ++stockTransfersRequestId;
@@ -1054,6 +1063,7 @@
       if (!currentBranch && availableBranches.length) selectedBranch.value = availableBranches[0].name;
       if (currentBranch && [...selectedBranch.options].some(option => option.value === currentBranch)) selectedBranch.value = currentBranch;
       if (currentBranch && [...activityBranch.options].some(option => option.value === currentBranch)) activityBranch.value = currentBranch;
+      updateTransferHistoryLink();
       selectedBranchName.textContent = selectedBranch.value || 'No online branch';
       if (selectedBranch.value && selectedBranch.value !== previousBranch) selectedBranch.dispatchEvent(new Event('change'));
     } catch (error) {
@@ -1158,6 +1168,7 @@
     branchPriceInput.placeholder = 'Current price appears after selecting a product';
     branchProductSearch.value = '';
     activityBranch.value = selectedBranch.value;
+    updateTransferHistoryLink();
     branchProducts.innerHTML = '<p class="empty loading-state"><span class="loading-spinner" aria-hidden="true"></span>Loading products...</p>';
     stockMovements.innerHTML = '<p class="empty loading-state"><span class="loading-spinner" aria-hidden="true"></span>Loading stock activity...</p>';
     try {
@@ -1166,7 +1177,10 @@
       setBranchCardsLoading(false);
     }
   });
-  activityBranch.addEventListener('change', loadStockMovements);
+  activityBranch.addEventListener('change', () => {
+    updateTransferHistoryLink();
+    loadStockMovements();
+  });
   activityDate.addEventListener('change', loadStockMovements);
   loadStockButton.addEventListener('click', requestBranchLoad);
   async function refreshAll() {

@@ -322,6 +322,28 @@ def main_stock(request):
 
 
 @login_required(login_url='/login/')
+def stock_transfer_history_page(request):
+    branches = sorted(
+        {
+            branch.strip()
+            for branch in StockTransfer.objects.exclude(branch__exact='').values_list('branch', flat=True).distinct()
+            if branch.strip() and branch.strip().casefold() != 'main'
+        },
+        key=str.casefold,
+    )
+    selected_branch = request.GET.get('branch', '').strip()
+    if selected_branch.casefold() not in {branch.casefold() for branch in branches}:
+        selected_branch = ''
+    response = render(request, 'loraApi/stock_transfer_history.html', {
+        'branches': branches,
+        'selected_branch': selected_branch,
+    })
+    response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response['Pragma'] = 'no-cache'
+    return response
+
+
+@login_required(login_url='/login/')
 def product_stock_matrix(request):
     response = render(request, 'loraApi/product_stock_matrix.html')
     response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -1412,22 +1434,48 @@ def stock_transfer_logs(request):
         return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
 
     date_value = request.GET.get('date', '').strip()
+    branch = request.GET.get('branch', '').strip()
+    start_value = request.GET.get('start_datetime', '').strip()
+    end_value = request.GET.get('end_datetime', '').strip()
+    try:
+        limit = int(request.GET.get('limit', '200'))
+    except ValueError:
+        return JsonResponse({'status': 'error', 'message': 'Use a valid transfer limit.'}, status=400)
+    if not 1 <= limit <= 5000:
+        return JsonResponse({'status': 'error', 'message': 'Transfer limit must be between 1 and 5000.'}, status=400)
     transfers = StockTransfer.objects.order_by('-created_at')
     selected_date = None
-    if date_value:
+    if bool(start_value) != bool(end_value):
+        return JsonResponse({'status': 'error', 'message': 'Provide both start and end date/time.'}, status=400)
+    if start_value and end_value:
+        start_datetime = parse_datetime(start_value)
+        end_datetime = parse_datetime(end_value)
+        if start_datetime is None or end_datetime is None:
+            return JsonResponse({'status': 'error', 'message': 'Use valid start and end date/time values.'}, status=400)
+        if timezone.is_naive(start_datetime):
+            start_datetime = timezone.make_aware(start_datetime, timezone.get_current_timezone())
+        if timezone.is_naive(end_datetime):
+            end_datetime = timezone.make_aware(end_datetime, timezone.get_current_timezone())
+        if start_datetime > end_datetime:
+            return JsonResponse({'status': 'error', 'message': 'The start date/time must be before the end date/time.'}, status=400)
+        transfers = transfers.filter(created_at__gte=start_datetime, created_at__lte=end_datetime)
+    elif date_value:
         selected_date = parse_date(date_value)
         if selected_date is None:
             return JsonResponse({'status': 'error', 'message': 'Use a valid transfer date.'}, status=400)
         day_start = timezone.make_aware(datetime.combine(selected_date, datetime.min.time()))
         day_end = day_start + timedelta(days=1)
-        transfers = transfers.filter(created_at__gte=day_start, created_at__lt=day_end)[:200]
-    else:
-        transfers = transfers[:200]
+        transfers = transfers.filter(created_at__gte=day_start, created_at__lt=day_end)
+    if branch:
+        transfers = transfers.filter(branch__iexact=branch)
 
-    transfer_rows = list(transfers)
+    transfer_rows = list(transfers[:limit + 1])
+    truncated = len(transfer_rows) > limit
+    transfer_rows = transfer_rows[:limit]
     return JsonResponse({
         'status': 'ok',
         'date': selected_date.isoformat() if selected_date else None,
+        'truncated': truncated,
         'transfers': [
             {
                 'transfer_id': transfer.transfer_id,
@@ -1435,6 +1483,7 @@ def stock_transfer_logs(request):
                 'product_id': transfer.product_id,
                 'product_name': transfer.product_name,
                 'quantity': str(transfer.quantity),
+                'target_quantity': str(transfer.target_quantity) if transfer.target_quantity is not None else None,
                 'status': transfer.status,
                 'created_by': transfer.created_by or 'System',
                 'created_at': transfer.created_at.isoformat(),
