@@ -13,7 +13,7 @@
     main { max-width:1416px; margin:auto; padding:22px 28px 50px; }
     .back-link { color:var(--teal-dark); font:700 10px Arial,sans-serif; letter-spacing:.5px; text-decoration:none; text-transform:uppercase; }
     .panel { padding:22px; background:var(--white); border:1px solid var(--line); box-shadow:0 12px 35px rgba(28,62,54,.06); }
-    .filters { display:grid; grid-template-columns:repeat(5,minmax(130px,1fr)) auto auto; align-items:end; gap:12px; margin:0 0 16px; }
+    .filters { display:grid; grid-template-columns:repeat(4,minmax(130px,1fr)) auto auto; align-items:end; gap:12px; margin:0 0 16px; }
     label { display:grid; gap:6px; color:#435153; font:700 10px Arial,sans-serif; letter-spacing:.7px; text-transform:uppercase; }
     input, select { width:100%; min-width:0; height:40px; padding:8px 10px; color:var(--ink); background:#fbfcfa; border:1px solid #cbd7d2; border-radius:2px; font:13px Arial,sans-serif; }
     button { height:40px; padding:0 14px; color:#fff; background:var(--teal); border:0; border-radius:2px; cursor:pointer; font:700 10px Arial,sans-serif; letter-spacing:.5px; text-transform:uppercase; }
@@ -55,7 +55,7 @@
         </label>
         <label>From date &amp; time<input id="start-datetime" type="datetime-local"></label>
         <label>To date &amp; time<input id="end-datetime" type="datetime-local"></label>
-        <span></span>
+        <label>Product search<input id="product-search" type="search" placeholder="Product name or ID" autocomplete="off"></label>
         <button type="submit">Filter transfers</button>
         <button class="clear-button" id="clear-filters" type="button">Clear</button>
       </form>
@@ -68,6 +68,7 @@
     const branchInput = document.querySelector('#branch');
     const startInput = document.querySelector('#start-datetime');
     const endInput = document.querySelector('#end-datetime');
+    const productSearchInput = document.querySelector('#product-search');
     const statusElement = document.querySelector('#status');
     const resultsElement = document.querySelector('#results');
     const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
@@ -109,6 +110,7 @@
       const params = new URLSearchParams();
       params.set('limit', '5000');
       if (branchInput.value) params.set('branch', branchInput.value);
+      if (productSearchInput.value.trim()) params.set('product', productSearchInput.value.trim());
       if (startInput.value && endInput.value) {
         params.set('start_datetime', new Date(startInput.value).toISOString());
         params.set('end_datetime', new Date(endInput.value).toISOString());
@@ -136,6 +138,7 @@
       branchInput.value = '';
       startInput.value = '';
       endInput.value = '';
+      productSearchInput.value = '';
       loadTransfers();
     });
 

@@ -1435,6 +1435,7 @@ def stock_transfer_logs(request):
 
     date_value = request.GET.get('date', '').strip()
     branch = request.GET.get('branch', '').strip()
+    product_query = request.GET.get('product', '').strip()
     start_value = request.GET.get('start_datetime', '').strip()
     end_value = request.GET.get('end_datetime', '').strip()
     try:
@@ -1468,6 +1469,11 @@ def stock_transfer_logs(request):
         transfers = transfers.filter(created_at__gte=day_start, created_at__lt=day_end)
     if branch:
         transfers = transfers.filter(branch__iexact=branch)
+    if product_query:
+        product_filter = Q(product_name__icontains=product_query)
+        if product_query.isdigit():
+            product_filter |= Q(product_id=int(product_query))
+        transfers = transfers.filter(product_filter)
 
     transfer_rows = list(transfers[:limit + 1])
     truncated = len(transfer_rows) > limit

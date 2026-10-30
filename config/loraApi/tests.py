@@ -1480,6 +1480,32 @@ class StockTransferTests(TestCase):
 			['TRANSFER_RANGE_MATCH'],
 		)
 
+	def test_stock_transfer_log_searches_by_product_name_or_id(self):
+		StockTransfer.objects.create(
+			transfer_id='TRANSFER_SEARCH_NAME', branch='BranchA', product_id=2001,
+			product_name='Green Tea', quantity=3,
+		)
+		StockTransfer.objects.create(
+			transfer_id='TRANSFER_SEARCH_ID', branch='BranchB', product_id=2002,
+			product_name='Coffee Beans', quantity=2,
+		)
+		StockTransfer.objects.create(
+			transfer_id='TRANSFER_SEARCH_OTHER', branch='BranchA', product_id=3001,
+			product_name='Rice', quantity=1,
+		)
+
+		by_name = self.client.get('/api/stock/transfers/log/', {'product': 'tea'})
+		by_id = self.client.get('/api/stock/transfers/log/', {'product': '2002'})
+
+		self.assertEqual(
+			[item['transfer_id'] for item in by_name.json()['transfers']],
+			['TRANSFER_SEARCH_NAME'],
+		)
+		self.assertEqual(
+			[item['transfer_id'] for item in by_id.json()['transfers']],
+			['TRANSFER_SEARCH_ID'],
+		)
+
 	def test_stock_transfer_log_rejects_incomplete_or_reversed_datetime_range(self):
 		incomplete = self.client.get('/api/stock/transfers/log/', {'start_datetime': timezone.now().isoformat()})
 		reversed_range = self.client.get('/api/stock/transfers/log/', {
@@ -1503,6 +1529,7 @@ class StockTransferTests(TestCase):
 		self.assertContains(response, 'Offline Branch')
 		self.assertContains(response, 'From date &amp; time')
 		self.assertContains(response, 'To date &amp; time')
+		self.assertContains(response, 'Product search')
 
 	def test_stock_summary_returns_only_changed_products(self):
 		ProductCatalog.objects.create(branch='BranchA', product_id=1001, product_name='Test Product')
