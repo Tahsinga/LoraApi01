@@ -23,6 +23,7 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime, parse_time
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.gzip import gzip_page
 
 from .models import BranchHeartbeat, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
 from .state_store import sync_users_to_state
@@ -152,6 +153,14 @@ def retry_on_database_lock(view_func):
                     time.sleep(1.0 * (attempt + 1))
 
     return wrapped_view
+
+
+def parse_since_param(request):
+    """Return an aware datetime from ?since=, or None when absent/invalid."""
+    since = parse_datetime(str(request.GET.get('since', '')).strip())
+    if since is not None and timezone.is_naive(since):
+        since = timezone.make_aware(since, timezone.get_current_timezone())
+    return since
 
 
 def whole_quantity(value):
@@ -1665,13 +1674,24 @@ def movement_adjustment_history_api(request):
 
 
 @csrf_exempt
+@gzip_page
 def stock_movement_device_logs(request):
     if request.method != 'GET':
         return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
 
-    movements = StockMovement.objects.order_by('-created_at', '-id')[:2000]
+    # Honour ?since= so the Main PC only downloads new movements each minute
+    # instead of the latest 2000 every time.
+    server_time = timezone.now()
+    since = parse_since_param(request)
+    if since is None:
+        movements = StockMovement.objects.order_by('-created_at', '-id')[:2000]
+    else:
+        movements = StockMovement.objects.filter(
+            created_at__gte=since - timedelta(seconds=3),
+        ).order_by('created_at', 'id')[:5000]
     return JsonResponse({
         'status': 'ok',
+        'server_time': server_time.isoformat(),
         'movements': [
             {
                 'id': movement.id,
@@ -1689,6 +1709,7 @@ def stock_movement_device_logs(request):
 
 
 @csrf_exempt
+@gzip_page
 def stock_transfer_device_logs(request):
     """Return transfer states for the Windows sync dashboard without claiming work."""
     if request.method != 'GET':
@@ -1714,16 +1735,28 @@ def stock_transfer_device_logs(request):
 
 
 @csrf_exempt
+@gzip_page
 def cancellation_device_logs(request):
     if request.method != 'GET':
         return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
 
+    server_time = timezone.now()
+    since = parse_since_param(request)
     cancellations = DeletionRecord.objects.filter(
         status='processed',
         action='cancel_invoice',
-    ).order_by('-confirmation_timestamp', '-timestamp')[:2000]
+    )
+    if since is None:
+        cancellations = cancellations.order_by('-confirmation_timestamp', '-timestamp')[:2000]
+    else:
+        window_start = since - timedelta(seconds=3)
+        cancellations = cancellations.filter(
+            Q(confirmation_timestamp__gte=window_start)
+            | Q(confirmation_timestamp__isnull=True, timestamp__gte=window_start)
+        ).order_by('confirmation_timestamp', 'timestamp')[:5000]
     return JsonResponse({
         'status': 'ok',
+        'server_time': server_time.isoformat(),
         'cancellations': [
             {
                 'id': record.deletion_id,
@@ -1807,28 +1840,45 @@ def publish_branch_stock_snapshot(request):
     if not branch:
         return JsonResponse({'status': 'error', 'message': 'Branch is required.'}, status=400)
 
+    # Bulk version: a fixed handful of queries per batch instead of 1-4 queries
+    # per product. Semantics match the old per-row get_or_create loop.
     updated = 0
     movements_recorded = 0
+    now = timezone.now()
+    snapshots = list({snapshot['product_id']: snapshot for snapshot in snapshots}.values())
+    snapshot_ids = [snapshot['product_id'] for snapshot in snapshots]
     with transaction.atomic():
         deleted_product_ids = set(ProductDeletionRequest.objects.filter(
-            product_id__in=[snapshot['product_id'] for snapshot in snapshots],
+            product_id__in=snapshot_ids,
         ).values_list('product_id', flat=True))
+        existing_products = {
+            product.product_id: product
+            for product in ProductCatalog.objects.select_for_update().filter(
+                branch=branch,
+                product_id__in=snapshot_ids,
+            )
+        }
+        products_to_create = []
+        products_to_update = []
+        update_field_names = set()
+        movements_to_create = []
         for snapshot in snapshots:
             if snapshot['product_id'] in deleted_product_ids:
                 continue
 
-            product, created = ProductCatalog.objects.select_for_update().get_or_create(
-                branch=branch,
-                product_id=snapshot['product_id'],
-                defaults={
-                    'product_name': snapshot['product_name'],
-                    'product_code': snapshot['product_code'],
-                    'barcode': snapshot['barcode'],
-                    'selling_price': snapshot['selling_price'],
-                    'available_quantity': Decimal('0'),
-                    'branch_confirmed': True,
-                },
-            )
+            product = existing_products.get(snapshot['product_id'])
+            created = product is None
+            if created:
+                product = ProductCatalog(
+                    branch=branch,
+                    product_id=snapshot['product_id'],
+                    product_name=snapshot['product_name'],
+                    product_code=snapshot['product_code'],
+                    barcode=snapshot['barcode'],
+                    selling_price=snapshot['selling_price'],
+                    available_quantity=Decimal('0'),
+                    branch_confirmed=True,
+                )
             previous_movement_date = product.pos_movement_date
             previous_sold_quantity = abs(product.pos_sold_quantity) if product.pos_sold_quantity is not None else Decimal('0')
             previous_received_quantity = product.pos_received_quantity if product.pos_received_quantity is not None else Decimal('0')
@@ -1859,42 +1909,43 @@ def publish_branch_stock_snapshot(request):
             if quantity_changed:
                 product.available_quantity = snapshot['available_quantity']
                 changed_fields.append('available_quantity')
-            if changed_fields:
-                product.branch_confirmed = True
-                product.updated_at = timezone.now()
-                product.save(update_fields=[*changed_fields, 'branch_confirmed', 'updated_at'])
             if changed_fields or created:
+                product.branch_confirmed = True
+                product.updated_at = now
+                if created:
+                    products_to_create.append(product)
+                else:
+                    products_to_update.append(product)
+                    update_field_names.update(changed_fields)
                 updated += 1
+            movement_rows = []
             if sold_delta > 0:
-                StockMovement.objects.create(
-                    branch=branch,
-                    product_id=product.product_id,
-                    product_name=product.product_name,
-                    movement_type='sold',
-                    quantity=sold_delta,
-                    source='POS sales',
-                )
-                movements_recorded += 1
+                movement_rows.append(('sold', sold_delta, 'POS sales'))
             if received_delta > 0:
-                StockMovement.objects.create(
-                    branch=branch,
-                    product_id=product.product_id,
-                    product_name=product.product_name,
-                    movement_type='received',
-                    quantity=received_delta,
-                    source='POS receiving',
-                )
-                movements_recorded += 1
+                movement_rows.append(('received', received_delta, 'POS receiving'))
             if needs_maintenance:
-                StockMovement.objects.create(
+                movement_rows.append(('maintained', snapshot['available_quantity'], 'pos_stock_snapshot'))
+            for movement_type, movement_quantity, movement_source in movement_rows:
+                movements_to_create.append(StockMovement(
                     branch=branch,
                     product_id=product.product_id,
                     product_name=product.product_name,
-                    movement_type='maintained',
-                    quantity=snapshot['available_quantity'],
-                    source='pos_stock_snapshot',
-                )
-                movements_recorded += 1
+                    movement_type=movement_type,
+                    quantity=movement_quantity,
+                    source=movement_source,
+                ))
+
+        if products_to_create:
+            ProductCatalog.objects.bulk_create(products_to_create, batch_size=500)
+        if products_to_update:
+            ProductCatalog.objects.bulk_update(
+                products_to_update,
+                [*sorted(update_field_names), 'branch_confirmed', 'updated_at'],
+                batch_size=500,
+            )
+        if movements_to_create:
+            StockMovement.objects.bulk_create(movements_to_create, batch_size=500)
+        movements_recorded = len(movements_to_create)
 
     return JsonResponse({
         'status': 'ok',
@@ -2456,10 +2507,12 @@ def product_catalog_sync_disabled(request):
 
 
 @csrf_exempt
+@gzip_page
 def product_sync_inbox(request):
     if request.method != 'GET':
         return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
 
+    server_time = timezone.now()
     products = ProductCatalog.objects.exclude(
         branch__iexact='MAIN',
     ).filter(
@@ -2473,20 +2526,39 @@ def product_sync_inbox(request):
         if timezone.is_naive(since):
             since = timezone.make_aware(since, timezone.get_current_timezone())
         products = products.filter(updated_at__gte=since - timedelta(seconds=3))
-    changed_products = [product_payload(product) for product in products]
+    # values() skips building ~tens of thousands of model objects on a full snapshot.
+    changed_products = [
+        {
+            'branch': row['branch'],
+            'product_id': row['product_id'],
+            'product_name': row['product_name'],
+            'product_code': row['product_code'],
+            'barcode': row['barcode'],
+            'available_quantity': str(row['available_quantity']),
+            'selling_price': str(row['selling_price']),
+            'tax_rate': str(row['tax_rate']),
+        }
+        for row in products.order_by().values(
+            'branch', 'product_id', 'product_name', 'product_code', 'barcode',
+            'available_quantity', 'selling_price', 'tax_rate',
+        ).iterator(chunk_size=5000)
+    ]
     return JsonResponse({
         'status': 'ok',
         'changed': bool(changed_products),
         'full': full_snapshot,
+        'server_time': server_time.isoformat(),
         'products': changed_products,
     })
 
 
 @csrf_exempt
+@gzip_page
 def shared_product_catalog(request):
     if request.method != 'GET':
         return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
 
+    server_time = timezone.now()
     since = parse_datetime(str(request.GET.get('since', '')).strip())
     full_snapshot = since is None
     products = ProductCatalog.objects.filter(branch_confirmed=True).exclude(
@@ -2507,7 +2579,10 @@ def shared_product_catalog(request):
         products = products.filter(product_id__in=changed_product_ids)
 
     shared_products = {}
-    for product in products.iterator():
+    products = products.only(
+        'branch', 'product_id', 'product_name', 'product_code', 'barcode', 'selling_price', 'tax_rate', 'updated_at',
+    )
+    for product in products.iterator(chunk_size=2000):
         shared_products.setdefault(product.product_id, {
             'product_id': product.product_id,
             'product_name': product.product_name,
@@ -2521,6 +2596,7 @@ def shared_product_catalog(request):
         'status': 'ok',
         'changed': bool(shared_products),
         'full': full_snapshot,
+        'server_time': server_time.isoformat(),
         'products': list(shared_products.values()),
     })
 
@@ -2539,20 +2615,37 @@ def publish_product_catalog(request):
     if not isinstance(products, list):
         return JsonResponse({'status': 'error', 'message': 'Products must be a list.'}, status=400)
 
-    catalog_rows = []
+    parsed_items = []
+    missing_tax_product_ids = set()
     for item in products:
+        if not isinstance(item, dict):
+            continue
         try:
             product_id = int(item.get('product_id'))
             available_quantity = Decimal(str(item.get('available_quantity', 0) or 0))
             selling_price = Decimal(str(item.get('selling_price', 0) or 0))
             raw_tax_rate = item.get('tax_rate')
-            if raw_tax_rate is None or str(raw_tax_rate).strip() == '':
-                existing_product = ProductCatalog.objects.filter(product_id=product_id).order_by('-updated_at', '-id').first()
-                tax_rate = existing_product.tax_rate if existing_product and existing_product.tax_rate is not None else Decimal('0')
-            else:
-                tax_rate = Decimal(str(raw_tax_rate))
+            tax_rate = None if raw_tax_rate is None or str(raw_tax_rate).strip() == '' else Decimal(str(raw_tax_rate))
         except (TypeError, ValueError, InvalidOperation):
             continue
+        if tax_rate is None:
+            missing_tax_product_ids.add(product_id)
+        parsed_items.append((item, product_id, available_quantity, selling_price, tax_rate))
+
+    # One query for every missing tax rate instead of one query per product.
+    fallback_tax_rates = {}
+    if missing_tax_product_ids:
+        for fallback_id, fallback_tax in ProductCatalog.objects.filter(
+            product_id__in=missing_tax_product_ids,
+        ).order_by('product_id', '-updated_at', '-id').values_list('product_id', 'tax_rate'):
+            fallback_tax_rates.setdefault(fallback_id, fallback_tax)
+
+    catalog_rows = []
+    for item, product_id, available_quantity, selling_price, tax_rate in parsed_items:
+        if tax_rate is None:
+            tax_rate = fallback_tax_rates.get(product_id)
+            if tax_rate is None:
+                tax_rate = Decimal('0')
         product_name = str(item.get('product_name', '')).strip()
         if product_id <= 0 or not product_name:
             continue
@@ -2576,8 +2669,38 @@ def publish_product_catalog(request):
         product_id__in={row.product_id for row in catalog_rows},
     ).values_list('product_id', flat=True))
     catalog_rows = [row for row in catalog_rows if row.product_id not in deleted_ids]
+    received_count = len(catalog_rows)
+
+    # Skip rows whose stored values are already identical. Re-upserting them only
+    # bumped updated_at, which made every branch re-download and re-apply those
+    # products on its next shared-catalog poll (and echoed back into the inbox).
+    compare_fields = (
+        'product_name', 'product_code', 'barcode', 'available_quantity', 'selling_price', 'tax_rate',
+    )
+    if catalog_rows:
+        existing_state = {}
+        for row in ProductCatalog.objects.filter(
+            product_id__in={row.product_id for row in catalog_rows},
+            branch__in={row.branch for row in catalog_rows},
+        ).values('branch', 'product_id', 'branch_confirmed', 'pending_price_update', 'pending_product_creation', *compare_fields):
+            existing_state[(row['branch'], row['product_id'])] = row
+        changed_rows = []
+        for row in catalog_rows:
+            current = existing_state.get((row.branch, row.product_id))
+            if (
+                current is not None
+                and current['branch_confirmed']
+                and not current['pending_price_update']
+                and not current['pending_product_creation']
+                and all(current[field] == getattr(row, field) for field in compare_fields)
+            ):
+                continue
+            changed_rows.append(row)
+        catalog_rows = changed_rows
 
     for attempt in range(5):
+        if not catalog_rows:
+            break
         try:
             with transaction.atomic():
                 ProductCatalog.objects.bulk_create(
@@ -2597,7 +2720,7 @@ def publish_product_catalog(request):
                 return JsonResponse({'status': 'error', 'message': 'Product catalog database is busy. Please retry in a moment.'}, status=503)
             time.sleep(0.25 * (attempt + 1))
 
-    return JsonResponse({'status': 'ok', 'updated': len(catalog_rows)})
+    return JsonResponse({'status': 'ok', 'updated': len(catalog_rows), 'received': received_count})
 
 
 @csrf_exempt

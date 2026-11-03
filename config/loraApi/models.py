@@ -156,6 +156,7 @@ class ProductCatalog(models.Model):
 			models.Index(fields=['branch', 'branch_confirmed']),
 			models.Index(fields=['branch', 'product_name']),
 			models.Index(Upper('branch'), 'product_id', name='pc_upper_branch_product_idx'),
+			models.Index(fields=['updated_at'], name='pc_updated_at_idx'),
 		]
 		constraints = [
 			models.UniqueConstraint(fields=['branch', 'product_id'], name='unique_branch_product'),
@@ -177,6 +178,7 @@ class ProductDeletionRequest(models.Model):
 		ordering = ['requested_at']
 		indexes = [
 			models.Index(fields=['branch', 'status', 'updated_at'], name='proddelete_branch_status_idx'),
+			models.Index(fields=['product_id'], name='proddelete_product_idx'),
 		]
 
 
