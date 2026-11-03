@@ -614,7 +614,15 @@
     productMovementDialog.showModal();
     void loadProductMovementHistory();
   }
+  let branchProductsController = null;
   async function loadBranchProducts(showLoading = true) {
+    // Background refreshes must never pile up behind a slow request: each new
+    // request used to discard the previous one, so the list never finished.
+    if (!showLoading && branchProductsLoading) return;
+    branchProductsController?.abort();
+    const controller = new AbortController();
+    branchProductsController = controller;
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
     const requestId = ++branchProductsRequestId;
     const branch = selectedBranch.value;
     branchStocktakeButton.disabled = true;
@@ -645,7 +653,7 @@
     try {
       const params = new URLSearchParams({ branch, date: productMovementDate.value });
       if (branchCatalogSince && branchCatalogSinceBranch === branch) params.set('since', branchCatalogSince);
-      const response = await fetch(`/api/stock/summary/?${params}`, { cache: 'no-store', signal: AbortSignal.timeout(30000) });
+      const response = await fetch(`/api/stock/summary/?${params}`, { cache: 'no-store', signal: controller.signal });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || 'Products could not be loaded.');
       if (requestId !== branchProductsRequestId) return;
@@ -694,8 +702,13 @@
       productCatalogStatus.textContent = branchCatalogProducts.length
         ? `Refresh failed; showing the last ${branchCatalogProducts.length} products.`
         : 'Products unavailable.';
+      if (!branchCatalogProducts.length) {
+        branchProducts.innerHTML = '<p class="empty">Products could not be loaded. Click Load stock to try again.</p>';
+      }
     } finally {
+      clearTimeout(timeoutId);
       if (requestId !== branchProductsRequestId) return;
+      branchProductsController = null;
       branchProductsLoading = false;
       loadStockButton.disabled = false;
       loadStockButton.textContent = 'Load stock';
@@ -1138,7 +1151,7 @@
   productMovementDate.addEventListener('change', () => {
     branchCatalogSince = '';
     branchCatalogSinceBranch = '';
-    loadBranchProducts(false);
+    loadBranchProducts(true);
   });
   sectionJumpButton.addEventListener('click', () => {
     const target = document.querySelector(sectionJumpButton.dataset.target);
