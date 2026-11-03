@@ -16,8 +16,8 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.forms import SetPasswordForm, UserCreationForm
 from django.core.cache import cache
 from django.db import OperationalError, ProgrammingError, close_old_connections, connection, transaction
-from django.db.models import Case, F, IntegerField, Max, OuterRef, Q, Subquery, Sum, When
-from django.db.models.functions import Cast
+from django.db.models import BigIntegerField, Case, DateTimeField, F, IntegerField, Max, OuterRef, Q, Subquery, Sum, Value, When
+from django.db.models.functions import Cast, Coalesce
 from django.http import JsonResponse, HttpResponse
 from django.shortcuts import render
 from django.utils import timezone
@@ -1109,38 +1109,46 @@ def stock_summary(request):
             created_at__lt=selected_day_end,
         ).values('product_id').annotate(total=Sum(Cast('quantity', IntegerField())))
     }
+    # Per-product calculation (one indexed lookup per product) instead of two
+    # correlated subqueries for every movement row in the branch's history.
+    adjustment_types = ['adjusted', 'stocktake', 'maintained']
     latest_adjustments = StockMovement.objects.filter(
         branch__iexact=branch,
         product_id=OuterRef('product_id'),
-        movement_type__in=['adjusted', 'stocktake', 'maintained'],
+        movement_type__in=adjustment_types,
     ).order_by('-created_at', '-id')
-    latest_adjustment_by_product = {}
-    for product_id, quantity in StockMovement.objects.filter(
+    epoch = timezone.make_aware(datetime(1970, 1, 1))
+    movement_delta_query = StockMovement.objects.filter(
         branch__iexact=branch,
-        product_id__in=product_ids,
-        movement_type__in=['adjusted', 'stocktake', 'maintained'],
-    ).order_by('product_id', '-created_at', '-id').values_list('product_id', 'quantity'):
-        latest_adjustment_by_product.setdefault(product_id, quantity)
-    movement_deltas = dict(
-        StockMovement.objects.filter(
-            branch__iexact=branch,
-            product_id__in=product_ids,
-        ).annotate(
-            latest_adjustment_at=Subquery(latest_adjustments.values('created_at')[:1]),
-            latest_adjustment_id=Subquery(latest_adjustments.values('id')[:1]),
-        ).filter(
-            Q(latest_adjustment_id__isnull=True, movement_type__in=['received', 'sold'])
-            | Q(created_at__gt=F('latest_adjustment_at'))
-            | Q(created_at=F('latest_adjustment_at'), id__gt=F('latest_adjustment_id')),
-        ).values('product_id').annotate(
-            total=Sum(Case(
-                When(movement_type='received', then=Cast('quantity', IntegerField())),
-                When(movement_type='sold', then=-Cast('quantity', IntegerField())),
-                default=0,
-                output_field=IntegerField(),
-            )),
-        ).values_list('product_id', 'total')
-    )
+        product_id=OuterRef('product_id'),
+        movement_type__in=['received', 'sold'],
+    ).filter(
+        Q(created_at__gt=OuterRef('adj_at'))
+        | Q(created_at=OuterRef('adj_at'), id__gt=OuterRef('adj_id')),
+    ).order_by().values('product_id').annotate(
+        total=Sum(Case(
+            When(movement_type='received', then=Cast('quantity', IntegerField())),
+            When(movement_type='sold', then=-Cast('quantity', IntegerField())),
+            default=0,
+            output_field=IntegerField(),
+        )),
+    ).values('total')
+    latest_adjustment_by_product = {}
+    movement_deltas = {}
+    for row in ProductCatalog.objects.filter(
+        pk__in=[product.pk for product in products],
+    ).order_by().annotate(
+        adj_at=Coalesce(Subquery(latest_adjustments.values('created_at')[:1]), Value(epoch), output_field=DateTimeField()),
+        adj_id=Coalesce(Subquery(latest_adjustments.values('id')[:1]), Value(0), output_field=BigIntegerField()),
+        adj_quantity=Subquery(latest_adjustments.values('quantity')[:1]),
+    ).annotate(
+        delta=Subquery(movement_delta_query, output_field=IntegerField()),
+    ).values_list('product_id', 'adj_quantity', 'delta'):
+        product_id, adj_quantity, delta = row
+        if adj_quantity is not None:
+            latest_adjustment_by_product[product_id] = adj_quantity
+        if delta is not None:
+            movement_deltas[product_id] = delta
     summary = []
     for product in products:
         movement_balance = latest_adjustment_by_product.get(product.product_id, 0) + movement_deltas.get(product.product_id, 0)
