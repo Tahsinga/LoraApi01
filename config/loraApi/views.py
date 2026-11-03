@@ -1013,6 +1013,7 @@ def stocktake_branch_batch(request, batch_id):
 
 
 @csrf_exempt
+@gzip_page
 def stock_summary(request):
     if request.method != 'GET':
         return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
@@ -1038,6 +1039,18 @@ def stock_summary(request):
     today_start = timezone.localtime().replace(hour=0, minute=0, second=0, microsecond=0)
     snapshot_time = timezone.now()
     full_snapshot = since is None or timezone.localtime(since).date() != today_start.date()
+
+    # Full snapshots are the expensive path and every open page + reload asks
+    # for one. Share the result for a few seconds; clients then poll with
+    # since=as_of, so nothing is missed.
+    summary_cache_key = None
+    if full_snapshot:
+        summary_cache_key = 'lora:summary:' + hashlib.sha256(
+            f'{branch.casefold()}:{selected_date.isoformat()}'.encode(),
+        ).hexdigest()
+        cached_summary = cache.get(summary_cache_key)
+        if cached_summary is not None:
+            return JsonResponse(cached_summary)
 
     if full_snapshot:
         products = list(catalog)
@@ -1168,7 +1181,7 @@ def stock_summary(request):
             'available_quantity': str(product.available_quantity),
             'movement_balance': str(movement_balance),
         })
-    return JsonResponse({
+    response_data = {
         'status': 'ok',
         'branch': branch,
         'changed': True,
@@ -1176,7 +1189,10 @@ def stock_summary(request):
         'as_of': snapshot_time.isoformat(),
         'products': summary,
         'removed_product_ids': sorted(removed_product_ids),
-    })
+    }
+    if summary_cache_key:
+        cache.set(summary_cache_key, response_data, 20)
+    return JsonResponse(response_data)
 
 
 @login_required(login_url='/login/')

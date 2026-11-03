@@ -126,6 +126,11 @@ class StockMovement(models.Model):
 			models.Index(fields=['created_at']),
 			models.Index(fields=['branch', 'created_at']),
 			models.Index(Upper('branch'), 'product_id', 'movement_type', models.F('created_at').desc(), name='sm_upper_branch_prod_type_idx'),
+			models.Index(
+				Upper('branch'), 'product_id', models.F('created_at').desc(), models.F('id').desc(),
+				name='sm_latest_adjustment_idx',
+				condition=models.Q(movement_type__in=['adjusted', 'stocktake', 'maintained']),
+			),
 		]
 
 
