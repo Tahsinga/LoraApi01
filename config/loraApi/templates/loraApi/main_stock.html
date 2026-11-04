@@ -122,11 +122,20 @@
     .stock-table .negative-stock { background:#fff0ed; }
     .stock-table .movement-mismatch td { background:#fff0c2; }
     .stock-table .negative-stock .product-name, .stock-table .negative-stock td strong { color:#9c352b; }
-    .highlight-tools { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:10px 0; }
-    .highlight-tools button { background:var(--white); color:var(--ink); border:1px solid var(--line); }
-    .highlight-tools button[aria-pressed="true"] { background:var(--ink); color:var(--white); border-color:var(--ink); }
-    .highlight-tools label { display:inline-flex; align-items:center; gap:6px; margin:0; font-size:13px; color:var(--muted); }
-    .highlight-tools input { width:90px; margin:0; }
+    .highlight-tools { display:flex; align-items:center; gap:8px; }
+    .highlight-chip { display:inline-flex; align-items:center; gap:7px; width:auto; height:34px; margin:0; padding:0 12px; color:var(--ink); background:var(--white); border:1px solid var(--line); border-radius:17px; font:700 10px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; white-space:nowrap; transition:background .15s, border-color .15s; }
+    .highlight-chip:hover { background:#f3f6f4; border-color:#c3cfca; }
+    .highlight-chip .chip-dot { width:8px; height:8px; border-radius:50%; }
+    .highlight-chip .chip-count { min-width:18px; padding:2px 6px; color:var(--muted); background:var(--paper); border-radius:9px; font-size:10px; letter-spacing:0; text-align:center; }
+    #highlight-duplicates .chip-dot { background:#3b7bc8; }
+    #highlight-low-prices .chip-dot { background:#8a4fc0; }
+    #highlight-duplicates[aria-pressed="true"] { color:#1d4f8a; background:#e3effc; border-color:#9fc2ea; }
+    #highlight-low-prices[aria-pressed="true"] { color:#5b2a86; background:#f1e6fb; border-color:#c9a8e6; }
+    .highlight-chip[aria-pressed="true"] .chip-count { color:inherit; background:var(--white); }
+    .price-chip-group { display:inline-flex; align-items:center; }
+    .price-chip-group .highlight-chip { border-radius:17px 0 0 17px; }
+    .low-price-limit { display:inline-flex; flex-direction:row; align-items:center; gap:4px; height:34px; margin:0; padding:0 10px; color:var(--muted); background:var(--white); border:1px solid var(--line); border-left:0; border-radius:0 17px 17px 0; font:700 10px Arial,sans-serif; letter-spacing:.5px; white-space:nowrap; }
+    .low-price-limit input { width:58px; min-width:0; height:24px; margin:0; padding:0 6px; border:1px solid var(--line); border-radius:4px; font:12px Arial,sans-serif; }
     .stock-table tr.duplicate-name td { background:#e3effc; }
     .stock-table tr.low-price td { background:#f1e6fb; }
     .stock-table tr.duplicate-name.low-price td { background:#e6e4fb; }
@@ -257,6 +266,13 @@
       .toggle-button { width:100%; min-width:0; }
       .browser-heading { display:block; }
       .browser-actions { display:grid; grid-template-columns:1fr; gap:10px; justify-content:stretch; }
+      .highlight-tools { flex-wrap:wrap; }
+      .highlight-chip, .low-price-limit { height:44px; min-height:44px; }
+      .highlight-chip { border-radius:22px; }
+      .price-chip-group .highlight-chip { border-radius:22px 0 0 22px; }
+      .low-price-limit { border-radius:0 22px 22px 0; }
+      .price-chip-group { flex:1; }
+      .price-chip-group .highlight-chip { flex:1; justify-content:center; }
       .activity-branch-label, .activity-date-label { display:flex; flex-direction:column; align-items:stretch; gap:6px; white-space:normal; }
       .activity-branch-label select, .activity-date-label input { width:100%; min-width:0; }
       .catalog-status { display:block; margin-top:8px; font-size:11px; }
@@ -351,13 +367,8 @@
       </div>
       </div>
       <div id="products-panel" class="panel panel-wide product-browser branch-data-card" data-branch-loading-card>
-        <div class="browser-heading"><div><h2>Branch products</h2></div><div class="browser-actions"><label class="activity-date-label">Movement date<input id="product-movement-date" type="date"></label><span id="product-catalog-status" class="catalog-status">Select a branch to load products.</span></div></div>
+        <div class="browser-heading"><div><h2>Branch products</h2></div><div class="browser-actions"><div class="highlight-tools" role="group" aria-label="Highlight products"><button id="highlight-duplicates" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products that share a name"><span class="chip-dot" aria-hidden="true"></span>Same names<span class="chip-count" data-chip-count>0</span></button><div class="price-chip-group"><button id="highlight-low-prices" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products priced at or under the limit"><span class="chip-dot" aria-hidden="true"></span>Low prices<span class="chip-count" data-chip-count>0</span></button><label class="low-price-limit">&le;<input id="low-price-limit" type="number" min="0" step="0.01" value="0.50" aria-label="Low price limit"></label></div></div><label class="activity-date-label">Movement date<input id="product-movement-date" type="date"></label><span id="product-catalog-status" class="catalog-status">Select a branch to load products.</span></div></div>
         <label>Search products<input id="branch-product-search" type="search" placeholder="Search products by name, code, or barcode" autocomplete="off"></label>
-        <div class="highlight-tools" role="group" aria-label="Highlight products">
-          <button id="highlight-duplicates" type="button" aria-pressed="false">Same names</button>
-          <button id="highlight-low-prices" type="button" aria-pressed="false">Low prices</button>
-          <label>at or under<input id="low-price-limit" type="number" min="0" step="0.01" value="0.50" aria-label="Low price limit"></label>
-        </div>
         <div id="branch-products" class="stock-table-wrap"><p class="empty">Select a branch to see its products.</p></div>
       </div>
       <div id="stock-activity-panel" class="panel panel-wide branch-data-card" data-branch-loading-card>
@@ -603,8 +614,8 @@
     return Number.isFinite(price) && price <= lowPriceLimit();
   }
   function updateHighlightButtons(duplicateCount, lowPriceCount) {
-    highlightDuplicatesButton.textContent = `Same names (${duplicateCount})`;
-    highlightLowPricesButton.textContent = `Low prices (${lowPriceCount})`;
+    highlightDuplicatesButton.querySelector('[data-chip-count]').textContent = duplicateCount.toLocaleString();
+    highlightLowPricesButton.querySelector('[data-chip-count]').textContent = lowPriceCount.toLocaleString();
     highlightDuplicatesButton.setAttribute('aria-pressed', String(highlightDuplicates));
     highlightLowPricesButton.setAttribute('aria-pressed', String(highlightLowPrices));
   }
