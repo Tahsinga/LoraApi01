@@ -1,61 +1,74 @@
 <style>
-  .ss-dialog, .ss-open-button { --ss-font:"Segoe UI", system-ui, -apple-system, "Helvetica Neue", Roboto, Arial, sans-serif; }
-  .ss-open-button { display:inline-flex; align-items:center; justify-content:center; gap:8px; width:auto; grid-column:auto; margin:0; padding:0 16px; color:#075d5a; background:#e8f4f1; border:1px solid #b9dcd4; border-radius:2px; cursor:pointer; font:600 14px var(--ss-font); letter-spacing:0; text-transform:none; white-space:nowrap; }
-  .ss-open-button:hover { color:#fff; background:#087f78; border-color:#087f78; }
-  .ss-open-button:disabled { color:#8a9799; background:#f1f4f2; border-color:#dbe3df; cursor:not-allowed; opacity:1; }
-  .ss-open-button svg { width:16px; height:16px; flex:0 0 auto; }
-  .ss-dialog { width:min(780px, calc(100% - 28px)); max-height:min(88vh, 860px); padding:0; color:#182326; background:#fff; border:0; border-radius:14px; box-shadow:0 24px 70px rgba(10,28,26,.32); font-family:var(--ss-font); overflow:hidden; }
+  /* Matches the dashboard: Georgia headings and numbers, uppercase Arial labels, square corners. */
+  .ss-dialog { --ss-ink:#182326; --ss-muted:#6d7b7d; --ss-line:#dbe3df; --ss-teal:#087f78; --ss-teal-dark:#075d5a; --ss-coral:#d95f4d; }
+  .ss-open-button { display:inline-flex; align-items:center; justify-content:center; gap:8px; width:auto; grid-column:auto; margin:0; padding:0 14px; color:#075d5a; background:#e1f0eb; border:0; border-radius:2px; cursor:pointer; font:700 12px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; white-space:nowrap; }
+  .ss-open-button:hover { color:#075d5a; background:#cce7df; }
+  .ss-open-button:disabled { color:#8a9799; background:#eef2f0; cursor:not-allowed; opacity:1; }
+  .ss-open-button svg { width:15px; height:15px; flex:0 0 auto; }
+  .ss-dialog { width:min(780px, calc(100% - 28px)); max-height:calc(100dvh - 28px); padding:0; color:var(--ss-ink); background:#fff; border:1px solid var(--ss-line); border-radius:0; box-shadow:0 22px 70px rgba(12,38,34,.28); font-family:Georgia, 'Times New Roman', serif; overflow:hidden; }
   .ss-dialog[open] { display:flex; flex-direction:column; }
-  .ss-dialog::backdrop { background:rgba(15,29,28,.55); backdrop-filter:blur(2px); }
-  .ss-top { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:20px 22px 14px; border-bottom:1px solid #edf1ef; }
-  .ss-title { margin:0; color:#182326; font:600 19px/1.25 var(--ss-font); letter-spacing:0; text-transform:none; }
-  .ss-subtitle { margin:4px 0 0; color:#6d7b7d; font:400 13px/1.4 var(--ss-font); }
-  .ss-dialog .ss-close { display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; min-height:0; grid-column:auto; flex:0 0 auto; margin:0; padding:0; color:#435153; background:#f1f4f2; border:0; border-radius:50%; cursor:pointer; font:400 20px/1 var(--ss-font); text-transform:none; letter-spacing:0; }
-  .ss-dialog .ss-close:hover { color:#182326; background:#e4ebe7; }
+  .ss-dialog::backdrop { background:rgba(13,29,30,.48); }
+  .ss-top { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:20px 22px 16px; border-bottom:1px solid var(--ss-line); }
+  .ss-eyebrow { margin:0 0 6px; color:var(--ss-teal); font:700 11px/1.2 Arial,sans-serif; letter-spacing:2px; text-transform:uppercase; }
+  .ss-title { margin:0; color:var(--ss-ink); font:500 24px/1.15 Georgia,serif; letter-spacing:0; text-transform:none; }
+  .ss-subtitle { margin:5px 0 0; color:var(--ss-muted); font:13px/1.45 Arial,sans-serif; }
+  .ss-dialog .ss-close { width:auto; min-height:0; grid-column:auto; flex:0 0 auto; margin:0; padding:11px 14px; color:var(--ss-ink); background:#e8eeeb; border:0; border-radius:2px; cursor:pointer; font:700 12px Arial,sans-serif; letter-spacing:1.3px; text-transform:uppercase; }
+  .ss-dialog .ss-close:hover { background:#dce6e1; }
   .ss-dialog button:focus { outline:none; }
-  .ss-dialog button:focus-visible { outline:2px solid #087f78; outline-offset:2px; }
-  .ss-scroll { padding:16px 22px 22px; overflow-y:auto; }
-  .ss-ranges { display:inline-flex; gap:2px; margin-bottom:16px; padding:3px; background:#f1f4f2; border-radius:9px; }
-  .ss-dialog .ss-range-button { width:auto; min-height:0; height:32px; grid-column:auto; margin:0; padding:0 13px; color:#435153; background:transparent; border:0; border-radius:7px; cursor:pointer; font:500 13px var(--ss-font); letter-spacing:0; text-transform:none; white-space:nowrap; }
-  .ss-dialog .ss-range-button:hover { color:#182326; background:#e4ebe7; }
-  .ss-dialog .ss-range-button[aria-pressed="true"] { color:#075d5a; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.12); }
-  .ss-dialog .ss-range-button:disabled { opacity:.55; cursor:wait; }
-  .ss-hero { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; padding:18px 20px; background:linear-gradient(135deg, #e8f4f1 0, #f3f9f7 100%); border-radius:12px; }
-  .ss-label { display:block; margin-bottom:6px; color:#6d7b7d; font:500 12px var(--ss-font); }
-  .ss-hero .ss-label { color:#3f6b66; }
-  .ss-hero-value { display:block; color:#075d5a; font:650 40px/1 var(--ss-font); font-variant-numeric:tabular-nums; }
-  .ss-hero-meta { color:#3f6b66; font:400 13px/1.5 var(--ss-font); text-align:right; }
-  .ss-hero-meta strong { display:block; color:#182326; font-weight:600; }
-  .ss-stats { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-top:10px; }
-  .ss-stat { padding:13px 14px; border:1px solid #edf1ef; border-radius:10px; }
-  .ss-value { display:block; color:#182326; font:600 22px/1.15 var(--ss-font); font-variant-numeric:tabular-nums; }
-  .ss-days { margin-top:20px; }
-  .ss-days-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin:0 0 8px; }
-  .ss-days-title { margin:0; color:#182326; font:600 14px var(--ss-font); }
-  .ss-days-note { color:#6d7b7d; font:400 12px var(--ss-font); }
+  .ss-dialog button:focus-visible { outline:2px solid var(--ss-teal); outline-offset:2px; }
+  .ss-scroll { padding:18px 22px 22px; overflow-y:auto; }
+  .ss-dates { display:grid; grid-template-columns:1fr 1fr auto; gap:10px; align-items:end; margin:0 0 12px; }
+  .ss-dates label { display:flex; flex-direction:column; gap:5px; margin:0; color:#435153; font:700 11px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; }
+  .ss-dates input { width:100%; height:40px; min-height:0; margin:0; padding:8px 11px; color:var(--ss-ink); background:#fbfcfa; border:1px solid #cbd7d2; border-radius:2px; outline:none; font:15px Georgia,serif; }
+  .ss-dates input:focus { border-color:var(--ss-teal); box-shadow:0 0 0 3px #d9efeb; }
+  .ss-dialog .ss-apply { width:auto; height:40px; min-height:0; grid-column:auto; margin:0; padding:0 18px; color:#fff; background:var(--ss-coral); border:0; border-radius:2px; cursor:pointer; font:700 12px Arial,sans-serif; letter-spacing:1.3px; text-transform:uppercase; white-space:nowrap; }
+  .ss-dialog .ss-apply:hover { background:#bd4e3e; }
+  .ss-date-error { min-height:0; margin:-4px 0 10px; color:#a53b2e; font:13px Arial,sans-serif; }
+  .ss-date-error:empty { display:none; }
+  .ss-ranges { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:18px; }
+  .ss-dialog .ss-range-button { width:auto; min-height:0; grid-column:auto; margin:0; padding:9px 12px; color:var(--ss-teal-dark); background:#e1f0eb; border:0; border-radius:2px; cursor:pointer; font:700 10px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; white-space:nowrap; }
+  .ss-dialog .ss-range-button:hover { background:#cce7df; }
+  .ss-dialog .ss-range-button[aria-pressed="true"] { color:#fff; background:var(--ss-teal); }
+  .ss-hero { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; padding:18px 20px; background:#e7f2ee; border:1px solid #c9ddd5; border-left:4px solid var(--ss-teal); }
+  .ss-label { display:block; color:var(--ss-muted); font:700 11px Arial,sans-serif; letter-spacing:1.2px; text-transform:uppercase; }
+  .ss-hero-value { display:block; margin-top:7px; color:var(--ss-teal-dark); font:500 46px/1 Georgia,serif; font-variant-numeric:tabular-nums; }
+  .ss-hero-meta { color:#435153; font:13px/1.55 Arial,sans-serif; text-align:right; }
+  .ss-hero-meta strong { display:block; color:var(--ss-ink); font:600 15px Georgia,serif; }
+  .ss-stats { display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; margin-top:12px; }
+  .ss-stat { padding:16px 18px; background:#fff; border:1px solid var(--ss-line); }
+  .ss-value { display:block; margin-top:7px; color:var(--ss-ink); font:500 28px/1.1 Georgia,serif; font-variant-numeric:tabular-nums; }
+  .ss-days { margin-top:22px; }
+  .ss-days-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin:0 0 10px; padding-bottom:8px; border-bottom:1px solid var(--ss-line); }
+  .ss-days-title { margin:0; color:var(--ss-ink); font:500 19px Georgia,serif; }
+  .ss-days-note { color:var(--ss-muted); font:12px Arial,sans-serif; }
   .ss-day-list { max-height:300px; overflow-y:auto; padding-right:4px; }
-  .ss-day { display:grid; grid-template-columns:118px 1fr 60px; align-items:center; gap:12px; padding:5px 6px; border-radius:6px; font:400 13px var(--ss-font); }
-  .ss-day:hover { background:#f6f8f7; }
-  .ss-day.is-best .ss-day-date { color:#075d5a; font-weight:600; }
+  .ss-day { display:grid; grid-template-columns:120px 1fr 64px; align-items:center; gap:12px; padding:6px 4px; border-bottom:1px solid #eef2f0; font:13px Arial,sans-serif; }
+  .ss-day:last-child { border-bottom:0; }
+  .ss-day.is-best .ss-day-date { color:var(--ss-teal-dark); font-weight:700; }
   .ss-day-date { color:#435153; white-space:nowrap; }
-  .ss-bar { height:10px; background:#eef2f0; border-radius:5px; overflow:hidden; }
-  .ss-bar span { display:block; height:100%; min-width:3px; background:#087f78; border-radius:5px; }
-  .ss-day-qty { color:#182326; font-weight:600; text-align:right; font-variant-numeric:tabular-nums; }
-  .ss-empty { margin:0; padding:22px 0; color:#6d7b7d; font:400 14px var(--ss-font); text-align:center; }
-  .ss-loading { opacity:.55; transition:opacity .15s; }
+  .ss-bar { height:9px; background:#eef2f0; overflow:hidden; }
+  .ss-bar span { display:block; height:100%; min-width:3px; background:var(--ss-teal); }
+  .ss-day-qty { color:var(--ss-ink); font:600 15px Georgia,serif; text-align:right; font-variant-numeric:tabular-nums; }
+  .ss-empty { margin:0; padding:22px 0; color:var(--ss-muted); font:14px Arial,sans-serif; text-align:center; }
+  .ss-loading { opacity:.5; transition:opacity .15s; }
   @media (max-width:760px) {
-    .ss-dialog { width:calc(100% - 16px); max-height:92vh; border-radius:12px; }
+    .ss-dialog { width:calc(100% - 16px); }
     .ss-top { padding:16px 16px 12px; }
+    .ss-title { font-size:21px; }
     .ss-scroll { padding:14px 16px 18px; }
-    .ss-ranges { display:grid; grid-template-columns:1fr 1fr; width:100%; }
+    .ss-dates { grid-template-columns:1fr 1fr; }
+    .ss-dialog .ss-apply { grid-column:1/-1; width:100%; height:44px; }
+    .ss-dates input { height:44px; }
+    .ss-ranges { display:grid; grid-template-columns:1fr 1fr; }
+    .ss-dialog .ss-range-button { min-height:38px; }
     .ss-hero { padding:16px; }
-    .ss-hero-value { font-size:34px; }
+    .ss-hero-value { font-size:38px; }
     .ss-hero-meta { text-align:left; }
     .ss-stats { gap:8px; }
-    .ss-stat { padding:11px 10px; }
-    .ss-value { font-size:18px; }
-    .ss-label { font-size:11px; }
-    .ss-day { grid-template-columns:92px 1fr 46px; gap:8px; }
+    .ss-stat { padding:12px 10px; }
+    .ss-value { font-size:21px; }
+    .ss-label { font-size:10px; letter-spacing:.8px; }
+    .ss-day { grid-template-columns:92px 1fr 48px; gap:8px; }
     .ss-open-button { min-height:44px; }
   }
 </style>
@@ -111,13 +124,46 @@
       dialog.className = 'ss-dialog';
       dialog.setAttribute('aria-labelledby', 'ss-title-' + Math.random().toString(36).slice(2));
       const titleId = dialog.getAttribute('aria-labelledby');
-      dialog.innerHTML = `<div class="ss-top"><div><h3 class="ss-title" id="${titleId}">Sales summary</h3><p class="ss-subtitle" data-ss-subtitle></p></div><button type="button" class="ss-close" data-ss-close aria-label="Close sales summary">&times;</button></div><div class="ss-scroll"><div class="ss-ranges" role="group" aria-label="Quick date ranges">${Object.entries(rangeLabels).map(([key, label]) => `<button type="button" class="ss-range-button" data-ss-range="${key}" aria-pressed="false">${label}</button>`).join('')}</div><div data-ss-body></div></div>`;
+      dialog.innerHTML = `<div class="ss-top"><div><p class="ss-eyebrow">Product sales</p><h3 class="ss-title" id="${titleId}">Sales summary</h3><p class="ss-subtitle" data-ss-subtitle></p></div><button type="button" class="ss-close" data-ss-close>Close</button></div><div class="ss-scroll"><form class="ss-dates" data-ss-dates><label>From date<input type="date" data-ss-from required autofocus></label><label>To date<input type="date" data-ss-to required></label><button type="submit" class="ss-apply">Show sales</button></form><p class="ss-date-error" data-ss-error role="alert"></p><div class="ss-ranges" role="group" aria-label="Quick date ranges">${Object.entries(rangeLabels).map(([key, label]) => `<button type="button" class="ss-range-button" data-ss-range="${key}" aria-pressed="false">${label}</button>`).join('')}</div><div data-ss-body></div></div>`;
       document.body.appendChild(dialog);
       instances.set(dialog, {openButton, fromInput, toInput, context});
 
+      const popupFrom = dialog.querySelector('[data-ss-from]');
+      const popupTo = dialog.querySelector('[data-ss-to]');
+      const popupError = dialog.querySelector('[data-ss-error]');
+      const applyDates = (from, to) => {
+        // Keep the page's own date filters in step so the table matches the popup.
+        fromInput.value = from;
+        toInput.value = to;
+        popupFrom.value = from;
+        popupTo.value = to;
+        popupError.textContent = '';
+        markActiveRange(dialog, from, to);
+        dialog.querySelector('[data-ss-body]').classList.add('ss-loading');
+        onApply();
+      };
+      instances.get(dialog).syncInputs = () => {
+        popupFrom.value = fromInput.value;
+        popupTo.value = toInput.value;
+      };
       openButton.addEventListener('click', () => {
+        popupFrom.value = fromInput.value;
+        popupTo.value = toInput.value;
+        popupError.textContent = '';
         markActiveRange(dialog, fromInput.value, toInput.value);
         dialog.showModal();
+      });
+      dialog.querySelector('[data-ss-dates]').addEventListener('submit', event => {
+        event.preventDefault();
+        if (!popupFrom.value || !popupTo.value) {
+          popupError.textContent = 'Choose both a From date and a To date.';
+          return;
+        }
+        if (popupFrom.value > popupTo.value) {
+          popupError.textContent = 'The From date must be on or before the To date.';
+          return;
+        }
+        applyDates(popupFrom.value, popupTo.value);
       });
       dialog.addEventListener('click', event => {
         if (event.target === dialog || event.target.closest('[data-ss-close]')) {
@@ -127,11 +173,7 @@
         const rangeButton = event.target.closest('[data-ss-range]');
         if (!rangeButton) return;
         const [from, to] = ranges[rangeButton.dataset.ssRange]();
-        fromInput.value = from;
-        toInput.value = to;
-        markActiveRange(dialog, from, to);
-        dialog.querySelector('[data-ss-body]').classList.add('ss-loading');
-        onApply();
+        applyDates(from, to);
       });
       return dialog;
     }
@@ -155,6 +197,7 @@
       }
       instance.openButton.disabled = false;
       instance.openButton.title = '';
+      instance.syncInputs?.();
       markActiveRange(dialog, instance.fromInput.value, instance.toInput.value);
 
       const contextText = typeof instance.context === 'function' ? instance.context() : '';
