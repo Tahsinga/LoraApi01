@@ -1428,9 +1428,22 @@ def product_movement_history_api(request):
             product_filters |= Q(product_id=int(product_query))
         movements = movements.filter(product_filters)
 
+    # Dates on the page are the shop's local dates, not UTC: a sale at 00:30
+    # Harare time belongs to that day, not the previous one.
+    try:
+        local_zone = ZoneInfo(getattr(settings, 'WHATSAPP_STOCK_TIME_ZONE', '') or 'Africa/Harare')
+    except (ZoneInfoNotFoundError, ValueError):
+        local_zone = ZoneInfo('UTC')
+
     all_movements = list(movements.order_by('created_at', 'id'))
     product_ids = {movement.product_id for movement in all_movements}
     running_balances = {product_id: Decimal('0') for product_id in product_ids}
+    opening_balances = {}
+    sold_total = Decimal('0')
+    received_total = Decimal('0')
+    sale_count = 0
+    adjustment_count = 0
+    sold_by_day = {}
     movement_rows = []
     for movement in all_movements:
         if movement.movement_type in {'adjusted', 'stocktake', 'maintained'}:
@@ -1439,10 +1452,20 @@ def product_movement_history_api(request):
             running_balances[movement.product_id] -= movement.quantity
         else:
             running_balances[movement.product_id] += movement.quantity
-        if from_date and movement.created_at.date() < from_date:
+        movement_day = movement.created_at.astimezone(local_zone).date()
+        if from_date and movement_day < from_date:
+            opening_balances[movement.product_id] = running_balances[movement.product_id]
             continue
-        if to_date and movement.created_at.date() > to_date:
+        if to_date and movement_day > to_date:
             continue
+        if movement.movement_type == 'sold':
+            sold_total += movement.quantity
+            sale_count += 1
+            sold_by_day[movement_day] = sold_by_day.get(movement_day, Decimal('0')) + movement.quantity
+        elif movement.movement_type == 'received':
+            received_total += movement.quantity
+        else:
+            adjustment_count += 1
         movement_rows.append({
             'product_id': movement.product_id,
             'product_name': movement.product_name,
@@ -1453,11 +1476,38 @@ def product_movement_history_api(request):
             'source': 'Sold' if movement.movement_type == 'sold' else (movement.source or 'System'),
             'created_at': movement.created_at.isoformat(),
         })
+    # Closing balance = each product's balance after its last movement in the
+    # range (or its opening balance if it had none); missing products open at 0.
+    closing_by_product = dict(opening_balances)
+    for row in movement_rows:
+        closing_by_product[row['product_id']] = Decimal(row['balance'])
+    closing_balance = sum(closing_by_product.values(), Decimal('0'))
+    opening_balance = sum(opening_balances.values(), Decimal('0'))
+    product_names = sorted({movement.product_name for movement in all_movements if movement.product_name})
+
     movement_rows.reverse()
+    total_movements = len(movement_rows)
     movement_rows = movement_rows[:1000]
     return JsonResponse({
         'status': 'ok',
         'movements': movement_rows,
+        'summary': {
+            'from': from_date.isoformat() if from_date else None,
+            'to': to_date.isoformat() if to_date else None,
+            'product_count': len(product_ids),
+            'product_names': product_names[:5],
+            'sold_quantity': str(sold_total),
+            'sale_count': sale_count,
+            'received_quantity': str(received_total),
+            'adjustment_count': adjustment_count,
+            'opening_balance': str(opening_balance),
+            'closing_balance': str(closing_balance),
+            'movement_count': total_movements,
+            'sold_by_day': [
+                {'date': day.isoformat(), 'quantity': str(quantity)}
+                for day, quantity in sorted(sold_by_day.items())
+            ],
+        },
     })
 
 
