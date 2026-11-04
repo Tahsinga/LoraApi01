@@ -21,7 +21,8 @@
     main { padding-bottom:54px; }
     .intro { margin:0 0 22px; color:var(--muted); font:14px/1.5 Arial,sans-serif; }
     .panel { background:var(--white); border:1px solid var(--line); padding:26px; box-shadow:0 12px 35px rgba(28,62,54,.06); }
-    .filters { display:grid; grid-template-columns:minmax(220px, 1.5fr) 1fr 1fr auto auto; gap:14px; align-items:end; }
+    .filters { display:grid; grid-template-columns:minmax(200px, 1.4fr) minmax(180px, 1.3fr) 1fr 1fr auto auto; gap:14px; align-items:end; }
+    .filters .ss-open-button { height:46px; }
     label { display:flex; flex-direction:column; gap:7px; color:#435153; font:700 11px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; }
     input, select { width:100%; height:46px; padding:12px 13px; color:var(--ink); background:#fbfcfa; border:1px solid #cbd7d2; border-radius:2px; outline:none; font:16px Georgia,serif; }
     input:focus, select:focus { border-color:var(--teal); box-shadow:0 0 0 3px #d9efeb; }
@@ -54,10 +55,10 @@
         <label>Product name<input id="product-query" type="search" list="movement-products" placeholder="Select product name" autocomplete="off" required><datalist id="movement-products"></datalist></label>
         <label>From date<input id="from-date" type="date"></label>
         <label>To date<input id="to-date" type="date"></label>
+        <button id="sales-summary-open" type="button">Sales summary</button>
         <button type="submit">Search</button>
       </form>
       <p id="movement-status" class="status">Loading movements...</p>
-      <section id="movement-summary" class="ss-card" aria-label="Sales summary" hidden></section>
       <div id="movement-table" class="table-wrap"><p class="empty">Loading movements...</p></div>
     </section>
   </main>
@@ -72,7 +73,6 @@
   const toDate = document.querySelector('#to-date');
   const movementStatus = document.querySelector('#movement-status');
   const movementTable = document.querySelector('#movement-table');
-  const movementSummary = document.querySelector('#movement-summary');
   const initialParams = new URLSearchParams(window.location.search);
   const initialBranch = initialParams.get('branch') || '';
   const initialProductId = Number(initialParams.get('product_id'));
@@ -91,13 +91,13 @@
   }
   async function loadMovements() {
     if (!branchSelect.value) {
-      movementSummary.hidden = true;
+      LoraSalesSummary.clear(movementSummary);
       movementStatus.textContent = 'Select a branch to view movements.';
       movementTable.innerHTML = '<p class="empty">No branch selected. Nothing to show.</p>';
       return;
     }
     if (!selectedProductId && !productQuery.value.trim()) {
-      movementSummary.hidden = true;
+      LoraSalesSummary.clear(movementSummary);
       movementStatus.textContent = 'Select a product to view movements.';
       movementTable.innerHTML = '<p class="empty">No product selected. Nothing to show.</p>';
       return;
@@ -114,10 +114,10 @@
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Movement history unavailable.');
       renderMovements(data.movements || []);
-      LoraSalesSummary.render(movementSummary, data.summary, fromDate.value, toDate.value);
+      LoraSalesSummary.render(movementSummary, data.summary);
       movementStatus.textContent = `${(data.movements || []).length} movement${data.movements?.length === 1 ? '' : 's'} found.`;
     } catch (error) {
-      movementSummary.hidden = true;
+      LoraSalesSummary.clear(movementSummary);
       movementTable.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
       movementStatus.textContent = 'Movement history unavailable.';
     }
@@ -178,7 +178,13 @@
     }
   }
   filters.addEventListener('submit', event => { event.preventDefault(); loadMovements(); });
-  LoraSalesSummary.setup(movementSummary, fromDate, toDate, loadMovements);
+  const movementSummary = LoraSalesSummary.setup({
+    openButton: document.querySelector('#sales-summary-open'),
+    fromInput: fromDate,
+    toInput: toDate,
+    onApply: loadMovements,
+    context: () => branchSelect.value === 'MAIN' ? 'Main stock' : branchSelect.value,
+  });
   productQuery.addEventListener('input', () => { selectedProductId = null; });
   branchSelect.addEventListener('change', async () => { selectedProductId = null; await loadProducts(); loadMovements(); });
   async function initialize() {
