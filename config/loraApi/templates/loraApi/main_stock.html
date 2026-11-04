@@ -167,7 +167,8 @@
     .product-movement-header .sub { margin-top:5px; }
     .product-movement-close { width:auto; flex:0 0 auto; grid-column:auto; margin:0; padding:9px 12px; color:var(--ink); background:#e8eeea; }
     .product-movement-close:hover { background:#dce5df; }
-    .product-movement-filters { grid-template-columns:minmax(0, 1fr) minmax(0, 1fr) auto; align-items:end; gap:10px; margin:0; }
+    .product-movement-filters { grid-template-columns:minmax(0, 1fr) minmax(0, 1fr) auto auto; align-items:end; gap:10px; margin:0; }
+    .product-movement-filters .ss-open-button { height:40px; padding:0 14px; }
     .product-movement-filters button { width:auto; grid-column:auto; margin:0; padding:11px 14px; }
     .product-movement-status { min-height:20px; margin:12px 0 0; color:var(--muted); font:11px Arial,sans-serif; }
     .product-movement-table-wrap { max-height:58vh; overflow:auto; margin-top:10px; border:1px solid var(--line); }
@@ -417,10 +418,10 @@
       <form id="product-movement-filters" class="product-movement-filters">
         <label>From date<input id="product-movement-from" type="date"></label>
         <label>To date<input id="product-movement-to" type="date"></label>
+        <button id="product-sales-summary-open" type="button">Sales summary</button>
         <button type="submit">Filter movements</button>
       </form>
       <p id="product-movement-status" class="product-movement-status" role="status" aria-live="polite"></p>
-      <section id="product-movement-summary" class="ss-card" aria-label="Sales summary" hidden></section>
       <div id="product-movement-table" class="product-movement-table-wrap"><p class="empty">Select a product to view movements.</p></div>
     </dialog>
   </main>
@@ -453,7 +454,6 @@
   const productMovementSubtitle = document.querySelector('#product-movement-subtitle');
   const productMovementForm = document.querySelector('#product-movement-filters');
   const productMovementFrom = document.querySelector('#product-movement-from');
-  const productMovementSummary = document.querySelector('#product-movement-summary');
   const productMovementTo = document.querySelector('#product-movement-to');
   const productMovementStatus = document.querySelector('#product-movement-status');
   const productMovementTable = document.querySelector('#product-movement-table');
@@ -667,11 +667,11 @@
       if (requestId !== productMovementRequestId) return;
       const movements = data.movements || [];
       renderProductMovementHistory(movements);
-      LoraSalesSummary.render(productMovementSummary, data.summary, productMovementFrom.value, productMovementTo.value);
+      LoraSalesSummary.render(productMovementSummary, data.summary);
       productMovementStatus.textContent = `${movements.length} movement${movements.length === 1 ? '' : 's'} found${movements.length === 1000 ? ' (showing the latest 1,000)' : ''}.`;
     } catch (error) {
       if (requestId !== productMovementRequestId) return;
-      productMovementSummary.hidden = true;
+      LoraSalesSummary.clear(productMovementSummary);
       productMovementTable.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
       productMovementStatus.textContent = 'Movement history unavailable.';
     }
@@ -684,7 +684,7 @@
     const todayValue = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
     productMovementFrom.value = todayValue;
     productMovementTo.value = todayValue;
-    productMovementSummary.hidden = true;
+    LoraSalesSummary.clear(productMovementSummary);
     productMovementDialog.showModal();
     void loadProductMovementHistory();
   }
@@ -1013,7 +1013,13 @@
     event.preventDefault();
     void loadProductMovementHistory();
   });
-  LoraSalesSummary.setup(productMovementSummary, productMovementFrom, productMovementTo, () => loadProductMovementHistory());
+  const productMovementSummary = LoraSalesSummary.setup({
+    openButton: document.querySelector('#product-sales-summary-open'),
+    fromInput: productMovementFrom,
+    toInput: productMovementTo,
+    onApply: () => loadProductMovementHistory(),
+    context: () => selectedProductMovement?.branch || '',
+  });
   productMovementClose.addEventListener('click', () => productMovementDialog.close());
   productDeleteCancel.addEventListener('click', () => productDeleteDialog.close());
   productDeleteForm.addEventListener('submit', async event => {
