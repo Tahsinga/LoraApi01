@@ -123,23 +123,23 @@
     .stock-table .movement-mismatch td { background:#fff0c2; }
     .stock-table .negative-stock .product-name, .stock-table .negative-stock td strong { color:#9c352b; }
     .highlight-tools { display:flex; align-items:center; gap:8px; }
-    .highlight-chip { display:inline-flex; align-items:center; gap:7px; width:auto; height:34px; margin:0; padding:0 13px; color:var(--ink); background:var(--white); border:1px solid var(--line); border-radius:17px; font:600 13px "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif; letter-spacing:0; text-transform:none; white-space:nowrap; transition:background .15s, border-color .15s; }
-    .highlight-chip:hover { background:#f3f6f4; border-color:#c3cfca; }
+    .highlight-chip { display:inline-flex; align-items:center; gap:7px; width:auto; height:34px; grid-column:auto; margin:0; padding:0 12px; color:var(--teal-dark); background:#e1f0eb; border:0; border-radius:2px; cursor:pointer; font:700 10px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; white-space:nowrap; }
+    .highlight-chip:hover { background:#cce7df; }
     .highlight-chip .chip-dot { width:8px; height:8px; border-radius:50%; }
-    .highlight-chip .chip-count { min-width:20px; padding:2px 7px; color:var(--muted); background:var(--paper); border-radius:9px; font-size:12px; font-weight:600; letter-spacing:0; text-align:center; }
+    .highlight-chip .chip-count { min-width:20px; padding:2px 6px; color:var(--teal-dark); background:#fff; border-radius:2px; font:700 10px Arial,sans-serif; letter-spacing:0; text-align:center; }
     #highlight-duplicates .chip-dot { background:#3b7bc8; }
     #highlight-low-prices .chip-dot { background:#8a4fc0; }
-    #highlight-duplicates[aria-pressed="true"] { color:#1d4f8a; background:#e3effc; border-color:#9fc2ea; }
-    #highlight-low-prices[aria-pressed="true"] { color:#5b2a86; background:#f1e6fb; border-color:#c9a8e6; }
-    .highlight-chip[aria-pressed="true"] .chip-count { color:inherit; background:var(--white); }
+    #highlight-duplicates[aria-pressed="true"] { color:#fff; background:#2f6db3; }
+    #highlight-low-prices[aria-pressed="true"] { color:#fff; background:#7a43ad; }
+    .highlight-chip[aria-pressed="true"] .chip-dot { background:#fff; }
+    .highlight-chip[aria-pressed="true"] .chip-count { color:var(--ink); }
     .price-chip-group { display:inline-flex; align-items:center; }
-    .price-chip-group .highlight-chip { border-radius:17px 0 0 17px; }
-    .low-price-limit { display:inline-flex; flex-direction:row; align-items:center; gap:4px; height:34px; margin:0; padding:0 10px; color:var(--muted); background:var(--white); border:1px solid var(--line); border-left:0; border-radius:0 17px 17px 0; font:500 13px "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif; letter-spacing:0; white-space:nowrap; }
-    .low-price-limit input { width:60px; min-width:0; height:24px; margin:0; padding:0 6px; border:1px solid var(--line); border-radius:4px; font:13px "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif; }
+    .low-price-limit { display:inline-flex; flex-direction:row; align-items:center; gap:5px; height:34px; margin:0; padding:0 8px; color:#435153; background:#fbfcfa; border:1px solid #cbd7d2; border-left:0; border-radius:0 2px 2px 0; font:700 10px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; white-space:nowrap; }
+    .low-price-limit input { width:62px; min-width:0; height:24px; margin:0; padding:0 6px; border:1px solid #cbd7d2; border-radius:2px; font:14px Georgia,serif; }
     .stock-table tr.duplicate-name td { background:#e3effc; }
     .stock-table tr.low-price td { background:#f1e6fb; }
     .stock-table tr.duplicate-name.low-price td { background:#e6e4fb; }
-    .highlight-label { display:inline-block; margin-left:8px; padding:2px 7px; border-radius:9px; font:600 11px "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif; }
+    .highlight-label { display:inline-block; margin-left:8px; padding:3px 6px; font:700 9px Arial,sans-serif; letter-spacing:.5px; text-transform:uppercase; }
     .highlight-label.duplicate { color:#1d4f8a; background:#c9def6; }
     .highlight-label.low-price { color:#5b2a86; background:#e2cff4; }
     .negative-stock-label { display:inline-block; margin-left:8px; padding:3px 6px; color:#8b2d20; background:#f7d9d3; font:700 9px Arial,sans-serif; text-transform:uppercase; }
@@ -269,9 +269,6 @@
       .browser-actions { display:grid; grid-template-columns:1fr; gap:10px; justify-content:stretch; }
       .highlight-tools { flex-wrap:wrap; }
       .highlight-chip, .low-price-limit { height:44px; min-height:44px; }
-      .highlight-chip { border-radius:22px; }
-      .price-chip-group .highlight-chip { border-radius:22px 0 0 22px; }
-      .low-price-limit { border-radius:0 22px 22px 0; }
       .price-chip-group { flex:1; }
       .price-chip-group .highlight-chip { flex:1; justify-content:center; }
       .activity-branch-label, .activity-date-label { display:flex; flex-direction:column; align-items:stretch; gap:6px; white-space:normal; }
