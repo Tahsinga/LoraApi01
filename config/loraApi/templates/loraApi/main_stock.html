@@ -122,6 +122,17 @@
     .stock-table .negative-stock { background:#fff0ed; }
     .stock-table .movement-mismatch td { background:#fff0c2; }
     .stock-table .negative-stock .product-name, .stock-table .negative-stock td strong { color:#9c352b; }
+    .highlight-tools { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:10px 0; }
+    .highlight-tools button { background:var(--white); color:var(--ink); border:1px solid var(--line); }
+    .highlight-tools button[aria-pressed="true"] { background:var(--ink); color:var(--white); border-color:var(--ink); }
+    .highlight-tools label { display:inline-flex; align-items:center; gap:6px; margin:0; font-size:13px; color:var(--muted); }
+    .highlight-tools input { width:90px; margin:0; }
+    .stock-table tr.duplicate-name td { background:#e3effc; }
+    .stock-table tr.low-price td { background:#f1e6fb; }
+    .stock-table tr.duplicate-name.low-price td { background:#e6e4fb; }
+    .highlight-label { display:inline-block; margin-left:8px; padding:3px 6px; font:700 9px Arial,sans-serif; text-transform:uppercase; }
+    .highlight-label.duplicate { color:#1d4f8a; background:#c9def6; }
+    .highlight-label.low-price { color:#5b2a86; background:#e2cff4; }
     .negative-stock-label { display:inline-block; margin-left:8px; padding:3px 6px; color:#8b2d20; background:#f7d9d3; font:700 9px Arial,sans-serif; text-transform:uppercase; }
     .stock-table button { margin:0; padding:8px 10px; font-size:9px; }
     .stock-table td:last-child { white-space:nowrap; }
@@ -342,6 +353,11 @@
       <div id="products-panel" class="panel panel-wide product-browser branch-data-card" data-branch-loading-card>
         <div class="browser-heading"><div><h2>Branch products</h2></div><div class="browser-actions"><label class="activity-date-label">Movement date<input id="product-movement-date" type="date"></label><span id="product-catalog-status" class="catalog-status">Select a branch to load products.</span></div></div>
         <label>Search products<input id="branch-product-search" type="search" placeholder="Search products by name, code, or barcode" autocomplete="off"></label>
+        <div class="highlight-tools" role="group" aria-label="Highlight products">
+          <button id="highlight-duplicates" type="button" aria-pressed="false">Same names</button>
+          <button id="highlight-low-prices" type="button" aria-pressed="false">Low prices</button>
+          <label>at or under<input id="low-price-limit" type="number" min="0" step="0.01" value="0.50" aria-label="Low price limit"></label>
+        </div>
         <div id="branch-products" class="stock-table-wrap"><p class="empty">Select a branch to see its products.</p></div>
       </div>
       <div id="stock-activity-panel" class="panel panel-wide branch-data-card" data-branch-loading-card>
@@ -406,6 +422,11 @@
   const productCatalogStatus = document.querySelector('#product-catalog-status');
   const refreshStockButton = document.querySelector('#refresh-stock-button');
   const branchProductSearch = document.querySelector('#branch-product-search');
+  const highlightDuplicatesButton = document.querySelector('#highlight-duplicates');
+  const highlightLowPricesButton = document.querySelector('#highlight-low-prices');
+  const lowPriceLimitInput = document.querySelector('#low-price-limit');
+  let highlightDuplicates = false;
+  let highlightLowPrices = false;
   const productMovementDate = document.querySelector('#product-movement-date');
   const branchProducts = document.querySelector('#branch-products');
   const productDeleteDialog = document.querySelector('#product-delete-dialog');
@@ -570,11 +591,47 @@
   function selectProduct(product) {
     setSelectedProduct(product, true);
   }
+  function normalizedProductName(product) {
+    return String(product.product_name ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+  }
+  function lowPriceLimit() {
+    const limit = Number(lowPriceLimitInput.value);
+    return Number.isFinite(limit) && limit >= 0 ? limit : 0.5;
+  }
+  function isLowPrice(product) {
+    const price = Number(product.selling_price);
+    return Number.isFinite(price) && price <= lowPriceLimit();
+  }
+  function updateHighlightButtons(duplicateCount, lowPriceCount) {
+    highlightDuplicatesButton.textContent = `Same names (${duplicateCount})`;
+    highlightLowPricesButton.textContent = `Low prices (${lowPriceCount})`;
+    highlightDuplicatesButton.setAttribute('aria-pressed', String(highlightDuplicates));
+    highlightLowPricesButton.setAttribute('aria-pressed', String(highlightLowPrices));
+  }
   function renderBranchProducts() {
     const query = branchProductSearch.value.trim().toLowerCase();
-    const products = branchCatalogProducts.filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
+    const nameCounts = new Map();
+    branchCatalogProducts.forEach(product => {
+      const name = normalizedProductName(product);
+      if (name) nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+    });
+    const isDuplicateName = product => (nameCounts.get(normalizedProductName(product)) || 0) > 1;
+    updateHighlightButtons(
+      branchCatalogProducts.filter(isDuplicateName).length,
+      branchCatalogProducts.filter(isLowPrice).length,
+    );
+    let products = branchCatalogProducts.filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
+    if (highlightDuplicates) {
+      // Put products that share a name next to each other so they are easy to compare.
+      products = [...products].sort((a, b) => {
+        const aDuplicate = isDuplicateName(a);
+        const bDuplicate = isDuplicateName(b);
+        if (aDuplicate !== bDuplicate) return aDuplicate ? -1 : 1;
+        return aDuplicate ? normalizedProductName(a).localeCompare(normalizedProductName(b)) : 0;
+      });
+    }
     branchProducts.innerHTML = products.length
-      ? `<table class="stock-table"><thead><tr><th>Product</th><th>Selling price</th><th>Tax rate</th><th>Branch<br>balance</th><th>Movement<br>balance</th><th>Sent</th><th>Sold</th><th>Actions</th></tr></thead><tbody>${products.map(product => { const productId = escapeHtml(product.product_id); const isNegative = Number(product.available_quantity) < 0; const isNegativeMovement = Number(product.movement_balance) < 0; const movementMismatch = Number(product.available_quantity) !== Number(product.movement_balance); return `<tr class="${isNegative || isNegativeMovement ? 'negative-stock' : ''}${movementMismatch ? ' movement-mismatch' : ''}" data-product-id="${productId}"><td class="product-name">${escapeHtml(product.product_name)}</td><td>${escapeHtml(product.selling_price)}</td><td><form class="tax-rate-form" data-product-tax-rate="${productId}"><input type="number" min="0" max="100" step="0.01" value="${escapeHtml(product.tax_rate ?? 0)}" aria-label="Tax rate percentage for ${escapeHtml(product.product_name)}"><button type="submit">Save tax</button></form></td><td><strong>${escapeHtml(product.available_quantity)}</strong>${isNegative ? '<span class="negative-stock-label">Negative stock</span>' : ''}</td><td><strong>${escapeHtml(product.movement_balance)}</strong>${isNegativeMovement ? '<span class="negative-stock-label">Negative movement</span>' : ''}</td><td>${escapeHtml(product.sent_quantity)}</td><td>${escapeHtml(product.sold_quantity)}</td><td><button type="button" data-product-movement="${productId}">Movement</button><button type="button" data-product-select="${productId}">Select</button><button type="button" class="delete-product-button" data-product-delete="${productId}" aria-label="Delete ${escapeHtml(product.product_name)} from all branches">Delete from all branches</button></td></tr>`; }).join('')}</tbody></table>`
+      ? `<table class="stock-table"><thead><tr><th>Product</th><th>Selling price</th><th>Tax rate</th><th>Branch<br>balance</th><th>Movement<br>balance</th><th>Sent</th><th>Sold</th><th>Actions</th></tr></thead><tbody>${products.map(product => { const productId = escapeHtml(product.product_id); const isNegative = Number(product.available_quantity) < 0; const isNegativeMovement = Number(product.movement_balance) < 0; const movementMismatch = Number(product.available_quantity) !== Number(product.movement_balance); const duplicateRow = highlightDuplicates && isDuplicateName(product); const lowPriceRow = highlightLowPrices && isLowPrice(product); return `<tr class="${isNegative || isNegativeMovement ? 'negative-stock' : ''}${movementMismatch ? ' movement-mismatch' : ''}${duplicateRow ? ' duplicate-name' : ''}${lowPriceRow ? ' low-price' : ''}" data-product-id="${productId}"><td class="product-name">${escapeHtml(product.product_name)}${duplicateRow ? '<span class="highlight-label duplicate">Same name</span>' : ''}${lowPriceRow ? '<span class="highlight-label low-price">Low price</span>' : ''}</td><td>${escapeHtml(product.selling_price)}</td><td><form class="tax-rate-form" data-product-tax-rate="${productId}"><input type="number" min="0" max="100" step="0.01" value="${escapeHtml(product.tax_rate ?? 0)}" aria-label="Tax rate percentage for ${escapeHtml(product.product_name)}"><button type="submit">Save tax</button></form></td><td><strong>${escapeHtml(product.available_quantity)}</strong>${isNegative ? '<span class="negative-stock-label">Negative stock</span>' : ''}</td><td><strong>${escapeHtml(product.movement_balance)}</strong>${isNegativeMovement ? '<span class="negative-stock-label">Negative movement</span>' : ''}</td><td>${escapeHtml(product.sent_quantity)}</td><td>${escapeHtml(product.sold_quantity)}</td><td><button type="button" data-product-movement="${productId}">Movement</button><button type="button" data-product-select="${productId}">Select</button><button type="button" class="delete-product-button" data-product-delete="${productId}" aria-label="Delete ${escapeHtml(product.product_name)} from all branches">Delete from all branches</button></td></tr>`; }).join('')}</tbody></table>`
       : '<p class="empty">No products match your search.</p>';
   }
   function renderProductMovementHistory(movements) {
@@ -1148,6 +1205,15 @@
     });
   }
   branchProductSearch.addEventListener('input', renderBranchProducts);
+  highlightDuplicatesButton.addEventListener('click', () => {
+    highlightDuplicates = !highlightDuplicates;
+    renderBranchProducts();
+  });
+  highlightLowPricesButton.addEventListener('click', () => {
+    highlightLowPrices = !highlightLowPrices;
+    renderBranchProducts();
+  });
+  lowPriceLimitInput.addEventListener('input', renderBranchProducts);
   productMovementDate.addEventListener('change', () => {
     branchCatalogSince = '';
     branchCatalogSinceBranch = '';
