@@ -1,0 +1,123 @@
+<style>
+  .ss-card { --ss-font:"Segoe UI", system-ui, -apple-system, "Helvetica Neue", Roboto, Arial, sans-serif; margin:16px 0 4px; padding:18px 20px; color:#182326; background:#fff; border:1px solid #dbe3df; border-radius:10px; box-shadow:0 6px 20px rgba(28,62,54,.06); font-family:var(--ss-font); }
+  .ss-card[hidden] { display:none; }
+  .ss-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
+  .ss-title { margin:0; color:#182326; font:600 15px var(--ss-font); letter-spacing:0; text-transform:none; }
+  .ss-ranges { display:inline-flex; gap:2px; padding:3px; background:#f1f4f2; border-radius:8px; }
+  .ss-card .ss-range-button { width:auto; min-height:0; height:30px; grid-column:auto; margin:0; padding:0 11px; color:#435153; background:transparent; border:0; border-radius:6px; cursor:pointer; font:500 13px var(--ss-font); letter-spacing:0; text-transform:none; white-space:nowrap; }
+  .ss-card .ss-range-button:hover { color:#182326; background:#e4ebe7; }
+  .ss-card .ss-range-button[aria-pressed="true"] { color:#075d5a; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.12); }
+  .ss-grid { display:grid; grid-template-columns:minmax(180px, 1.4fr) repeat(3, minmax(120px, 1fr)); gap:12px; }
+  .ss-stat { padding:13px 14px; background:#f6f8f7; border-radius:8px; }
+  .ss-stat-hero { background:#e8f4f1; }
+  .ss-label { display:block; margin-bottom:6px; color:#6d7b7d; font:500 12px var(--ss-font); }
+  .ss-value { display:block; color:#182326; font:600 22px/1.15 var(--ss-font); font-variant-numeric:tabular-nums; }
+  .ss-stat-hero .ss-value { color:#075d5a; font-size:30px; }
+  .ss-note { display:block; margin-top:5px; color:#6d7b7d; font:400 12px var(--ss-font); }
+  .ss-days { margin-top:16px; }
+  .ss-days-title { margin:0 0 8px; color:#6d7b7d; font:500 12px var(--ss-font); }
+  .ss-day-list { max-height:240px; overflow-y:auto; }
+  .ss-day { display:grid; grid-template-columns:110px 1fr 56px; align-items:center; gap:10px; padding:4px 0; font:400 13px var(--ss-font); }
+  .ss-day-date { color:#435153; white-space:nowrap; }
+  .ss-bar { height:10px; background:#eef2f0; border-radius:5px; overflow:hidden; }
+  .ss-bar span { display:block; height:100%; min-width:3px; background:#087f78; border-radius:5px; }
+  .ss-day-qty { color:#182326; font-weight:600; text-align:right; font-variant-numeric:tabular-nums; }
+  .ss-empty { margin:0; padding:10px 0 2px; color:#6d7b7d; font:400 13px var(--ss-font); }
+  @media (max-width:760px) {
+    .ss-card { padding:14px; }
+    .ss-grid { grid-template-columns:repeat(3, 1fr); gap:8px; }
+    .ss-stat-hero { grid-column:1/-1; }
+    .ss-stat { padding:11px 10px; }
+    .ss-value { font-size:18px; }
+    .ss-label { font-size:11px; }
+    .ss-ranges { display:grid; grid-template-columns:1fr 1fr; width:100%; }
+    .ss-card .ss-range-button { padding:0 6px; }
+    .ss-day { grid-template-columns:88px 1fr 44px; }
+  }
+</style>
+<script>
+  // Shared "sold between two dates" summary for the movement views.
+  window.LoraSalesSummary = (() => {
+    const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
+    const number = value => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed.toLocaleString() : escape(value);
+    };
+    const dateFormat = new Intl.DateTimeFormat('en-GB', {day:'numeric', month:'short', year:'numeric', timeZone:'UTC'});
+    const dayFormat = new Intl.DateTimeFormat('en-GB', {weekday:'short', day:'numeric', month:'short', timeZone:'UTC'});
+    const asDate = value => new Date(`${value}T00:00:00Z`);
+    const localIso = date => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+    const ranges = {
+      today: () => { const today = new Date(); return [localIso(today), localIso(today)]; },
+      week: () => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 6); return [localIso(start), localIso(end)]; },
+      month: () => { const end = new Date(); return [localIso(new Date(end.getFullYear(), end.getMonth(), 1)), localIso(end)]; },
+      days30: () => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 29); return [localIso(start), localIso(end)]; },
+    };
+    const rangeLabels = {today:'Today', week:'Last 7 days', month:'This month', days30:'Last 30 days'};
+
+    function periodText(summary) {
+      if (summary.from && summary.to) {
+        return summary.from === summary.to
+          ? dateFormat.format(asDate(summary.from))
+          : `${dateFormat.format(asDate(summary.from))} – ${dateFormat.format(asDate(summary.to))}`;
+      }
+      if (summary.from) return `Since ${dateFormat.format(asDate(summary.from))}`;
+      if (summary.to) return `Up to ${dateFormat.format(asDate(summary.to))}`;
+      return 'All time';
+    }
+
+    function markActiveRange(card, fromValue, toValue) {
+      card.querySelectorAll('[data-ss-range]').forEach(button => {
+        const [from, to] = ranges[button.dataset.ssRange]();
+        button.setAttribute('aria-pressed', String(from === fromValue && to === toValue));
+      });
+    }
+
+    function setup(card, fromInput, toInput, onApply) {
+      card.innerHTML = `<div class="ss-head"><h3 class="ss-title">Sales summary</h3><div class="ss-ranges" role="group" aria-label="Quick date ranges">${Object.entries(rangeLabels).map(([key, label]) => `<button type="button" class="ss-range-button" data-ss-range="${key}" aria-pressed="false">${label}</button>`).join('')}</div></div><div data-ss-body></div>`;
+      card.addEventListener('click', event => {
+        const button = event.target.closest('[data-ss-range]');
+        if (!button) return;
+        const [from, to] = ranges[button.dataset.ssRange]();
+        fromInput.value = from;
+        toInput.value = to;
+        markActiveRange(card, from, to);
+        onApply();
+      });
+      const sync = () => markActiveRange(card, fromInput.value, toInput.value);
+      fromInput.addEventListener('change', sync);
+      toInput.addEventListener('change', sync);
+      sync();
+    }
+
+    function render(card, summary, fromValue, toValue) {
+      const body = card.querySelector('[data-ss-body]');
+      if (!body) return;
+      if (!summary) {
+        card.hidden = true;
+        return;
+      }
+      card.hidden = false;
+      markActiveRange(card, fromValue, toValue);
+      const days = summary.sold_by_day || [];
+      const maxDay = Math.max(1, ...days.map(day => Number(day.quantity) || 0));
+      const saleCount = Number(summary.sale_count) || 0;
+      const productNote = summary.product_count > 1 ? ` · ${number(summary.product_count)} products` : '';
+      body.innerHTML = `
+        <div class="ss-grid">
+          <div class="ss-stat ss-stat-hero"><span class="ss-label">Sold</span><span class="ss-value">${number(summary.sold_quantity)}</span><span class="ss-note">${saleCount.toLocaleString()} sale${saleCount === 1 ? '' : 's'} · ${escape(periodText(summary))}${productNote}</span></div>
+          <div class="ss-stat"><span class="ss-label">Received</span><span class="ss-value">${number(summary.received_quantity)}</span></div>
+          <div class="ss-stat"><span class="ss-label">Opening balance</span><span class="ss-value">${number(summary.opening_balance)}</span></div>
+          <div class="ss-stat"><span class="ss-label">Closing balance</span><span class="ss-value">${number(summary.closing_balance)}</span></div>
+        </div>
+        <div class="ss-days">
+          <p class="ss-days-title">Sold per day</p>
+          ${days.length
+            ? `<div class="ss-day-list">${days.map(day => `<div class="ss-day"><span class="ss-day-date">${escape(dayFormat.format(asDate(day.date)))}</span><span class="ss-bar"><span style="width:${Math.max(2, (Number(day.quantity) / maxDay) * 100)}%"></span></span><span class="ss-day-qty">${number(day.quantity)}</span></div>`).join('')}</div>`
+            : '<p class="ss-empty">No sales in this period.</p>'}
+        </div>`;
+    }
+
+    return {setup, render};
+  })();
+</script>

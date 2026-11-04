@@ -57,10 +57,12 @@
         <button type="submit">Search</button>
       </form>
       <p id="movement-status" class="status">Loading movements...</p>
+      <section id="movement-summary" class="ss-card" aria-label="Sales summary" hidden></section>
       <div id="movement-table" class="table-wrap"><p class="empty">Loading movements...</p></div>
     </section>
   </main>
 </div>
+{% include 'loraApi/_sales_summary.html' %}
 <script>
   const filters = document.querySelector('#movement-filters');
   const branchSelect = document.querySelector('#branch-select');
@@ -70,6 +72,7 @@
   const toDate = document.querySelector('#to-date');
   const movementStatus = document.querySelector('#movement-status');
   const movementTable = document.querySelector('#movement-table');
+  const movementSummary = document.querySelector('#movement-summary');
   const initialParams = new URLSearchParams(window.location.search);
   const initialBranch = initialParams.get('branch') || '';
   const initialProductId = Number(initialParams.get('product_id'));
@@ -88,11 +91,13 @@
   }
   async function loadMovements() {
     if (!branchSelect.value) {
+      movementSummary.hidden = true;
       movementStatus.textContent = 'Select a branch to view movements.';
       movementTable.innerHTML = '<p class="empty">No branch selected. Nothing to show.</p>';
       return;
     }
     if (!selectedProductId && !productQuery.value.trim()) {
+      movementSummary.hidden = true;
       movementStatus.textContent = 'Select a product to view movements.';
       movementTable.innerHTML = '<p class="empty">No product selected. Nothing to show.</p>';
       return;
@@ -109,8 +114,10 @@
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Movement history unavailable.');
       renderMovements(data.movements || []);
+      LoraSalesSummary.render(movementSummary, data.summary, fromDate.value, toDate.value);
       movementStatus.textContent = `${(data.movements || []).length} movement${data.movements?.length === 1 ? '' : 's'} found.`;
     } catch (error) {
+      movementSummary.hidden = true;
       movementTable.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
       movementStatus.textContent = 'Movement history unavailable.';
     }
@@ -171,6 +178,7 @@
     }
   }
   filters.addEventListener('submit', event => { event.preventDefault(); loadMovements(); });
+  LoraSalesSummary.setup(movementSummary, fromDate, toDate, loadMovements);
   productQuery.addEventListener('input', () => { selectedProductId = null; });
   branchSelect.addEventListener('change', async () => { selectedProductId = null; await loadProducts(); loadMovements(); });
   async function initialize() {
