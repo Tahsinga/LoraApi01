@@ -346,6 +346,7 @@ public sealed class BranchSyncDashboardForm : Form
             await connection.OpenAsync();
             const string query = @"
                 SELECT p.ProductID, p.ProductDesc, p.ProductCode, p.BarCode, p.SellingPrice,
+                    COALESCE(p.TaxRate, 0) AS TaxRate,
                     COALESCE(branch_stock.AvailableQuantity, 0) AS AvailableQuantity,
                     COALESCE(daily_movements.SoldQuantity, 0) AS SoldQuantity,
                     COALESCE(daily_movements.ReceivedQuantity, 0) AS ReceivedQuantity
@@ -407,6 +408,7 @@ public sealed class BranchSyncDashboardForm : Form
                         available_quantity = availableQuantity,
                         sold_quantity = soldQuantity,
                         received_quantity = receivedQuantity,
+                        tax_rate = Convert.ToDecimal(reader["TaxRate"], CultureInfo.InvariantCulture),
                     });
                     changedStates[productId] = currentState;
                 }

@@ -167,6 +167,23 @@ def whole_quantity(value):
     return value.quantize(Decimal('1'), rounding=ROUND_HALF_UP)
 
 
+def pos_tax_rate_from_snapshot(item):
+    """Optional POS tax rate on a stock snapshot item; None when missing or invalid.
+
+    Older POSViewer builds do not send it, and a bad value must never reject the
+    whole stock sync, so this never raises.
+    """
+    if 'tax_rate' not in item:
+        return None
+    try:
+        tax_rate = Decimal(str(item.get('tax_rate'))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    except (TypeError, ValueError, InvalidOperation):
+        return None
+    if tax_rate < 0 or tax_rate > 100:
+        return None
+    return tax_rate
+
+
 def cleanup_queues():
     """Keep deletion records available as a permanent cancellation history."""
     return None
@@ -1907,6 +1924,7 @@ def publish_branch_stock_snapshot(request):
                 'pos_movement_date': movement_date if sold_quantity is not None or received_quantity is not None else None,
                 'pos_sold_quantity': sold_quantity,
                 'pos_received_quantity': received_quantity,
+                'tax_rate': pos_tax_rate_from_snapshot(item),
             })
     except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
         return JsonResponse({'status': 'error', 'message': 'Branch and valid product stock snapshots are required.'}, status=400)
@@ -1952,6 +1970,7 @@ def publish_branch_stock_snapshot(request):
                     selling_price=snapshot['selling_price'],
                     available_quantity=Decimal('0'),
                     branch_confirmed=True,
+                    tax_rate=snapshot['tax_rate'] or Decimal('0'),
                 )
             previous_movement_date = product.pos_movement_date
             previous_sold_quantity = abs(product.pos_sold_quantity) if product.pos_sold_quantity is not None else Decimal('0')
@@ -1980,6 +1999,15 @@ def publish_branch_stock_snapshot(request):
                 if snapshot[field] is not None and getattr(product, field) != snapshot[field]:
                     setattr(product, field, snapshot[field])
                     changed_fields.append(field)
+            # Fill in the POS tax rate only where the web has none yet, so a rate
+            # set on the website is never overwritten by a branch sync.
+            if (
+                not created
+                and snapshot['tax_rate']
+                and not product.tax_rate
+            ):
+                product.tax_rate = snapshot['tax_rate']
+                changed_fields.append('tax_rate')
             if quantity_changed:
                 product.available_quantity = snapshot['available_quantity']
                 changed_fields.append('available_quantity')

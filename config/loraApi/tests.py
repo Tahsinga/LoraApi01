@@ -2032,6 +2032,52 @@ class StockTransferTests(TestCase):
 			branch='BranchA', product_id=1010, source='POS receiving',
 		).quantity, 2)
 
+	def _post_snapshot_with_tax(self, product_id, tax_rate):
+		return self.client.post(
+			'/api/stock/snapshot/',
+			data=json.dumps({'branch': 'BranchA', 'products': [{
+				'product_id': product_id, 'product_name': 'Taxed POS Product',
+				'available_quantity': 5, 'tax_rate': tax_rate,
+			}]}),
+			content_type='application/json',
+		)
+
+	def test_pos_stock_snapshot_fills_missing_web_tax_rate(self):
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=1020, product_name='Taxed POS Product', available_quantity=5,
+		)
+		response = self._post_snapshot_with_tax(1020, '15')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(str(ProductCatalog.objects.get(branch='BranchA', product_id=1020).tax_rate), '15.00')
+
+	def test_pos_stock_snapshot_sets_tax_rate_on_new_product(self):
+		response = self._post_snapshot_with_tax(1021, '15.5')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(str(ProductCatalog.objects.get(branch='BranchA', product_id=1021).tax_rate), '15.50')
+
+	def test_pos_stock_snapshot_never_overwrites_web_tax_rate(self):
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=1022, product_name='Taxed POS Product',
+			available_quantity=5, tax_rate='7.50',
+		)
+		response = self._post_snapshot_with_tax(1022, '15')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(str(ProductCatalog.objects.get(branch='BranchA', product_id=1022).tax_rate), '7.50')
+
+	def test_pos_stock_snapshot_ignores_invalid_tax_rate_without_rejecting_sync(self):
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=1023, product_name='Taxed POS Product', available_quantity=1,
+		)
+		response = self._post_snapshot_with_tax(1023, 'not-a-number')
+
+		self.assertEqual(response.status_code, 200)
+		product = ProductCatalog.objects.get(branch='BranchA', product_id=1023)
+		self.assertEqual(product.available_quantity, 5)
+		self.assertEqual(str(product.tax_rate), '0.00')
+
 	def test_pos_stock_snapshot_normalizes_signed_sales_counters(self):
 		from django.utils import timezone
 
