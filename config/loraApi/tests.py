@@ -478,7 +478,7 @@ class ProductRenameTests(TestCase):
 		self.assertEqual(response.json()['old_name'], 'Old Name')
 		self.assertEqual(set(ProductCatalog.objects.values_list('product_name', flat=True)), {'New Name'})
 		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=501).pending_product_name, 'New Name')
-		self.assertEqual(ProductCatalog.objects.get(branch='MAIN', product_id=501).pending_product_name, '')
+		self.assertEqual(ProductCatalog.objects.get(branch='MAIN', product_id=501).pending_product_name, 'New Name')
 		self.assertEqual(MainStockBalance.objects.get(product_id=501).product_name, 'New Name')
 		shared = self.client.get('/api/products/shared/').json()['products']
 		self.assertEqual([item['product_name'] for item in shared if item['product_id'] == 501], ['New Name'])
@@ -513,6 +513,51 @@ class ProductRenameTests(TestCase):
 
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(ProductCatalog.objects.get(branch='BranchB', product_id=501).product_name, 'New Name')
+
+	def publish_main(self, name, quantity=4):
+		return self.client.post(
+			'/api/products/publish/',
+			data=json.dumps({'products': [{
+				'branch': 'MAIN', 'product_id': 501, 'product_name': name, 'available_quantity': quantity,
+			}]}),
+			content_type='application/json',
+		)
+
+	def shared_name(self, since=None):
+		url = '/api/products/shared/' + (f'?since={since}' if since else '')
+		products = self.client.get(url).json()['products']
+		return [item['product_name'] for item in products if item['product_id'] == 501]
+
+	def test_main_pos_publishing_its_old_name_does_not_undo_rename(self):
+		self.rename('New Name')
+
+		# The Main POS never pulls renames; it keeps publishing its own name,
+		# e.g. after every sale or stock change at main.
+		self.assertEqual(self.publish_main('Old Name').status_code, 200)
+		self.assertEqual(self.publish_main('Old Name', quantity=3).status_code, 200)
+
+		self.assertEqual(ProductCatalog.objects.get(branch='MAIN', product_id=501).product_name, 'New Name')
+		self.assertEqual(self.shared_name(), ['New Name'])
+
+	def test_offline_branch_gets_the_new_name_when_it_comes_back(self):
+		before_rename = (timezone.now() - timedelta(minutes=5)).isoformat()
+		self.rename('New Name')
+		self.publish_main('Old Name', quantity=2)
+		# BranchA synced the rename; BranchB was offline the whole time.
+		self.snapshot('New Name')
+
+		# BranchB reconnects and asks for everything changed since it went offline.
+		self.assertEqual(self.shared_name(since=before_rename.replace('+', '%2B')), ['New Name'])
+		# ...and a restarted branch app (full download) gets it too.
+		self.assertEqual(self.shared_name(), ['New Name'])
+		branch_b = ProductCatalog.objects.get(branch='BranchB', product_id=501)
+		self.assertEqual(branch_b.pending_product_name, 'New Name')
+
+	def test_shared_feed_prefers_a_pending_rename_over_a_reverted_main_row(self):
+		# State left by renames made before this fix: MAIN row reverted by a Main POS publish.
+		ProductCatalog.objects.filter(product_id=501).exclude(branch='MAIN').update(product_name='New Name', pending_product_name='New Name')
+
+		self.assertEqual(self.shared_name(), ['New Name'])
 
 	def test_rename_rejects_blank_names_and_deleted_products(self):
 		self.assertEqual(self.rename('   ').status_code, 400)

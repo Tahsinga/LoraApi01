@@ -2386,8 +2386,11 @@ def rename_product(request):
         now = timezone.now()
         for item in products:
             item.product_name = product_name
-            # MAIN is not a POS branch, so it never reports the name back.
-            item.pending_product_name = '' if item.branch.casefold() == 'main' else product_name
+            # Every row keeps the website name until its POS reports it back. MAIN too:
+            # the Main POS publishes its catalog with its own names and never pulls
+            # renames, so without this its next publish would put the old name back
+            # and the shared feed would hand that old name to the branches again.
+            item.pending_product_name = product_name
             item.updated_at = now
         ProductCatalog.objects.bulk_update(products, ['product_name', 'pending_product_name', 'updated_at'])
         MainStockBalance.objects.filter(product_id=product_id).update(product_name=product_name)
@@ -3148,10 +3151,11 @@ def shared_product_catalog(request):
 
     shared_products = {}
     products = products.only(
-        'branch', 'product_id', 'product_name', 'product_code', 'barcode', 'selling_price', 'tax_rate', 'updated_at',
+        'branch', 'product_id', 'product_name', 'pending_product_name', 'product_code', 'barcode', 'selling_price', 'tax_rate', 'updated_at',
     )
+    renamed = set()
     for product in products.iterator(chunk_size=2000):
-        shared_products.setdefault(product.product_id, {
+        entry = shared_products.setdefault(product.product_id, {
             'product_id': product.product_id,
             'product_name': product.product_name,
             'product_code': product.product_code,
@@ -3159,6 +3163,11 @@ def shared_product_catalog(request):
             'selling_price': str(product.selling_price),
             'tax_rate': str(product.tax_rate),
         })
+        # A name changed on the website wins over any POS-reported name, so every
+        # branch - including one that was offline - pulls the new name.
+        if product.pending_product_name and product.product_id not in renamed:
+            entry['product_name'] = product.pending_product_name
+            renamed.add(product.product_id)
 
     return JsonResponse({
         'status': 'ok',

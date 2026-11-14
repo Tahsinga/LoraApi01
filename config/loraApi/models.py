@@ -200,6 +200,8 @@ class DeletedProductSighting(models.Model):
 	Recorded from branch stock snapshots so the website can show where a deleted
 	product is still on sale; cleared when that branch deletes it or it is restored.
 	"""
+	# Matches migration 0038, which created this id as a regular AutoField.
+	id = models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')
 	branch = models.CharField(max_length=255)
 	product_id = models.IntegerField()
 	product_name = models.CharField(max_length=250, blank=True, default='')
