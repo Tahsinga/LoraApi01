@@ -388,6 +388,15 @@
         <p id="product-delete-status" class="notice" role="status"></p>
       </form>
     </dialog>
+    <dialog id="product-rename-dialog" class="product-delete-dialog" aria-labelledby="product-rename-title">
+      <form id="product-rename-form">
+        <h2 id="product-rename-title">Rename product</h2>
+        <p id="product-rename-description" class="sub"></p>
+        <label>New product name<input id="product-rename-name" type="text" maxlength="250" autocomplete="off" required></label>
+        <div class="product-delete-actions"><button id="product-rename-cancel" class="product-delete-cancel" type="button">Cancel</button><button type="submit">Save name</button></div>
+        <p id="product-rename-status" class="notice" role="status"></p>
+      </form>
+    </dialog>
     <dialog id="movement-adjustment-confirm-dialog" class="movement-adjustment-dialog" aria-labelledby="movement-adjustment-confirm-title">
       <form id="movement-adjustment-confirm-form">
         <h2 id="movement-adjustment-confirm-title">Confirm movement adjustment</h2>
@@ -447,6 +456,13 @@
   const productDeleteDescription = document.querySelector('#product-delete-description');
   const productDeleteStatus = document.querySelector('#product-delete-status');
   const productDeleteCancel = document.querySelector('#product-delete-cancel');
+  const productRenameDialog = document.querySelector('#product-rename-dialog');
+  const productRenameForm = document.querySelector('#product-rename-form');
+  const productRenameName = document.querySelector('#product-rename-name');
+  const productRenameDescription = document.querySelector('#product-rename-description');
+  const productRenameStatus = document.querySelector('#product-rename-status');
+  const productRenameCancel = document.querySelector('#product-rename-cancel');
+  let pendingProductRename = null;
   const productMovementDialog = document.querySelector('#product-movement-dialog');
   const productMovementTitle = document.querySelector('#product-movement-title');
   const productMovementSubtitle = document.querySelector('#product-movement-subtitle');
@@ -978,23 +994,53 @@
       saveButton.disabled = false;
     }
   });
-  async function renameProduct(product, button) {
-    const newName = (window.prompt(`New name for ${product.product_name} (Product ID ${product.product_id}). It changes on every branch.`, product.product_name) || '').trim().replace(/\s+/g, ' ');
-    if (!newName || newName === product.product_name) return;
-    button.disabled = true;
-    productCatalogStatus.textContent = 'Saving product name...';
+  function renameProduct(product, button) {
+    pendingProductRename = { product, button };
+    productRenameDescription.textContent = `Product ID ${product.product_id}. The new name is saved on every branch and sent to each POS on its next sync.`;
+    productRenameName.value = product.product_name;
+    productRenameStatus.className = 'notice';
+    productRenameStatus.textContent = '';
+    productRenameDialog.showModal();
+    productRenameName.focus();
+    productRenameName.select();
+  }
+  productRenameCancel.addEventListener('click', () => productRenameDialog.close());
+  productRenameDialog.addEventListener('close', () => { pendingProductRename = null; });
+  productRenameForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!pendingProductRename) return;
+    const { product } = pendingProductRename;
+    const newName = productRenameName.value.trim().replace(/\s+/g, ' ');
+    if (!newName) {
+      productRenameStatus.className = 'notice error';
+      productRenameStatus.textContent = 'Enter the new product name.';
+      productRenameName.focus();
+      return;
+    }
+    if (newName === product.product_name) {
+      productRenameDialog.close();
+      return;
+    }
+    const submitButton = productRenameForm.querySelector('button[type="submit"]');
+    submitButton.disabled = true;
+    productRenameStatus.className = 'notice';
+    productRenameStatus.textContent = 'Saving product name...';
     try {
       const response = await fetch('/api/products/rename/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ product_id:product.product_id, product_name:newName }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || 'Product name could not be saved.');
       branchCatalogProducts.filter(item => String(item.product_id) === String(product.product_id)).forEach(item => { item.product_name = data.product_name; });
+      productRenameDialog.close();
       productCatalogStatus.textContent = `Renamed ${data.old_name} to ${data.product_name}. POS branches will receive the new name on sync.`;
       renderBranchProducts();
     } catch (error) {
-      productCatalogStatus.textContent = error.message;
-      button.disabled = false;
+      productRenameStatus.className = 'notice error';
+      productRenameStatus.textContent = error.message;
+      productRenameName.focus();
+    } finally {
+      submitButton.disabled = false;
     }
-  }
+  });
   branchProducts.addEventListener('click', event => {
     if (branchProductsLoading) return;
     const renameButton = event.target.closest('[data-product-rename]');
