@@ -642,7 +642,7 @@
       });
     }
     branchProducts.innerHTML = products.length
-      ? `<table class="stock-table"><thead><tr><th>Product</th><th>Selling price</th><th>Tax rate</th><th>Branch<br>balance</th><th>Movement<br>balance</th><th>Sent</th><th>Sold</th><th>Actions</th></tr></thead><tbody>${products.map(product => { const productId = escapeHtml(product.product_id); const isNegative = Number(product.available_quantity) < 0; const isNegativeMovement = Number(product.movement_balance) < 0; const movementMismatch = Number(product.available_quantity) !== Number(product.movement_balance); const duplicateRow = highlightDuplicates && isDuplicateName(product); const lowPriceRow = highlightLowPrices && isLowPrice(product); return `<tr class="${isNegative || isNegativeMovement ? 'negative-stock' : ''}${movementMismatch ? ' movement-mismatch' : ''}${duplicateRow ? ' duplicate-name' : ''}${lowPriceRow ? ' low-price' : ''}" data-product-id="${productId}"><td class="product-name">${escapeHtml(product.product_name)}${duplicateRow ? '<span class="highlight-label duplicate">Same name</span>' : ''}${lowPriceRow ? '<span class="highlight-label low-price">Low price</span>' : ''}</td><td>${escapeHtml(product.selling_price)}</td><td><form class="tax-rate-form" data-product-tax-rate="${productId}"><input type="number" min="0" max="100" step="0.01" value="${escapeHtml(product.tax_rate ?? 0)}" aria-label="Tax rate percentage for ${escapeHtml(product.product_name)}"><button type="submit">Save tax</button></form></td><td><strong>${escapeHtml(product.available_quantity)}</strong>${isNegative ? '<span class="negative-stock-label">Negative stock</span>' : ''}</td><td><strong>${escapeHtml(product.movement_balance)}</strong>${isNegativeMovement ? '<span class="negative-stock-label">Negative movement</span>' : ''}</td><td>${escapeHtml(product.sent_quantity)}</td><td>${escapeHtml(product.sold_quantity)}</td><td><button type="button" data-product-movement="${productId}">Movement</button><button type="button" data-product-select="${productId}">Select</button><button type="button" class="delete-product-button" data-product-delete="${productId}" aria-label="Delete ${escapeHtml(product.product_name)} from all branches">Delete from all branches</button></td></tr>`; }).join('')}</tbody></table>`
+      ? `<table class="stock-table"><thead><tr><th>Product</th><th>Selling price</th><th>Tax rate</th><th>Branch<br>balance</th><th>Movement<br>balance</th><th>Sent</th><th>Sold</th><th>Actions</th></tr></thead><tbody>${products.map(product => { const productId = escapeHtml(product.product_id); const isNegative = Number(product.available_quantity) < 0; const isNegativeMovement = Number(product.movement_balance) < 0; const movementMismatch = Number(product.available_quantity) !== Number(product.movement_balance); const duplicateRow = highlightDuplicates && isDuplicateName(product); const lowPriceRow = highlightLowPrices && isLowPrice(product); return `<tr class="${isNegative || isNegativeMovement ? 'negative-stock' : ''}${movementMismatch ? ' movement-mismatch' : ''}${duplicateRow ? ' duplicate-name' : ''}${lowPriceRow ? ' low-price' : ''}" data-product-id="${productId}"><td class="product-name">${escapeHtml(product.product_name)}${duplicateRow ? '<span class="highlight-label duplicate">Same name</span>' : ''}${lowPriceRow ? '<span class="highlight-label low-price">Low price</span>' : ''}</td><td>${escapeHtml(product.selling_price)}</td><td><form class="tax-rate-form" data-product-tax-rate="${productId}"><input type="number" min="0" max="100" step="0.01" value="${escapeHtml(product.tax_rate ?? 0)}" aria-label="Tax rate percentage for ${escapeHtml(product.product_name)}"><button type="submit">Save tax</button></form></td><td><strong>${escapeHtml(product.available_quantity)}</strong>${isNegative ? '<span class="negative-stock-label">Negative stock</span>' : ''}</td><td><strong>${escapeHtml(product.movement_balance)}</strong>${isNegativeMovement ? '<span class="negative-stock-label">Negative movement</span>' : ''}</td><td>${escapeHtml(product.sent_quantity)}</td><td>${escapeHtml(product.sold_quantity)}</td><td><button type="button" data-product-rename="${productId}">Rename</button><button type="button" data-product-movement="${productId}">Movement</button><button type="button" data-product-select="${productId}">Select</button><button type="button" class="delete-product-button" data-product-delete="${productId}" aria-label="Delete ${escapeHtml(product.product_name)} from all branches">Delete from all branches</button></td></tr>`; }).join('')}</tbody></table>`
       : '<p class="empty">No products match your search.</p>';
   }
   function renderProductMovementHistory(movements) {
@@ -977,8 +977,31 @@
       saveButton.disabled = false;
     }
   });
+  async function renameProduct(product, button) {
+    const newName = (window.prompt(`New name for ${product.product_name} (Product ID ${product.product_id}). It changes on every branch.`, product.product_name) || '').trim().replace(/\s+/g, ' ');
+    if (!newName || newName === product.product_name) return;
+    button.disabled = true;
+    productCatalogStatus.textContent = 'Saving product name...';
+    try {
+      const response = await fetch('/api/products/rename/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ product_id:product.product_id, product_name:newName }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'Product name could not be saved.');
+      branchCatalogProducts.filter(item => String(item.product_id) === String(product.product_id)).forEach(item => { item.product_name = data.product_name; });
+      productCatalogStatus.textContent = `Renamed ${data.old_name} to ${data.product_name}. POS branches will receive the new name on sync.`;
+      renderBranchProducts();
+    } catch (error) {
+      productCatalogStatus.textContent = error.message;
+      button.disabled = false;
+    }
+  }
   branchProducts.addEventListener('click', event => {
     if (branchProductsLoading) return;
+    const renameButton = event.target.closest('[data-product-rename]');
+    if (renameButton) {
+      const product = branchCatalogProducts.find(item => String(item.product_id) === renameButton.dataset.productRename);
+      if (product) renameProduct(product, renameButton);
+      return;
+    }
     const movementButton = event.target.closest('[data-product-movement]');
     if (movementButton) {
       const product = branchCatalogProducts.find(item => String(item.product_id) === movementButton.dataset.productMovement);

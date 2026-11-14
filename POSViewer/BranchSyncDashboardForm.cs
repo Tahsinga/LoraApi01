@@ -1682,7 +1682,23 @@ public sealed class BranchSyncDashboardForm : Form
             using var transaction = connection.BeginTransaction();
             try
             {
-            if (actualProductId < 12100000)
+            // A request for an ID that already exists in Quantum is a restore of a product deleted
+            // from the web (deletion only sets IsActive = 0); keep its ID so it is reactivated below.
+            // Only genuinely new low IDs are moved into the web-created range.
+            bool requestedProductExists;
+            using (var requestedProductCommand = new SqlCommand(
+                "SELECT COUNT(1) FROM [dbo].[Products] WITH (UPDLOCK, HOLDLOCK) WHERE ProductID = @productId;",
+                connection,
+                transaction)
+            {
+                CommandTimeout = BranchSqlCommandTimeoutSeconds
+            })
+            {
+                requestedProductCommand.Parameters.AddWithValue("@productId", actualProductId);
+                requestedProductExists = Convert.ToInt32(await requestedProductCommand.ExecuteScalarAsync(), CultureInfo.InvariantCulture) > 0;
+            }
+
+            if (actualProductId < 12100000 && !requestedProductExists)
             {
                 const string nextProductIdSql = @"
                     SELECT CASE
@@ -1723,6 +1739,25 @@ public sealed class BranchSyncDashboardForm : Form
                 {
                     throw new InvalidOperationException($"Product ID {actualProductId} already belongs to '{existingProductName}' in dbo.Products; it does not match '{requestedProductName}'.");
                 }
+
+                const string reactivateProductSql = @"
+                    UPDATE [dbo].[Products]
+                    SET ProductDesc = @productName,
+                        BarCode = @barcode,
+                        SellingPrice = @sellingPrice,
+                        TaxRate = @taxRate,
+                        IsActive = 1
+                    WHERE ProductID = @productId;";
+                using var reactivateCommand = new SqlCommand(reactivateProductSql, connection, transaction)
+                {
+                    CommandTimeout = BranchSqlCommandTimeoutSeconds
+                };
+                reactivateCommand.Parameters.AddWithValue("@productId", actualProductId);
+                reactivateCommand.Parameters.AddWithValue("@productName", requestedProductName);
+                reactivateCommand.Parameters.AddWithValue("@barcode", requestedBarcode);
+                reactivateCommand.Parameters.AddWithValue("@sellingPrice", sellingPrice);
+                reactivateCommand.Parameters.AddWithValue("@taxRate", taxRate);
+                await reactivateCommand.ExecuteNonQueryAsync();
             }
             else
             {

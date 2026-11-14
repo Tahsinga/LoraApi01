@@ -150,6 +150,9 @@ class ProductCatalog(models.Model):
 	pending_price_update = models.BooleanField(default=False)
 	pending_selling_price = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
 	tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+	# Name set on the website that the branch POS has not reported back yet; while it is
+	# set, a POS snapshot with the old name must not overwrite the web edit.
+	pending_product_name = models.CharField(max_length=250, blank=True, default='')
 	pending_product_creation = models.BooleanField(default=False)
 	pending_stock_adjustment = models.BooleanField(default=False)
 	pending_stock_quantity = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
@@ -169,10 +172,14 @@ class ProductCatalog(models.Model):
 
 
 class ProductDeletionRequest(models.Model):
-	STATUS_CHOICES = [('pending', 'Pending'), ('completed', 'Completed'), ('failed', 'Failed')]
+	STATUS_CHOICES = [('pending', 'Pending'), ('completed', 'Completed'), ('failed', 'Failed'), ('restored', 'Restored')]
 	branch = models.CharField(max_length=255)
 	product_id = models.IntegerField()
 	product_name = models.CharField(max_length=250, blank=True, default='')
+	product_code = models.CharField(max_length=50, blank=True, default='')
+	barcode = models.CharField(max_length=100, blank=True, default='')
+	selling_price = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+	tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
 	requested_by = models.CharField(max_length=255, blank=True, default='')
 	status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
 	error = models.TextField(blank=True, default='')

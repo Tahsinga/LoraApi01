@@ -86,6 +86,86 @@ class ProductDeletionTests(TestCase):
 		self.assertFalse(ProductCatalog.objects.filter(branch='BranchB', product_id=3001).exists())
 		self.assertTrue(ProductCatalog.objects.filter(branch='MAIN', product_id=3001).exists())
 
+	def test_restore_queues_product_reactivation_for_all_branches(self):
+		BranchHeartbeat.objects.create(
+			branch='Offline Branch',
+			last_seen=timezone.now() - timedelta(days=1),
+		)
+		deletions = []
+		for branch in ('BranchA', 'BranchB'):
+			deletion = ProductDeletionRequest.objects.create(
+				branch=branch,
+				product_id=3001,
+				product_name='Branch Product',
+				status='completed',
+			)
+			deletions.append(deletion)
+			complete = self.client.post(
+				'/api/products/delete/complete/',
+				data=json.dumps({
+					'request_id': deletion.pk,
+					'branch': branch,
+					'success': True,
+				}),
+				content_type='application/json',
+			)
+			self.assertEqual(complete.status_code, 200)
+
+		response = self.client.post(
+			'/api/products/restore/',
+			data=json.dumps({'product_id': 3001}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 202)
+		self.assertEqual(response.json()['branches'], ['BranchA', 'BranchB', 'Offline Branch'])
+		self.assertEqual(
+			set(ProductDeletionRequest.objects.values_list('status', flat=True)),
+			{'restored'},
+		)
+		self.assertEqual(
+			{product['product_id'] for product in self.client.get('/api/products/shared/').json()['products']},
+			{3001},
+		)
+		self.assertEqual(
+			{product['restore_status'] for product in self.client.get('/api/products/deleted/').json()['products']},
+			{'queued'},
+		)
+
+		for branch in ('BranchA', 'BranchB', 'Offline Branch'):
+			with self.subTest(branch=branch):
+				sync = self.client.get(f'/api/branch-sync/?branch={branch}').json()
+				self.assertEqual(len(sync['pending_product_creations']), 1)
+				self.assertEqual(sync['pending_product_creations'][0]['branch'], branch)
+				self.assertEqual(sync['pending_product_creations'][0]['product_id'], 3001)
+				self.assertEqual(sync['pending_product_creations'][0]['product_name'], 'Branch Product')
+				self.assertEqual(sync['pending_product_deletions'], [])
+				self.assertEqual(self.client.get(f'/api/products/?branch={branch}').json()['products'], [])
+
+				complete = self.client.post(
+					'/api/products/create/complete/',
+					data=json.dumps({
+						'branch': branch,
+						'product_id': 3001,
+						'actual_product_id': 3001,
+						'success': True,
+					}),
+					content_type='application/json',
+				)
+				self.assertEqual(complete.status_code, 200)
+				self.assertTrue(ProductCatalog.objects.get(branch=branch, product_id=3001).branch_confirmed)
+				self.assertEqual(len(self.client.get(f'/api/products/?branch={branch}').json()['products']), 1)
+				if branch == 'BranchA':
+					self.assertEqual(
+						{product['restore_status'] for product in self.client.get('/api/products/deleted/').json()['products']},
+						{'queued'},
+					)
+
+		self.assertEqual(
+			{product['restore_status'] for product in self.client.get('/api/products/deleted/').json()['products']},
+			{'restored'},
+		)
+
 	def test_deletion_targets_product_id_not_product_name(self):
 		ProductCatalog.objects.create(branch='BranchA', product_id=3002, product_name='Branch Product')
 		ProductCatalog.objects.create(branch='BranchB', product_id=3002, product_name='Branch Product')
@@ -250,6 +330,7 @@ class ProductDeletionTests(TestCase):
 		)
 		self.assertContains(page, 'Sync status')
 		self.assertContains(page, 'Movements')
+		self.assertContains(page, 'Restore everywhere')
 
 	def test_deleted_product_is_hidden_globally_while_its_movements_remain(self):
 		deletion = ProductDeletionRequest.objects.create(
@@ -363,6 +444,82 @@ class ProductTaxRateTests(TestCase):
 		)
 		self.assertEqual(response.status_code, 400)
 		self.assertEqual(str(ProductCatalog.objects.get(product_id=402).tax_rate), '0.00')
+
+
+class ProductRenameTests(TestCase):
+	def setUp(self):
+		admin = get_user_model().objects.create_superuser(username='product-rename-admin', password='ProductRenamePass4182!')
+		self.client.force_login(admin)
+		for branch in ['BranchA', 'BranchB', 'MAIN']:
+			ProductCatalog.objects.create(branch=branch, product_id=501, product_name='Old Name', available_quantity=4)
+		MainStockBalance.objects.create(product_id=501, product_name='Old Name', quantity=4)
+
+	def rename(self, name, product_id=501):
+		return self.client.post(
+			'/api/products/rename/',
+			data=json.dumps({'product_id': product_id, 'product_name': name}),
+			content_type='application/json',
+		)
+
+	def snapshot(self, name):
+		return self.client.post(
+			'/api/stock/snapshot/',
+			data=json.dumps({'branch': 'BranchA', 'products': [{
+				'product_id': 501, 'product_name': name, 'available_quantity': 4,
+			}]}),
+			content_type='application/json',
+		)
+
+	def test_rename_updates_every_branch_and_the_shared_pos_feed(self):
+		response = self.rename('  New   Name ')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()['old_name'], 'Old Name')
+		self.assertEqual(set(ProductCatalog.objects.values_list('product_name', flat=True)), {'New Name'})
+		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=501).pending_product_name, 'New Name')
+		self.assertEqual(ProductCatalog.objects.get(branch='MAIN', product_id=501).pending_product_name, '')
+		self.assertEqual(MainStockBalance.objects.get(product_id=501).product_name, 'New Name')
+		shared = self.client.get('/api/products/shared/').json()['products']
+		self.assertEqual([item['product_name'] for item in shared if item['product_id'] == 501], ['New Name'])
+
+	def test_pos_snapshot_with_old_name_does_not_undo_rename(self):
+		self.rename('New Name')
+
+		self.assertEqual(self.snapshot('Old Name').status_code, 200)
+		product = ProductCatalog.objects.get(branch='BranchA', product_id=501)
+		self.assertEqual(product.product_name, 'New Name')
+		self.assertEqual(product.pending_product_name, 'New Name')
+
+	def test_pos_snapshot_with_new_name_confirms_rename(self):
+		self.rename('New Name')
+
+		self.assertEqual(self.snapshot('new name').status_code, 200)
+		product = ProductCatalog.objects.get(branch='BranchA', product_id=501)
+		self.assertEqual(product.pending_product_name, '')
+		self.assertEqual(self.snapshot('Renamed In Quantum').status_code, 200)
+		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=501).product_name, 'Renamed In Quantum')
+
+	def test_main_catalog_publish_with_old_name_does_not_undo_rename(self):
+		self.rename('New Name')
+
+		response = self.client.post(
+			'/api/products/publish/',
+			data=json.dumps({'products': [{
+				'branch': 'BranchB', 'product_id': 501, 'product_name': 'Old Name', 'available_quantity': 4,
+			}]}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(ProductCatalog.objects.get(branch='BranchB', product_id=501).product_name, 'New Name')
+
+	def test_rename_rejects_blank_names_and_deleted_products(self):
+		self.assertEqual(self.rename('   ').status_code, 400)
+		self.assertEqual(self.rename('x' * 251).status_code, 400)
+		self.assertEqual(self.rename('New Name', product_id=999999).status_code, 404)
+		ProductDeletionRequest.objects.create(branch='BranchA', product_id=501, product_name='Old Name', status='completed')
+		self.assertEqual(self.rename('New Name').status_code, 409)
+		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=501).product_name, 'Old Name')
 
 
 class StockTransferTests(TestCase):

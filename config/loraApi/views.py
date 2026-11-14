@@ -123,7 +123,7 @@ def get_or_create_branch_catalog(branch, product_id, defaults):
 
 
 def deleted_product_id_subquery():
-    return ProductDeletionRequest.objects.order_by().values('product_id')
+    return ProductDeletionRequest.objects.exclude(status='restored').order_by().values('product_id')
 
 
 def retry_on_database_lock(view_func):
@@ -165,6 +165,10 @@ def parse_since_param(request):
 
 def whole_quantity(value):
     return value.quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+
+
+def names_match(first, second):
+    return ' '.join(str(first or '').split()).casefold() == ' '.join(str(second or '').split()).casefold()
 
 
 def pos_tax_rate_from_snapshot(item):
@@ -927,7 +931,7 @@ def submit_branch_stock_updates(request):
                 return JsonResponse({'status': 'error', 'message': f'{item["product_name"]} is no longer available at {item["branch"]}.'}, status=409)
             if ProductDeletionRequest.objects.filter(
                 product_id=item['product_id'],
-            ).exists():
+            ).exclude(status='restored').exists():
                 return JsonResponse({'status': 'error', 'message': f'{item["product_name"]} has a deletion request and cannot receive stock updates.'}, status=409)
             if StockTransfer.objects.filter(
                 branch__iexact=item['branch'],
@@ -1074,7 +1078,9 @@ def stock_summary(request):
         removed_product_ids = []
     else:
         changed_since = since - timedelta(seconds=3)
-        removed_product_ids = set(ProductDeletionRequest.objects.values_list('product_id', flat=True))
+        removed_product_ids = set(
+            ProductDeletionRequest.objects.exclude(status='restored').values_list('product_id', flat=True)
+        )
         catalog_product_ids = catalog.values_list('product_id', flat=True)
         changed_product_ids = set(catalog.filter(
             updated_at__gte=changed_since,
@@ -1942,7 +1948,7 @@ def publish_branch_stock_snapshot(request):
     with transaction.atomic():
         deleted_product_ids = set(ProductDeletionRequest.objects.filter(
             product_id__in=snapshot_ids,
-        ).values_list('product_id', flat=True))
+        ).exclude(status='restored').values_list('product_id', flat=True))
         existing_products = {
             product.product_id: product
             for product in ProductCatalog.objects.select_for_update().filter(
@@ -1991,7 +1997,14 @@ def publish_branch_stock_snapshot(request):
                 previous_available_quantity + received_delta - sold_delta != snapshot['available_quantity']
             )
             changed_fields = []
-            for field in ('product_name', 'product_code', 'barcode', 'selling_price'):
+            snapshot_fields = ('product_name', 'product_code', 'barcode', 'selling_price')
+            if product.pending_product_name:
+                # A name edited on the website wins until the POS reports it back.
+                snapshot_fields = snapshot_fields[1:]
+                if names_match(snapshot['product_name'], product.pending_product_name):
+                    product.pending_product_name = ''
+                    changed_fields.append('pending_product_name')
+            for field in snapshot_fields:
                 if getattr(product, field) != snapshot[field]:
                     setattr(product, field, snapshot[field])
                     changed_fields.append(field)
@@ -2205,6 +2218,60 @@ def update_product_tax_rate(request):
         'product_name': catalog.product_name,
         'tax_rate': str(tax_rate),
         'branch_count': branch_count,
+    })
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
+@retry_on_database_lock
+def rename_product(request):
+    """Rename a product everywhere; branches pick the new name up from the shared catalog."""
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+
+    try:
+        payload = json.loads(request.body or '{}')
+        if not isinstance(payload, dict):
+            raise ValueError
+        product_id = int(payload.get('product_id') or 0)
+        product_name = ' '.join(str(payload.get('product_name', '')).split())
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return JsonResponse({'status': 'error', 'message': 'A product and a new name are required.'}, status=400)
+
+    max_length = ProductCatalog._meta.get_field('product_name').max_length
+    if product_id <= 0 or not product_name:
+        return JsonResponse({'status': 'error', 'message': 'Enter the new product name.'}, status=400)
+    if len(product_name) > max_length:
+        return JsonResponse({'status': 'error', 'message': f'Product names can be at most {max_length} characters.'}, status=400)
+
+    if ProductDeletionRequest.objects.filter(product_id=product_id).exclude(status='restored').exists():
+        return JsonResponse({'status': 'error', 'message': 'This product is deleted. Restore it before renaming it.'}, status=409)
+
+    with transaction.atomic():
+        products = list(ProductCatalog.objects.select_for_update().filter(product_id=product_id))
+        if not products:
+            return JsonResponse({'status': 'error', 'message': 'The product was not found.'}, status=404)
+
+        old_name = next(
+            (item.product_name for item in products if item.branch.casefold() != 'main'),
+            products[0].product_name,
+        )
+        now = timezone.now()
+        for item in products:
+            item.product_name = product_name
+            # MAIN is not a POS branch, so it never reports the name back.
+            item.pending_product_name = '' if item.branch.casefold() == 'main' else product_name
+            item.updated_at = now
+        ProductCatalog.objects.bulk_update(products, ['product_name', 'pending_product_name', 'updated_at'])
+        MainStockBalance.objects.filter(product_id=product_id).update(product_name=product_name)
+
+    invalidate_product_catalog_cache()
+    return JsonResponse({
+        'status': 'ok',
+        'product_id': product_id,
+        'old_name': old_name,
+        'product_name': product_name,
+        'branch_count': sum(1 for item in products if item.branch.casefold() != 'main'),
     })
 
 
@@ -2441,6 +2508,10 @@ def delete_branch_product(request):
                 branch=target_branch,
                 product_id=product_id,
                 product_name=branch_product.product_name if branch_product else product.product_name,
+                product_code=branch_product.product_code if branch_product else product.product_code,
+                barcode=branch_product.barcode if branch_product else product.barcode,
+                selling_price=branch_product.selling_price if branch_product else product.selling_price,
+                tax_rate=branch_product.tax_rate if branch_product else product.tax_rate,
                 requested_by=request.user.get_username(),
             ))
         if not any(item.branch.casefold() == product.branch.casefold() for item in deletions):
@@ -2448,6 +2519,10 @@ def delete_branch_product(request):
                 branch=product.branch,
                 product_id=product_id,
                 product_name=product.product_name,
+                product_code=product.product_code,
+                barcode=product.barcode,
+                selling_price=product.selling_price,
+                tax_rate=product.tax_rate,
                 requested_by=request.user.get_username(),
             ))
         ProductDeletionRequest.objects.bulk_create(deletions)
@@ -2583,21 +2658,171 @@ def deleted_products(request):
     if request.method != 'GET':
         return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
 
-    deletions = ProductDeletionRequest.objects.order_by('-updated_at')[:500]
+    deletions = list(ProductDeletionRequest.objects.order_by('-updated_at')[:500])
+    branch_products = {}
+    for product in ProductCatalog.objects.filter(
+        product_id__in={item.product_id for item in deletions},
+    ).exclude(branch__iexact='MAIN'):
+        branch_products.setdefault(product.product_id, []).append(product)
+    restore_status_by_product = {}
+    for product_id in {item.product_id for item in deletions}:
+        product_deletions = [item for item in deletions if item.product_id == product_id]
+        branch_catalogs = branch_products.get(product_id, [])
+        if any(product.pending_product_creation for product in branch_catalogs):
+            restore_status_by_product[product_id] = 'queued'
+        elif any(item.status == 'restored' for item in product_deletions) and branch_catalogs and all(
+            product.branch_confirmed for product in branch_catalogs
+        ):
+            restore_status_by_product[product_id] = 'restored'
+        elif any(item.status == 'restored' for item in product_deletions):
+            restore_status_by_product[product_id] = 'waiting'
+        else:
+            restore_status_by_product[product_id] = 'not_restored'
+    products = []
+    for item in deletions:
+        products.append({
+            'branch': item.branch,
+            'product_id': item.product_id,
+            'product_name': item.product_name,
+            'restore_status': restore_status_by_product[item.product_id],
+            'deleted_by': item.requested_by,
+            'deleted_at': item.updated_at.isoformat(),
+            'status': item.status,
+        })
     return JsonResponse({
         'status': 'ok',
-        'products': [
-            {
-                'branch': item.branch,
-                'product_id': item.product_id,
-                'product_name': item.product_name,
-                'deleted_by': item.requested_by,
-                'deleted_at': item.updated_at.isoformat(),
-                'status': item.status,
-            }
-            for item in deletions
-        ],
+        'products': products,
     })
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
+@retry_on_database_lock
+def restore_deleted_product(request):
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+
+    try:
+        payload = json.loads(request.body or '{}')
+        if not isinstance(payload, dict):
+            raise ValueError
+        product_id = int(payload.get('product_id') or 0)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return JsonResponse({'status': 'error', 'message': 'A valid product ID is required.'}, status=400)
+
+    if product_id <= 0:
+        return JsonResponse({'status': 'error', 'message': 'A valid product ID is required.'}, status=400)
+
+    with transaction.atomic():
+        deletions = list(ProductDeletionRequest.objects.select_for_update().filter(product_id=product_id))
+        if not deletions:
+            return JsonResponse({'status': 'error', 'message': 'No deletion history was found for this product.'}, status=404)
+
+        source = ProductCatalog.objects.filter(
+            branch__iexact='MAIN',
+            product_id=product_id,
+        ).first()
+        if source is None:
+            source = ProductCatalog.objects.filter(product_id=product_id).order_by('-updated_at', '-pk').first()
+
+        latest_deletion = max(deletions, key=lambda item: item.updated_at)
+        product_name = (source.product_name if source else '') or latest_deletion.product_name
+        if not product_name.strip():
+            return JsonResponse({'status': 'error', 'message': 'Product details are unavailable; the product cannot be restored.'}, status=409)
+
+        product_code = (source.product_code if source else '') or latest_deletion.product_code
+        barcode = (source.barcode if source else '') or latest_deletion.barcode
+        selling_price = source.selling_price if source else latest_deletion.selling_price
+        tax_rate = source.tax_rate if source else latest_deletion.tax_rate
+
+        branch_targets = {item.branch for item in deletions}
+        branch_targets.update(
+            ProductCatalog.objects.exclude(branch__iexact='MAIN')
+            .filter(product_id=product_id)
+            .values_list('branch', flat=True)
+        )
+        if BRANCH_HEARTBEAT_DB_AVAILABLE:
+            try:
+                branch_targets.update(BranchHeartbeat.objects.values_list('branch', flat=True))
+            except ProgrammingError:
+                branch_targets.update(item['name'] for item in CONNECTED_BRANCHES.values())
+        else:
+            branch_targets.update(item['name'] for item in CONNECTED_BRANCHES.values())
+        branch_targets.update(StockMovement.objects.exclude(branch='').values_list('branch', flat=True).distinct())
+        branch_targets.update(StockTransfer.objects.exclude(branch='').values_list('branch', flat=True).distinct())
+        branches_by_key = {}
+        for target in branch_targets:
+            target = str(target).strip()
+            if target and target.casefold() not in {'main', 'unknown'}:
+                branches_by_key.setdefault(target.casefold(), target)
+        branches = sorted(branches_by_key.values(), key=str.casefold)
+
+        ProductCatalog.objects.update_or_create(
+            branch='MAIN',
+            product_id=product_id,
+            defaults={
+                'product_name': product_name,
+                'product_code': product_code,
+                'barcode': barcode,
+                'selling_price': selling_price,
+                'tax_rate': tax_rate,
+                'branch_confirmed': True,
+                'pending_product_creation': False,
+            },
+        )
+        MainStockBalance.objects.get_or_create(
+            product_id=product_id,
+            defaults={'product_name': product_name, 'quantity': 0},
+        )
+
+        for branch in branches:
+            catalog, _ = ProductCatalog.objects.select_for_update().get_or_create(
+                branch=branch,
+                product_id=product_id,
+                defaults={
+                    'product_name': product_name,
+                    'product_code': product_code,
+                    'barcode': barcode,
+                    'available_quantity': 0,
+                    'selling_price': selling_price,
+                    'tax_rate': tax_rate,
+                    'branch_confirmed': False,
+                    'pending_product_creation': True,
+                    'pending_stock_quantity': 0,
+                },
+            )
+            catalog.product_name = product_name
+            catalog.product_code = product_code
+            catalog.barcode = barcode
+            catalog.selling_price = selling_price
+            catalog.tax_rate = tax_rate
+            catalog.branch_confirmed = False
+            catalog.pending_product_creation = True
+            catalog.pending_stock_quantity = 0
+            catalog.save(update_fields=[
+                'product_name', 'product_code', 'barcode', 'selling_price', 'tax_rate',
+                'branch_confirmed', 'pending_product_creation', 'pending_stock_quantity', 'updated_at',
+            ])
+
+        ProductDeletionRequest.objects.filter(product_id=product_id).update(
+            status='restored',
+            error='',
+            product_name=product_name,
+            product_code=product_code,
+            barcode=barcode,
+            selling_price=selling_price,
+            tax_rate=tax_rate,
+            updated_at=timezone.now(),
+        )
+
+    invalidate_product_catalog_cache()
+    return JsonResponse({
+        'status': 'accepted',
+        'product_id': product_id,
+        'product_name': product_name,
+        'branches': branches,
+        'queued_branches': len(branches),
+    }, status=202)
 
 
 @csrf_exempt
@@ -2767,7 +2992,7 @@ def publish_product_catalog(request):
             updated_at=timezone.now(),
         ))
 
-    deleted_ids = set(ProductDeletionRequest.objects.filter(
+    deleted_ids = set(ProductDeletionRequest.objects.exclude(status='restored').filter(
         product_id__in={row.product_id for row in catalog_rows},
     ).values_list('product_id', flat=True))
     catalog_rows = [row for row in catalog_rows if row.product_id not in deleted_ids]
@@ -2784,16 +3009,25 @@ def publish_product_catalog(request):
         for row in ProductCatalog.objects.filter(
             product_id__in={row.product_id for row in catalog_rows},
             branch__in={row.branch for row in catalog_rows},
-        ).values('branch', 'product_id', 'branch_confirmed', 'pending_price_update', 'pending_product_creation', *compare_fields):
+        ).values('branch', 'product_id', 'branch_confirmed', 'pending_price_update', 'pending_product_creation', 'pending_product_name', *compare_fields):
             existing_state[(row['branch'], row['product_id'])] = row
         changed_rows = []
         for row in catalog_rows:
             current = existing_state.get((row.branch, row.product_id))
+            pending_name = current['pending_product_name'] if current is not None else ''
+            if pending_name:
+                # A name edited on the website wins until the POS reports it back.
+                if names_match(row.product_name, pending_name):
+                    row.pending_product_name = ''
+                else:
+                    row.product_name = pending_name
+                    row.pending_product_name = pending_name
             if (
                 current is not None
                 and current['branch_confirmed']
                 and not current['pending_price_update']
                 and not current['pending_product_creation']
+                and current['pending_product_name'] == row.pending_product_name
                 and all(current[field] == getattr(row, field) for field in compare_fields)
             ):
                 continue
@@ -2811,7 +3045,7 @@ def publish_product_catalog(request):
                     update_fields=[
                         'product_name', 'product_code', 'barcode', 'available_quantity',
                         'selling_price', 'branch_confirmed', 'tax_rate', 'pending_price_update',
-                        'pending_selling_price', 'pending_product_creation', 'updated_at',
+                        'pending_selling_price', 'pending_product_creation', 'pending_product_name', 'updated_at',
                     ],
                     unique_fields=['branch', 'product_id'],
                     batch_size=500,
