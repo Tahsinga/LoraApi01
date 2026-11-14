@@ -11,6 +11,7 @@ from loraApi.models import BranchHeartbeat, DeletedProductSighting, DeletionReco
 import json
 
 
+from django.core.cache import cache
 class ProductDeletionTests(TestCase):
 	def setUp(self):
 		self.password = 'ProductDeletePass4182!'
@@ -553,17 +554,36 @@ class DeletedProductStillActiveTests(TestCase):
 		self.assertEqual(active[0]['product_id'], 601)
 		self.assertEqual([item['branch'] for item in active[0]['branches']], ['BranchB'])
 		self.assertEqual(active[0]['branches'][0]['available_quantity'], '5')
-		self.assertFalse(active[0]['branches'][0]['deletion_pending'])
+		# Queued again automatically - nobody has to press "Delete at these branches".
+		self.assertTrue(active[0]['branches'][0]['deletion_pending'])
+		self.assertTrue(active[0]['branches'][0]['auto_sync'])
+		auto = ProductDeletionRequest.objects.get(branch='BranchB', product_id=601)
+		self.assertEqual(auto.status, 'pending')
+		self.assertEqual(auto.requested_by, 'auto-sync')
+		self.assertEqual(auto.product_code, '602')
+		self.assertEqual(ProductDeletionRequest.objects.filter(branch='BranchB').count(), 1)
 
 	def test_main_snapshot_is_not_recorded(self):
 		self.snapshot('MAIN')
 
 		self.assertEqual(self.still_active(), [])
 
-	def test_delete_again_requires_password_and_queues_only_remaining_branches(self):
+	def fail_auto_deletion(self, branch):
+		deletion = ProductDeletionRequest.objects.get(branch=branch, product_id=601, status='pending')
+		return self.client.post(
+			'/api/products/delete/complete/',
+			data=json.dumps({'request_id': deletion.pk, 'branch': branch, 'success': False, 'error': 'POS database locked'}),
+			content_type='application/json',
+		)
+
+	def test_delete_again_requires_password_and_retries_only_failed_branches(self):
 		self.snapshot('BranchB')
 		self.snapshot('BranchC')
-		ProductDeletionRequest.objects.create(branch='BranchC', product_id=601, product_name='Ghost Product', status='pending')
+		self.fail_auto_deletion('BranchB')
+
+		branch_b = next(item for item in self.still_active()[0]['branches'] if item['branch'] == 'BranchB')
+		self.assertTrue(branch_b['deletion_failed'])
+		self.assertEqual(branch_b['error'], 'POS database locked')
 
 		wrong = self.client.post(
 			'/api/products/deleted/delete-again/',
@@ -579,12 +599,81 @@ class DeletedProductStillActiveTests(TestCase):
 		)
 		self.assertEqual(response.status_code, 202)
 		self.assertEqual(response.json()['branches'], ['BranchB'])
-		queued = ProductDeletionRequest.objects.get(branch='BranchB', product_id=601)
-		self.assertEqual(queued.status, 'pending')
+		queued = ProductDeletionRequest.objects.filter(branch='BranchB', product_id=601, status='pending').get()
+		self.assertEqual(queued.requested_by, 'still-active-admin')
 		self.assertEqual(queued.product_code, '602')
 		sync = self.client.get('/api/branch-sync/?branch=BranchB').json()
 		self.assertEqual([item['product_id'] for item in sync['pending_product_deletions']], [601])
 		self.assertTrue(all(branch['deletion_pending'] for branch in self.still_active()[0]['branches']))
+
+	def test_failed_branch_is_not_retried_automatically(self):
+		self.snapshot('BranchB')
+		self.fail_auto_deletion('BranchB')
+
+		self.snapshot('BranchB')
+
+		self.assertFalse(ProductDeletionRequest.objects.filter(branch='BranchB', status='pending').exists())
+
+	def test_branch_still_reporting_after_completion_is_retried_after_cooldown(self):
+		self.snapshot('BranchB')
+		deletion = ProductDeletionRequest.objects.get(branch='BranchB', product_id=601, status='pending')
+		self.client.post(
+			'/api/products/delete/complete/',
+			data=json.dumps({'request_id': deletion.pk, 'branch': 'BranchB', 'success': True}),
+			content_type='application/json',
+		)
+
+		# A snapshot taken before the POS applied it: no immediate duplicate.
+		self.snapshot('BranchB')
+		self.assertFalse(ProductDeletionRequest.objects.filter(branch='BranchB', status='pending').exists())
+
+		# Still active 30+ minutes later: send the deletion again.
+		ProductDeletionRequest.objects.filter(pk=deletion.pk).update(updated_at=timezone.now() - timedelta(minutes=31))
+		self.snapshot('BranchB')
+		self.assertEqual(ProductDeletionRequest.objects.filter(branch='BranchB', status='pending').count(), 1)
+
+	def test_automatic_retries_stop_after_three_and_ask_for_a_person(self):
+		for attempt in range(4):
+			self.snapshot('BranchB')
+			deletion = ProductDeletionRequest.objects.filter(branch='BranchB', product_id=601, status='pending').first()
+			if deletion is None:
+				break
+			self.client.post(
+				'/api/products/delete/complete/',
+				data=json.dumps({'request_id': deletion.pk, 'branch': 'BranchB', 'success': True}),
+				content_type='application/json',
+			)
+			ProductDeletionRequest.objects.filter(pk=deletion.pk).update(updated_at=timezone.now() - timedelta(minutes=31))
+
+		self.snapshot('BranchB')
+
+		self.assertEqual(ProductDeletionRequest.objects.filter(branch='BranchB', requested_by='auto-sync').count(), 3)
+		self.assertFalse(ProductDeletionRequest.objects.filter(branch='BranchB', status='pending').exists())
+		self.assertTrue(self.still_active()[0]['branches'][0]['auto_gave_up'])
+
+	def test_branch_with_running_stock_transfer_waits(self):
+		StockTransfer.objects.create(transfer_id='busy-601', branch='BranchB', product_id=601, quantity=1, status='pending')
+
+		self.snapshot('BranchB')
+
+		self.assertFalse(ProductDeletionRequest.objects.filter(branch='BranchB').exists())
+
+	def test_deleted_page_catches_up_older_sightings(self):
+		# Recorded before automatic re-deletion existed.
+		DeletedProductSighting.objects.create(branch='BranchD', product_id=601, product_name='Ghost Product', available_quantity=3, last_seen=timezone.now())
+		cache.clear()
+
+		active = self.still_active()
+
+		self.assertEqual(ProductDeletionRequest.objects.get(branch='BranchD', product_id=601).requested_by, 'auto-sync')
+		self.assertTrue(active[0]['branches'][0]['deletion_pending'])
+
+	def test_restored_product_is_not_deleted_again(self):
+		self.client.post('/api/products/restore/', data=json.dumps({'product_id': 601}), content_type='application/json')
+
+		self.snapshot('BranchB')
+
+		self.assertFalse(ProductDeletionRequest.objects.filter(branch='BranchB', status='pending').exists())
 
 	def test_branch_completing_the_deletion_clears_it(self):
 		self.snapshot('BranchB')
@@ -619,6 +708,8 @@ class DeletedProductStillActiveTests(TestCase):
 
 		self.assertContains(page, 'Still on branch POS')
 		self.assertContains(page, 'Delete at these branches')
+		self.assertContains(page, 'Search deleted products')
+		self.assertContains(page, 'Deleting automatically')
 
 
 class StockTransferTests(TestCase):

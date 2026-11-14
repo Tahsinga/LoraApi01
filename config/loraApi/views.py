@@ -126,6 +126,107 @@ def deleted_product_id_subquery():
     return ProductDeletionRequest.objects.exclude(status='restored').order_by().values('product_id')
 
 
+AUTO_DELETE_USER = 'auto-sync'
+AUTO_DELETE_COOLDOWN = timedelta(minutes=30)
+AUTO_DELETE_MAX_ATTEMPTS = 3
+AUTO_DELETE_SWEEP_KEY = 'lora:auto-delete-sightings'
+
+
+def auto_delete_still_active_products(sightings=None, now=None):
+    """Re-queue the deletion, automatically, where a branch POS still has a deleted product.
+
+    A product deleted on the website is deleted at every branch. If a branch's
+    stock snapshot still reports it as active (a DeletedProductSighting), queue
+    the deletion for that branch again instead of waiting for someone to press
+    "Delete at these branches". Skipped when:
+      * a deletion is already pending there;
+      * the branch's last deletion FAILED (needs a person: the page offers the
+        manual button and shows the error);
+      * the branch's last deletion changed in the last 30 minutes (its POS may
+        not have applied it yet - avoids queueing the same deletion repeatedly);
+      * a stock transfer for the product is still running at that branch;
+      * it was already sent automatically 3 times since anyone last deleted it
+        by hand (the POS keeps reporting it: needs a person, not a loop).
+    Returns the (branch, product_id) pairs that were queued.
+    """
+    now = now or timezone.now()
+    if sightings is None:
+        sightings = DeletedProductSighting.objects.filter(product_id__in=deleted_product_id_subquery())
+    sightings = list(sightings)
+    if not sightings:
+        return []
+
+    product_ids = {item.product_id for item in sightings}
+    requests_by_product = {}
+    for item in ProductDeletionRequest.objects.filter(product_id__in=product_ids).order_by('-updated_at', '-pk'):
+        requests_by_product.setdefault(item.product_id, []).append(item)
+    busy = {
+        (branch.casefold(), product_id)
+        for branch, product_id in StockTransfer.objects.filter(
+            product_id__in=product_ids,
+            status__in=['pending', 'processing'],
+        ).values_list('branch', 'product_id')
+    }
+
+    queued = []
+    for sighting in sightings:
+        active = [item for item in requests_by_product.get(sighting.product_id, []) if item.status != 'restored']
+        if not active:
+            continue  # restored, or never deleted
+        key = (sighting.branch.casefold(), sighting.product_id)
+        if key in busy:
+            continue
+        at_branch = [item for item in active if item.branch.casefold() == key[0]]
+        if any(item.status == 'pending' for item in at_branch):
+            continue
+        latest = at_branch[0] if at_branch else None
+        if latest is not None and (latest.status == 'failed' or latest.updated_at > now - AUTO_DELETE_COOLDOWN):
+            continue
+        if auto_delete_attempts(at_branch) >= AUTO_DELETE_MAX_ATTEMPTS:
+            continue
+
+        def first_known(field):
+            for item in active:
+                value = getattr(item, field)
+                if value not in ('', None) and value != 0:
+                    return value
+            return getattr(active[0], field)
+
+        deletion = ProductDeletionRequest.objects.create(
+            branch=sighting.branch,
+            product_id=sighting.product_id,
+            product_name=sighting.product_name or first_known('product_name'),
+            product_code=first_known('product_code'),
+            barcode=first_known('barcode'),
+            selling_price=first_known('selling_price'),
+            tax_rate=first_known('tax_rate'),
+            requested_by=AUTO_DELETE_USER,
+        )
+        requests_by_product.setdefault(sighting.product_id, []).insert(0, deletion)
+        queued.append((sighting.branch, sighting.product_id))
+    return queued
+
+
+def auto_delete_attempts(requests_at_branch):
+    """Automatic deletions sent to one branch since the last one a person made (newest first)."""
+    count = 0
+    for item in requests_at_branch:
+        if item.requested_by != AUTO_DELETE_USER:
+            break
+        count += 1
+    return count
+
+
+def auto_delete_still_active_products_throttled():
+    """Catch-up sweep over every sighting, at most once a minute."""
+    if cache.add(AUTO_DELETE_SWEEP_KEY, 1, 60):
+        try:
+            with transaction.atomic():
+                auto_delete_still_active_products()
+        except (OperationalError, ProgrammingError):
+            cache.delete(AUTO_DELETE_SWEEP_KEY)
+
+
 def retry_on_database_lock(view_func):
     @wraps(view_func)
     def wrapped_view(request, *args, **kwargs):
@@ -2080,6 +2181,13 @@ def publish_branch_stock_snapshot(request):
                 unique_fields=['branch', 'product_id'],
                 batch_size=500,
             )
+            auto_delete_still_active_products(
+                DeletedProductSighting.objects.filter(
+                    branch=branch,
+                    product_id__in=[item.product_id for item in sightings_to_save],
+                ),
+                now=now,
+            )
 
     return JsonResponse({
         'status': 'ok',
@@ -2681,6 +2789,8 @@ def deleted_products(request):
     if request.method != 'GET':
         return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
 
+    auto_delete_still_active_products_throttled()
+
     deletions = list(ProductDeletionRequest.objects.order_by('-updated_at')[:500])
     branch_products = {}
     for product in ProductCatalog.objects.filter(
@@ -2732,6 +2842,14 @@ def deleted_products_still_active():
             status='pending',
         ).values_list('branch', 'product_id')
     }
+    latest_at_branch = {}
+    requests_at_branch = {}
+    for item in ProductDeletionRequest.objects.filter(
+        product_id__in={item.product_id for item in sightings},
+    ).exclude(status='restored').order_by('-updated_at', '-pk'):
+        key = (item.branch.casefold(), item.product_id)
+        latest_at_branch.setdefault(key, item)
+        requests_at_branch.setdefault(key, []).append(item)
     grouped = {}
     for sighting in sorted(sightings, key=lambda item: (item.product_name.casefold(), item.product_id, item.branch.casefold())):
         entry = grouped.setdefault(sighting.product_id, {
@@ -2744,6 +2862,10 @@ def deleted_products_still_active():
             'available_quantity': str(sighting.available_quantity),
             'last_seen': sighting.last_seen.isoformat(),
             'deletion_pending': (sighting.branch.casefold(), sighting.product_id) in pending,
+            'deletion_failed': getattr(latest_at_branch.get((sighting.branch.casefold(), sighting.product_id)), 'status', '') == 'failed',
+            'error': getattr(latest_at_branch.get((sighting.branch.casefold(), sighting.product_id)), 'error', ''),
+            'auto_sync': getattr(latest_at_branch.get((sighting.branch.casefold(), sighting.product_id)), 'requested_by', '') == AUTO_DELETE_USER,
+            'auto_gave_up': auto_delete_attempts(requests_at_branch.get((sighting.branch.casefold(), sighting.product_id), [])) >= AUTO_DELETE_MAX_ATTEMPTS,
         })
     return list(grouped.values())
 

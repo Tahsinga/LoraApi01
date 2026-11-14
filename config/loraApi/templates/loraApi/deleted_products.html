@@ -5,78 +5,144 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Lora | Deleted products</title>
   <style>
-    :root { --ink:#182326; --muted:#6d7b7d; --line:#dbe3df; --paper:#f5f7f4; --white:#fff; --teal:#087f78; --teal-dark:#075d5a; --coral:#d95f4d; }
+    :root { --ink:#182326; --muted:#6d7b7d; --line:#dbe3df; --paper:#f5f7f4; --white:#fff; --teal:#087f78; --teal-dark:#075d5a; --coral:#d95f4d; --green:#24704a; --green-soft:#e4f3ea; --amber:#8a5a00; --amber-soft:#fdf3df; --red:#a53b2e; --red-soft:#fbe9e6; --grey-soft:#eef2f0; }
     * { box-sizing:border-box; }
-    body { margin:0; color:var(--ink); background:radial-gradient(circle at 90% 0, #dceee7 0, transparent 34%), linear-gradient(135deg, #f8faf7 0, #edf3ef 100%); font-family:Georgia, 'Times New Roman', serif; }
-    header { display:flex; justify-content:space-between; align-items:end; gap:24px; max-width:980px; margin:auto; padding:42px 28px 30px; }
+    body { margin:0; min-height:100vh; color:var(--ink); background:radial-gradient(circle at 90% 0, #dceee7 0, transparent 34%), linear-gradient(135deg, #f8faf7 0, #edf3ef 100%); font-family:Georgia, 'Times New Roman', serif; }
+    .wrap { width:min(1440px, 100%); margin:auto; padding:0 32px; }
+    header { display:flex; justify-content:space-between; align-items:end; gap:24px; padding-top:40px; padding-bottom:26px; }
     .eyebrow { margin:0 0 8px; color:var(--teal); font:700 12px/1.2 Arial,sans-serif; letter-spacing:2px; text-transform:uppercase; }
     h1 { margin:0; font-size:42px; line-height:1; font-weight:500; }
-    nav { display:flex; gap:18px; flex-wrap:wrap; }
+    .lede { max-width:640px; margin:10px 0 0; color:var(--muted); font:14px/1.5 Arial,sans-serif; }
+    nav { display:flex; gap:18px; flex-wrap:wrap; justify-content:flex-end; }
     a { color:var(--teal-dark); font:700 12px Arial,sans-serif; letter-spacing:1px; text-decoration:none; text-transform:uppercase; }
     a:hover { color:var(--coral); }
-    main { max-width:980px; margin:auto; padding:0 28px 54px; }
-    .panel { padding:26px; background:var(--white); border:1px solid var(--line); box-shadow:0 12px 35px rgba(28,62,54,.06); }
-    .toolbar { display:flex; justify-content:space-between; align-items:end; gap:20px; margin-bottom:18px; }
-    .toolbar p { margin:0; color:var(--muted); font:14px/1.5 Arial,sans-serif; }
-    label { display:grid; gap:7px; min-width:min(100%, 300px); color:#435153; font:700 11px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; }
-    input { width:100%; height:44px; padding:11px 13px; color:var(--ink); background:#fbfcfa; border:1px solid #cbd7d2; border-radius:2px; font:16px Georgia,serif; }
-    input:focus { border-color:var(--teal); outline:3px solid #d9efeb; }
-    .table-wrap { overflow-x:auto; border:1px solid var(--line); }
-    table { width:100%; min-width:680px; border-collapse:collapse; }
-    th { padding:11px 13px; color:var(--muted); border-bottom:1px solid var(--line); text-align:left; font:700 10px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; }
-    td { padding:13px; border-bottom:1px solid var(--line); font:14px Arial,sans-serif; }
+    nav a[aria-current="page"] { color:var(--ink); border-bottom:2px solid var(--teal); padding-bottom:3px; }
+    main { padding-bottom:54px; }
+
+    .stats { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:14px; margin-bottom:18px; }
+    .stat { all:unset; box-sizing:border-box; display:grid; gap:6px; padding:18px 20px; cursor:pointer; background:var(--white); border:1px solid var(--line); border-top:3px solid var(--line); box-shadow:0 8px 24px rgba(28,62,54,.05); transition:transform .15s, border-color .15s; }
+    .stat:hover { transform:translateY(-1px); }
+    .stat:focus-visible { outline:3px solid #d9efeb; }
+    .stat[aria-pressed="true"] { border-color:var(--teal); border-top-color:var(--teal); }
+    .stat .label { color:var(--muted); font:700 10.5px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; }
+    .stat .value { font-size:34px; line-height:1; }
+    .stat.s-done { border-top-color:#2f8f5b; } .stat.s-syncing { border-top-color:#d99a22; } .stat.s-active { border-top-color:var(--coral); }
+
+    .search-bar { position:relative; margin-bottom:18px; }
+    .search-bar svg { position:absolute; left:18px; top:50%; width:20px; height:20px; transform:translateY(-50%); fill:none; stroke:var(--muted); stroke-width:2; pointer-events:none; }
+    .search-bar input { width:100%; height:54px; padding:12px 52px; color:var(--ink); background:var(--white); border:1px solid #cbd7d2; border-radius:2px; box-shadow:0 8px 24px rgba(28,62,54,.05); font:16px Arial,sans-serif; }
+    .search-bar input:focus { border-color:var(--teal); outline:3px solid #d9efeb; }
+    .search-bar .clear { position:absolute; right:10px; top:50%; display:none; width:34px; height:34px; transform:translateY(-50%); color:var(--muted); background:none; border:0; cursor:pointer; font-size:22px; }
+    .search-bar.has-value .clear { display:block; }
+
+    .panel { margin-bottom:22px; background:var(--white); border:1px solid var(--line); box-shadow:0 12px 35px rgba(28,62,54,.06); }
+    .panel-head { display:flex; justify-content:space-between; align-items:end; gap:16px; flex-wrap:wrap; padding:20px 22px 16px; border-bottom:1px solid var(--line); }
+    .panel-head h2 { margin:0; font-size:24px; font-weight:500; }
+    .panel-head p { margin:6px 0 0; color:var(--muted); font:13.5px/1.5 Arial,sans-serif; max-width:760px; }
+    .panel-meta { display:flex; align-items:center; gap:12px; color:var(--muted); font:13px Arial,sans-serif; }
+    .refresh { height:38px; padding:0 14px; color:var(--teal-dark); background:var(--white); border:1px solid #cbd7d2; cursor:pointer; font:700 11px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; }
+    .refresh:hover { border-color:var(--teal); }
+    .active-panel { border-left:4px solid var(--coral); }
+
+    .table-wrap { overflow-x:auto; }
+    table { width:100%; min-width:1000px; border-collapse:collapse; }
+    th { padding:12px 22px; color:var(--muted); background:#fafbf9; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; font:700 10.5px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; }
+    td { padding:16px 22px; border-bottom:1px solid var(--line); vertical-align:top; font:14px/1.45 Arial,sans-serif; }
+    tbody tr:hover { background:#fbfcfa; }
     tr:last-child td { border-bottom:0; }
-    .movement-link { display:inline-block; padding:9px 12px; color:#fff; background:var(--teal); border-radius:2px; font:700 10px Arial,sans-serif; letter-spacing:.7px; text-decoration:none; text-transform:uppercase; white-space:nowrap; }
-    .movement-link:hover { color:#fff; background:var(--teal-dark); }
-    .restore-button { padding:9px 12px; color:#fff; background:var(--coral); border:0; border-radius:2px; cursor:pointer; font:700 10px Arial,sans-serif; letter-spacing:.5px; text-transform:uppercase; white-space:nowrap; }
-    .restore-button:hover { background:#bd4e3e; }
-    .restore-button:disabled { opacity:.65; cursor:wait; }
-    .status-pending { color:#8a5a00; font-weight:700; }
-    .status-failed { color:#a53b2e; font-weight:700; }
-    .empty { padding:24px 13px; color:var(--muted); font:14px Arial,sans-serif; }
-    .error { color:#a53b2e; }
-    .active-panel { margin-bottom:22px; border-left:4px solid var(--coral); }
-    .active-panel h2 { margin:0 0 6px; font-size:24px; font-weight:500; }
-    .active-panel .intro { margin:0 0 16px; color:var(--muted); font:14px/1.5 Arial,sans-serif; }
-    .branch-list { display:grid; gap:4px; margin:0; padding:0; list-style:none; }
+    .product-name { font:17px/1.3 Georgia,serif; }
+    .product-id { margin-top:3px; color:var(--muted); font:12px 'Courier New',monospace; }
+    .muted { color:var(--muted); font-size:12.5px; }
+
+    .chips { display:flex; flex-wrap:wrap; gap:6px; }
+    .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; white-space:nowrap; text-transform:none; letter-spacing:0; font:600 12px Arial,sans-serif; }
+    .chip::before { content:''; width:7px; height:7px; border-radius:50%; background:currentColor; }
+    a.chip:hover { filter:brightness(.95); }
+    .chip.completed, .chip.restored { color:var(--green); background:var(--green-soft); }
+    .chip.pending { color:var(--amber); background:var(--amber-soft); }
+    .chip.waiting { color:#5d6b6d; background:var(--grey-soft); }
+    .chip.failed { color:var(--red); background:var(--red-soft); }
+    .chip .tag { opacity:.8; font-weight:400; }
+    .progress { margin-top:8px; color:var(--muted); font:12px Arial,sans-serif; }
+    .bar { max-width:260px; height:4px; margin-top:5px; overflow:hidden; background:var(--grey-soft); border-radius:4px; }
+    .bar span { display:block; height:100%; background:var(--teal); }
+    .error-note { margin-top:6px; color:var(--red); font-size:12.5px; }
+
+    .branch-list { display:grid; gap:8px; margin:0; padding:0; list-style:none; }
+    .branch-list li { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
     .branch-list strong { font-weight:700; }
-    .branch-list .seen { color:var(--muted); font-size:12px; }
-    .branch-list .queued { color:#8a5a00; font-size:12px; font-weight:700; }
+
     .actions { display:flex; gap:8px; flex-wrap:wrap; }
-    .delete-again-button { padding:9px 12px; color:#fff; background:#9c352b; border:0; border-radius:2px; cursor:pointer; font:700 10px Arial,sans-serif; letter-spacing:.5px; text-transform:uppercase; white-space:nowrap; }
-    .delete-again-button:hover { background:#76271f; }
-    .delete-again-button:disabled { opacity:.65; cursor:wait; }
+    .btn { padding:9px 12px; color:#fff; border:0; border-radius:2px; cursor:pointer; white-space:nowrap; font:700 10px Arial,sans-serif; letter-spacing:.5px; text-transform:uppercase; }
+    .btn:disabled { opacity:.65; cursor:wait; }
+    .restore-button { background:var(--coral); } .restore-button:hover { background:#bd4e3e; }
+    .delete-again-button { background:#9c352b; } .delete-again-button:hover { background:#76271f; }
+    .restore-state { color:var(--muted); font:12.5px Arial,sans-serif; }
+
+    .empty { padding:44px 22px; color:var(--muted); text-align:center; font:14px Arial,sans-serif; }
+    .foot { padding:12px 22px; color:var(--muted); border-top:1px solid var(--line); font:12.5px Arial,sans-serif; }
+    .error { color:var(--red); }
+    mark { padding:0 1px; color:inherit; background:#fff1a8; }
+
     .confirm-dialog { width:min(440px, calc(100% - 32px)); padding:24px; color:var(--ink); background:var(--white); border:1px solid var(--line); box-shadow:0 18px 60px rgba(0,0,0,.24); }
     .confirm-dialog::backdrop { background:rgba(15,29,28,.52); }
     .confirm-dialog form { display:grid; gap:12px; margin:0; }
     .confirm-dialog h2 { margin:0; font-size:24px; font-weight:500; }
     .confirm-dialog p { margin:0; color:var(--muted); font:14px/1.5 Arial,sans-serif; }
+    .confirm-dialog label { display:grid; gap:7px; color:#435153; font:700 11px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; }
+    .confirm-dialog input { width:100%; height:44px; padding:11px 13px; color:var(--ink); background:#fbfcfa; border:1px solid #cbd7d2; border-radius:2px; font:16px Georgia,serif; }
     .confirm-dialog .dialog-actions { display:flex; justify-content:flex-end; gap:8px; }
     .confirm-dialog .dialog-actions button { padding:11px 14px; color:#fff; background:#9c352b; border:0; border-radius:2px; cursor:pointer; font:700 11px Arial,sans-serif; letter-spacing:.5px; text-transform:uppercase; }
     .confirm-dialog .dialog-actions .dialog-cancel { color:var(--ink); background:#e8eeea; }
     .confirm-dialog .dialog-status:empty { display:none; }
-    @media (max-width:650px) { header { display:block; padding:28px 16px 24px; } nav { margin-top:20px; } main { padding:0 16px 36px; } .panel { padding:18px; } .toolbar { display:grid; } }
+
+    @media (max-width:900px) { .stats { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+    @media (max-width:650px) { .wrap { padding:0 16px; } header { display:block; padding-top:28px; padding-bottom:22px; } h1 { font-size:34px; } nav { justify-content:flex-start; margin-top:18px; } .stat .value { font-size:28px; } .panel-head { padding:16px; } }
   </style>
 </head>
 <body>
-  <header>
-    <div><p class="eyebrow">Lora operations</p><h1>Deleted products</h1></div>
-    <nav><a href="/stock/">Main stock</a><a href="/">Sale control</a></nav>
+  <header class="wrap">
+    <div>
+      <p class="eyebrow">Lora operations</p>
+      <h1>Deleted products</h1>
+      <p class="lede">A deleted product is removed from every branch. If a branch POS still has it active, the deletion is sent to that branch again automatically.</p>
+    </div>
+    <nav aria-label="Main navigation"><a href="/stock/">Main stock</a><a href="/stock/movements/history/">Product movements</a><a href="/products/deleted/" aria-current="page">Deleted products</a><a href="/">Sale control</a></nav>
   </header>
-  <main>
+  <main class="wrap">
+    <div class="stats" role="group" aria-label="Filter deleted products">
+      <button class="stat" type="button" data-filter="all" aria-pressed="true"><span class="label">Deleted products</span><span class="value" data-count="all">–</span></button>
+      <button class="stat s-done" type="button" data-filter="done" aria-pressed="false"><span class="label">Removed everywhere</span><span class="value" data-count="done">–</span></button>
+      <button class="stat s-syncing" type="button" data-filter="syncing" aria-pressed="false"><span class="label">Syncing to branches</span><span class="value" data-count="syncing">–</span></button>
+      <button class="stat s-active" type="button" data-filter="active" aria-pressed="false"><span class="label">Still on a branch POS</span><span class="value" data-count="active">–</span></button>
+    </div>
+
+    <div class="search-bar" id="search-bar">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+      <input id="search" type="search" placeholder="Search deleted products by name, product ID, branch or user" autocomplete="off" aria-label="Search deleted products">
+      <button class="clear" id="search-clear" type="button" aria-label="Clear search">×</button>
+    </div>
+
     <section class="panel active-panel" id="still-active-panel" aria-labelledby="still-active-title" hidden>
-      <h2 id="still-active-title">Still on branch POS</h2>
-      <p class="intro">These products were deleted on the website, but these branches still have them active in Quantum. Delete them at those branches, or restore them so they show on every branch again. The list fills in as each branch syncs its stock.</p>
+      <div class="panel-head">
+        <div>
+          <h2 id="still-active-title">Still on branch POS</h2>
+          <p>These products were deleted on the website, but these branches still had them active in Quantum. The deletion is re-sent to those branches automatically; a branch only needs you if its deletion failed. You can also restore a product so it shows on every branch again.</p>
+        </div>
+      </div>
       <div class="table-wrap" id="still-active"></div>
     </section>
-    <section class="panel" aria-label="Deleted product history">
-      <div class="toolbar">
-        <p id="status" role="status">Loading deletion history...</p>
-        <label>Search history<input id="search" type="search" placeholder="Product, branch, or user" autocomplete="off"></label>
+
+    <section class="panel" aria-labelledby="history-title">
+      <div class="panel-head">
+        <div><h2 id="history-title">Deletion history</h2></div>
+        <div class="panel-meta"><span id="status" role="status">Loading deletion history...</span><button class="refresh" id="refresh" type="button">Refresh</button></div>
       </div>
       <div class="table-wrap" id="history"><p class="empty">Loading deletion history...</p></div>
+      <div class="foot" id="foot" hidden></div>
     </section>
   </main>
+
   <dialog id="delete-again-dialog" class="confirm-dialog" aria-labelledby="delete-again-title">
     <form id="delete-again-form">
       <h2 id="delete-again-title">Delete at these branches</h2>
@@ -86,14 +152,13 @@
       <p id="delete-again-status" class="dialog-status" role="status"></p>
     </form>
   </dialog>
+
   <script>
     const historyElement = document.querySelector('#history');
     const searchInput = document.querySelector('#search');
+    const searchBar = document.querySelector('#search-bar');
     const statusElement = document.querySelector('#status');
-    const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
-    let deletedProducts = [];
-    let stillActiveProducts = [];
-    let pendingDeleteAgain = null;
+    const footElement = document.querySelector('#foot');
     const stillActivePanel = document.querySelector('#still-active-panel');
     const stillActiveElement = document.querySelector('#still-active');
     const deleteAgainDialog = document.querySelector('#delete-again-dialog');
@@ -101,33 +166,126 @@
     const deleteAgainPassword = document.querySelector('#delete-again-password');
     const deleteAgainDescription = document.querySelector('#delete-again-description');
     const deleteAgainStatus = document.querySelector('#delete-again-status');
-    function renderStillActive() {
-      stillActivePanel.hidden = !stillActiveProducts.length;
-      if (!stillActiveProducts.length) {
-        stillActiveElement.innerHTML = '';
-        return;
+    const filterButtons = [...document.querySelectorAll('[data-filter]')];
+    const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
+    const formatDate = value => value ? new Date(value).toLocaleString(undefined, { dateStyle:'medium', timeStyle:'short' }) : '–';
+    const STATUS_LABEL = { completed:'Deleted', pending:'Syncing', failed:'Failed', restored:'Restored' };
+    let deletionRows = [];
+    let stillActiveProducts = [];
+    let activeFilter = 'all';
+    let pendingDeleteAgain = null;
+    let historyLoading = false;
+
+    function highlight(text, query) {
+      const raw = String(text ?? '');
+      const index = query ? raw.toLowerCase().indexOf(query) : -1;
+      if (index < 0) return escapeHtml(raw);
+      return escapeHtml(raw.slice(0, index)) + '<mark>' + escapeHtml(raw.slice(index, index + query.length)) + '</mark>' + escapeHtml(raw.slice(index + query.length));
+    }
+
+    // One entry per product: latest request per branch (the API returns newest first).
+    function groupedProducts() {
+      const activeIds = new Set(stillActiveProducts.map(product => String(product.product_id)));
+      const groups = new Map();
+      for (const row of deletionRows) {
+        const id = String(row.product_id);
+        if (!groups.has(id)) groups.set(id, { product_id:row.product_id, product_name:row.product_name, restore_status:row.restore_status, branches:new Map(), deleted_by:row.deleted_by, deleted_at:row.deleted_at });
+        const group = groups.get(id);
+        const key = String(row.branch).toLowerCase();
+        if (!group.branches.has(key)) group.branches.set(key, row);
+        if (row.deleted_by && row.deleted_by !== 'auto-sync') group.deleted_by = row.deleted_by; // oldest person who deleted it
+        group.deleted_at = row.deleted_at;
       }
-      stillActiveElement.innerHTML = `<table><thead><tr><th>Product</th><th>Product ID</th><th>Still active at</th><th>Actions</th></tr></thead><tbody>${stillActiveProducts.map(product => {
-        const productId = escapeHtml(product.product_id);
-        const waiting = product.branches.every(branch => branch.deletion_pending);
-        const branches = `<ul class="branch-list">${product.branches.map(branch => `<li><strong>${escapeHtml(branch.branch)}</strong>: stock ${escapeHtml(branch.available_quantity)} <span class="seen">(seen ${escapeHtml(new Date(branch.last_seen).toLocaleString())})</span>${branch.deletion_pending ? ' <span class="queued">Deletion queued</span>' : ''}</li>`).join('')}</ul>`;
-        const deleteButton = waiting ? '' : `<button class="delete-again-button" type="button" data-delete-again="${productId}">Delete at these branches</button>`;
-        const restoreButton = `<button class="restore-button" type="button" data-restore-product="${productId}">Restore everywhere</button>`;
-        return `<tr><td>${escapeHtml(product.product_name)}</td><td>${productId}</td><td>${branches}</td><td><div class="actions">${deleteButton}${restoreButton}</div></td></tr>`;
-      }).join('')}</tbody></table>`;
-      stillActiveElement.querySelectorAll('[data-restore-product]').forEach(button => {
-        button.addEventListener('click', () => restoreProduct(button));
-      });
-      stillActiveElement.querySelectorAll('[data-delete-again]').forEach(button => {
-        button.addEventListener('click', () => openDeleteAgain(button));
+      return [...groups.values()].map(group => {
+        const branches = [...group.branches.values()].sort((a, b) => String(a.branch).localeCompare(String(b.branch)));
+        const statuses = new Set(branches.map(branch => branch.status || 'completed'));
+        let state = statuses.has('pending') ? 'syncing' : 'done';
+        if (statuses.has('restored') && !statuses.has('pending')) state = 'restored';
+        if (activeIds.has(String(group.product_id))) state = 'active';
+        return { ...group, branches, state };
       });
     }
+    function matches(values, query) {
+      return !query || values.some(value => String(value ?? '').toLowerCase().includes(query));
+    }
+    function updateCounts(products) {
+      const counts = { all:products.length, done:0, syncing:0, active:0 };
+      products.forEach(product => { if (product.state in counts) counts[product.state] += 1; });
+      Object.entries(counts).forEach(([key, value]) => { const element = document.querySelector(`[data-count="${key}"]`); if (element) element.textContent = value; });
+    }
+
+    function renderStillActive(query) {
+      const products = stillActiveProducts.filter(product => matches([product.product_name, product.product_id, ...product.branches.map(branch => branch.branch)], query));
+      const show = stillActiveProducts.length > 0 && (activeFilter === 'all' || activeFilter === 'active');
+      stillActivePanel.hidden = !show;
+      if (!show) { stillActiveElement.innerHTML = ''; return; }
+      if (!products.length) { stillActiveElement.innerHTML = '<p class="empty">No products here match your search.</p>'; return; }
+      stillActiveElement.innerHTML = `<table><thead><tr><th>Product</th><th>Still active at</th><th>Actions</th></tr></thead><tbody>${products.map(product => {
+        const productId = escapeHtml(product.product_id);
+        const needsPerson = product.branches.filter(branch => (branch.deletion_failed || branch.auto_gave_up) && !branch.deletion_pending);
+        const branches = `<ul class="branch-list">${product.branches.map(branch => {
+          const state = branch.deletion_pending
+            ? `<span class="chip pending">Deleting automatically${branch.auto_sync ? '<span class="tag"> · auto</span>' : ''}</span>`
+            : branch.deletion_failed
+              ? `<span class="chip failed" title="${escapeHtml(branch.error || 'Deletion failed')}">Deletion failed</span>`
+              : branch.auto_gave_up
+                ? '<span class="chip failed" title="Sent automatically 3 times but the POS still reports it active">Still active after 3 tries</span>'
+                : '<span class="chip waiting">Will retry automatically</span>';
+          return `<li><strong>${highlight(branch.branch, query)}</strong><span class="muted">stock ${escapeHtml(branch.available_quantity)} · seen ${escapeHtml(formatDate(branch.last_seen))}</span>${state}${branch.deletion_failed && branch.error ? `<span class="error-note">${escapeHtml(branch.error)}</span>` : ''}</li>`;
+        }).join('')}</ul>`;
+        const deleteButton = needsPerson.length ? `<button class="btn delete-again-button" type="button" data-delete-again="${productId}">Retry at ${needsPerson.length === 1 ? escapeHtml(needsPerson[0].branch) : 'these branches'}</button>` : '';
+        const restoreButton = `<button class="btn restore-button" type="button" data-restore-product="${productId}">Restore everywhere</button>`;
+        return `<tr><td><div class="product-name">${highlight(product.product_name, query)}</div><div class="product-id">ID ${highlight(product.product_id, query)}</div></td><td>${branches}</td><td><div class="actions">${deleteButton}${restoreButton}</div></td></tr>`;
+      }).join('')}</tbody></table>`;
+    }
+
+    function renderHistory() {
+      const query = searchInput.value.trim().toLowerCase();
+      searchBar.classList.toggle('has-value', Boolean(searchInput.value));
+      const all = groupedProducts();
+      updateCounts(all);
+      renderStillActive(query);
+
+      const products = all.filter(product =>
+        (activeFilter === 'all' || product.state === activeFilter) &&
+        matches([product.product_name, product.product_id, product.deleted_by, ...product.branches.flatMap(branch => [branch.branch, branch.deleted_by])], query));
+      if (!products.length) {
+        historyElement.innerHTML = `<p class="empty">${query || activeFilter !== 'all' ? 'No deleted products match your search.' : 'No product deletion requests yet.'}</p>`;
+        footElement.hidden = true;
+        return;
+      }
+      historyElement.innerHTML = `<table><thead><tr><th style="width:24%">Product</th><th>Sync status by branch</th><th style="width:13%">Deleted by</th><th style="width:150px">Requested at</th><th style="width:170px">Restore</th></tr></thead><tbody>${products.map(product => {
+        const productId = String(product.product_id);
+        const done = product.branches.filter(branch => (branch.status || 'completed') === 'completed').length;
+        const total = product.branches.length;
+        const chips = product.branches.map(branch => {
+          const status = branch.status || 'completed';
+          const url = new URL('/stock/movements/history/', window.location.origin);
+          url.searchParams.set('branch', branch.branch); url.searchParams.set('product_id', branch.product_id); url.searchParams.set('product_name', branch.product_name);
+          const auto = branch.deleted_by === 'auto-sync' ? '<span class="tag"> · auto</span>' : '';
+          return `<a class="chip ${escapeHtml(status)}" href="${escapeHtml(url.toString())}" title="${escapeHtml(`${STATUS_LABEL[status] || status} · ${formatDate(branch.deleted_at)}${branch.deleted_by ? ' · ' + branch.deleted_by : ''}`)}">${highlight(branch.branch, query)}${auto}</a>`;
+        }).join('');
+        const restoreCell = product.restore_status === 'restored' ? '<span class="chip restored">Restored</span>'
+          : product.restore_status === 'queued' || product.restore_status === 'waiting' ? '<span class="restore-state">Waiting for branch sync</span>'
+          : `<button class="btn restore-button" type="button" data-restore-product="${escapeHtml(productId)}" aria-label="Restore ${escapeHtml(product.product_name)} to all branches">Restore everywhere</button>`;
+        return `<tr>
+          <td><div class="product-name">${highlight(product.product_name, query)}</div><div class="product-id">ID ${highlight(productId, query)}</div></td>
+          <td><div class="chips">${chips}</div><div class="progress">Removed at ${done} of ${total} branch${total === 1 ? '' : 'es'} · click a branch for its Movements</div><div class="bar"><span style="width:${total ? Math.round(done / total * 100) : 0}%"></span></div></td>
+          <td>${highlight(product.deleted_by || '–', query)}</td>
+          <td>${escapeHtml(formatDate(product.deleted_at))}</td>
+          <td>${restoreCell}</td>
+        </tr>`;
+      }).join('')}</tbody></table>`;
+      footElement.hidden = false;
+      footElement.textContent = `Showing ${products.length} of ${all.length} deleted product${all.length === 1 ? '' : 's'}`;
+    }
+
     function openDeleteAgain(button) {
       const product = stillActiveProducts.find(item => String(item.product_id) === button.dataset.deleteAgain);
       if (!product) return;
       pendingDeleteAgain = { product, button };
       const branches = product.branches.filter(branch => !branch.deletion_pending).map(branch => branch.branch);
-      deleteAgainDescription.textContent = `Delete ${product.product_name} (Product ID ${product.product_id}) at ${branches.join(', ')}? Historical sales will be kept.`;
+      deleteAgainDescription.textContent = `Delete ${product.product_name} (Product ID ${product.product_id}) at ${branches.join(', ')} again? Historical sales will be kept.`;
       deleteAgainPassword.value = '';
       deleteAgainStatus.textContent = '';
       deleteAgainStatus.className = 'dialog-status';
@@ -153,7 +311,7 @@
         statusElement.textContent = data.branches.length
           ? `Deletion queued for ${product.product_name} at ${data.branches.join(', ')}. Each branch removes it on its next sync.`
           : `Deletion is already queued for ${product.product_name} at those branches.`;
-        await loadDeletionHistory();
+        await loadDeletionHistory(true);
       } catch (error) {
         deleteAgainStatus.className = 'dialog-status error';
         deleteAgainStatus.textContent = error.message;
@@ -163,67 +321,67 @@
         submitButton.disabled = false;
       }
     });
-    let historyLoading = false;
-    function renderHistory() {
-      const query = searchInput.value.trim().toLowerCase();
-      const products = deletedProducts.filter(product => [product.product_name, product.product_id, product.branch, product.deleted_by].some(value => String(value ?? '').toLowerCase().includes(query)));
-      const renderedProductIds = new Set();
-      historyElement.innerHTML = products.length
-        ? `<table><thead><tr><th>Product</th><th>Product ID</th><th>Branch</th><th>Sync status</th><th>Deleted by</th><th>Requested at</th><th>Movements</th><th>Restore</th></tr></thead><tbody>${products.map(product => { const movementUrl = new URL('/stock/movements/history/', window.location.origin); movementUrl.searchParams.set('branch', product.branch); movementUrl.searchParams.set('product_id', product.product_id); movementUrl.searchParams.set('product_name', product.product_name); const status = product.status || 'completed'; const productId = String(product.product_id); const isFirstProductRow = !renderedProductIds.has(productId); renderedProductIds.add(productId); const restoreCell = !isFirstProductRow ? '-' : product.restore_status === 'restored' ? 'Restored' : product.restore_status === 'queued' || product.restore_status === 'waiting' ? 'Waiting for branch sync' : `<button class="restore-button" type="button" data-restore-product="${escapeHtml(productId)}" aria-label="Restore ${escapeHtml(product.product_name)} to all branches">Restore everywhere</button>`; return `<tr><td>${escapeHtml(product.product_name)}</td><td>${escapeHtml(product.product_id)}</td><td>${escapeHtml(product.branch)}</td><td class="status-${escapeHtml(status)}">${escapeHtml(status)}</td><td>${escapeHtml(product.deleted_by)}</td><td>${escapeHtml(new Date(product.deleted_at).toLocaleString())}</td><td><a class="movement-link" href="${escapeHtml(movementUrl.toString())}">Movements</a></td><td>${restoreCell}</td></tr>`; }).join('')}</tbody></table>`
-        : `<p class="empty">${query ? 'No deleted products match your search.' : 'No product deletion requests yet.'}</p>`;
-      historyElement.querySelectorAll('[data-restore-product]').forEach(button => {
-        button.addEventListener('click', () => restoreProduct(button));
-      });
-    }
-    searchInput.addEventListener('input', renderHistory);
+
     async function restoreProduct(button) {
       button.disabled = true;
       statusElement.textContent = 'Queueing product restoration for all branches...';
       statusElement.className = '';
       try {
-        const response = await fetch('/api/products/restore/', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ product_id: button.dataset.restoreProduct })
-        });
+        const response = await fetch('/api/products/restore/', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ product_id: button.dataset.restoreProduct }) });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.message || 'The product could not be restored.');
         statusElement.textContent = `Restore queued for ${data.queued_branches} branch${data.queued_branches === 1 ? '' : 'es'}. Offline branches will restore it when they sync.`;
-        await loadDeletionHistory();
+        await loadDeletionHistory(true);
       } catch (error) {
         statusElement.textContent = error.message;
         statusElement.className = 'error';
         button.disabled = false;
       }
     }
-    async function loadDeletionHistory() {
-      if (historyLoading || document.visibilityState !== 'visible') return;
+    document.addEventListener('click', event => {
+      const restore = event.target.closest('[data-restore-product]');
+      if (restore) { restoreProduct(restore); return; }
+      const again = event.target.closest('[data-delete-again]');
+      if (again) openDeleteAgain(again);
+    });
+
+    async function loadDeletionHistory(force = false) {
+      if (historyLoading || (!force && document.visibilityState !== 'visible')) return;
       historyLoading = true;
       try {
-        const response = await fetch('/api/products/deleted/', { cache: 'no-store' });
+        const response = await fetch('/api/products/deleted/', { cache:'no-store' });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.message || 'Deletion history could not be loaded.');
-        deletedProducts = data.products || [];
+        deletionRows = data.products || [];
         stillActiveProducts = data.still_active || [];
-        renderStillActive();
-        statusElement.textContent = `${deletedProducts.length} deletion request${deletedProducts.length === 1 ? '' : 's'}`;
-        statusElement.className = '';
+        if (!/^(Deletion|Restore) queued/.test(statusElement.textContent)) {
+          statusElement.textContent = `Updated ${new Date().toLocaleTimeString(undefined, { timeStyle:'short' })}`;
+          statusElement.className = '';
+        }
         renderHistory();
       } catch (error) {
         statusElement.textContent = error.message;
         statusElement.className = 'error';
-        if (!deletedProducts.length) {
-          historyElement.innerHTML = '<p class="empty error">Deletion history is unavailable. It will retry automatically.</p>';
-        }
+        if (!deletionRows.length) historyElement.innerHTML = '<p class="empty error">Deletion history is unavailable. It will retry automatically.</p>';
       } finally {
         historyLoading = false;
       }
     }
-    loadDeletionHistory();
-    window.setInterval(loadDeletionHistory, 30000);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') loadDeletionHistory();
+
+    searchInput.addEventListener('input', renderHistory);
+    document.querySelector('#search-clear').addEventListener('click', () => { searchInput.value = ''; renderHistory(); searchInput.focus(); });
+    document.querySelector('#refresh').addEventListener('click', () => { statusElement.textContent = ''; loadDeletionHistory(true); });
+    filterButtons.forEach(button => button.addEventListener('click', () => {
+      activeFilter = button.dataset.filter;
+      filterButtons.forEach(other => other.setAttribute('aria-pressed', String(other === button)));
+      renderHistory();
+    }));
+    document.addEventListener('keydown', event => {
+      if (event.key === '/' && document.activeElement !== searchInput && !deleteAgainDialog.open) { event.preventDefault(); searchInput.focus(); }
     });
+    loadDeletionHistory(true);
+    window.setInterval(loadDeletionHistory, 30000);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadDeletionHistory(); });
   </script>
 </body>
 </html>
