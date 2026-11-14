@@ -35,6 +35,26 @@
     .status-failed { color:#a53b2e; font-weight:700; }
     .empty { padding:24px 13px; color:var(--muted); font:14px Arial,sans-serif; }
     .error { color:#a53b2e; }
+    .active-panel { margin-bottom:22px; border-left:4px solid var(--coral); }
+    .active-panel h2 { margin:0 0 6px; font-size:24px; font-weight:500; }
+    .active-panel .intro { margin:0 0 16px; color:var(--muted); font:14px/1.5 Arial,sans-serif; }
+    .branch-list { display:grid; gap:4px; margin:0; padding:0; list-style:none; }
+    .branch-list strong { font-weight:700; }
+    .branch-list .seen { color:var(--muted); font-size:12px; }
+    .branch-list .queued { color:#8a5a00; font-size:12px; font-weight:700; }
+    .actions { display:flex; gap:8px; flex-wrap:wrap; }
+    .delete-again-button { padding:9px 12px; color:#fff; background:#9c352b; border:0; border-radius:2px; cursor:pointer; font:700 10px Arial,sans-serif; letter-spacing:.5px; text-transform:uppercase; white-space:nowrap; }
+    .delete-again-button:hover { background:#76271f; }
+    .delete-again-button:disabled { opacity:.65; cursor:wait; }
+    .confirm-dialog { width:min(440px, calc(100% - 32px)); padding:24px; color:var(--ink); background:var(--white); border:1px solid var(--line); box-shadow:0 18px 60px rgba(0,0,0,.24); }
+    .confirm-dialog::backdrop { background:rgba(15,29,28,.52); }
+    .confirm-dialog form { display:grid; gap:12px; margin:0; }
+    .confirm-dialog h2 { margin:0; font-size:24px; font-weight:500; }
+    .confirm-dialog p { margin:0; color:var(--muted); font:14px/1.5 Arial,sans-serif; }
+    .confirm-dialog .dialog-actions { display:flex; justify-content:flex-end; gap:8px; }
+    .confirm-dialog .dialog-actions button { padding:11px 14px; color:#fff; background:#9c352b; border:0; border-radius:2px; cursor:pointer; font:700 11px Arial,sans-serif; letter-spacing:.5px; text-transform:uppercase; }
+    .confirm-dialog .dialog-actions .dialog-cancel { color:var(--ink); background:#e8eeea; }
+    .confirm-dialog .dialog-status:empty { display:none; }
     @media (max-width:650px) { header { display:block; padding:28px 16px 24px; } nav { margin-top:20px; } main { padding:0 16px 36px; } .panel { padding:18px; } .toolbar { display:grid; } }
   </style>
 </head>
@@ -44,6 +64,11 @@
     <nav><a href="/stock/">Main stock</a><a href="/">Sale control</a></nav>
   </header>
   <main>
+    <section class="panel active-panel" id="still-active-panel" aria-labelledby="still-active-title" hidden>
+      <h2 id="still-active-title">Still on branch POS</h2>
+      <p class="intro">These products were deleted on the website, but these branches still have them active in Quantum. Delete them at those branches, or restore them so they show on every branch again. The list fills in as each branch syncs its stock.</p>
+      <div class="table-wrap" id="still-active"></div>
+    </section>
     <section class="panel" aria-label="Deleted product history">
       <div class="toolbar">
         <p id="status" role="status">Loading deletion history...</p>
@@ -52,12 +77,92 @@
       <div class="table-wrap" id="history"><p class="empty">Loading deletion history...</p></div>
     </section>
   </main>
+  <dialog id="delete-again-dialog" class="confirm-dialog" aria-labelledby="delete-again-title">
+    <form id="delete-again-form">
+      <h2 id="delete-again-title">Delete at these branches</h2>
+      <p id="delete-again-description"></p>
+      <label>Your account password<input id="delete-again-password" type="password" autocomplete="current-password" required></label>
+      <div class="dialog-actions"><button id="delete-again-cancel" class="dialog-cancel" type="button">Cancel</button><button type="submit">Delete product</button></div>
+      <p id="delete-again-status" class="dialog-status" role="status"></p>
+    </form>
+  </dialog>
   <script>
     const historyElement = document.querySelector('#history');
     const searchInput = document.querySelector('#search');
     const statusElement = document.querySelector('#status');
     const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
     let deletedProducts = [];
+    let stillActiveProducts = [];
+    let pendingDeleteAgain = null;
+    const stillActivePanel = document.querySelector('#still-active-panel');
+    const stillActiveElement = document.querySelector('#still-active');
+    const deleteAgainDialog = document.querySelector('#delete-again-dialog');
+    const deleteAgainForm = document.querySelector('#delete-again-form');
+    const deleteAgainPassword = document.querySelector('#delete-again-password');
+    const deleteAgainDescription = document.querySelector('#delete-again-description');
+    const deleteAgainStatus = document.querySelector('#delete-again-status');
+    function renderStillActive() {
+      stillActivePanel.hidden = !stillActiveProducts.length;
+      if (!stillActiveProducts.length) {
+        stillActiveElement.innerHTML = '';
+        return;
+      }
+      stillActiveElement.innerHTML = `<table><thead><tr><th>Product</th><th>Product ID</th><th>Still active at</th><th>Actions</th></tr></thead><tbody>${stillActiveProducts.map(product => {
+        const productId = escapeHtml(product.product_id);
+        const waiting = product.branches.every(branch => branch.deletion_pending);
+        const branches = `<ul class="branch-list">${product.branches.map(branch => `<li><strong>${escapeHtml(branch.branch)}</strong>: stock ${escapeHtml(branch.available_quantity)} <span class="seen">(seen ${escapeHtml(new Date(branch.last_seen).toLocaleString())})</span>${branch.deletion_pending ? ' <span class="queued">Deletion queued</span>' : ''}</li>`).join('')}</ul>`;
+        const deleteButton = waiting ? '' : `<button class="delete-again-button" type="button" data-delete-again="${productId}">Delete at these branches</button>`;
+        const restoreButton = `<button class="restore-button" type="button" data-restore-product="${productId}">Restore everywhere</button>`;
+        return `<tr><td>${escapeHtml(product.product_name)}</td><td>${productId}</td><td>${branches}</td><td><div class="actions">${deleteButton}${restoreButton}</div></td></tr>`;
+      }).join('')}</tbody></table>`;
+      stillActiveElement.querySelectorAll('[data-restore-product]').forEach(button => {
+        button.addEventListener('click', () => restoreProduct(button));
+      });
+      stillActiveElement.querySelectorAll('[data-delete-again]').forEach(button => {
+        button.addEventListener('click', () => openDeleteAgain(button));
+      });
+    }
+    function openDeleteAgain(button) {
+      const product = stillActiveProducts.find(item => String(item.product_id) === button.dataset.deleteAgain);
+      if (!product) return;
+      pendingDeleteAgain = { product, button };
+      const branches = product.branches.filter(branch => !branch.deletion_pending).map(branch => branch.branch);
+      deleteAgainDescription.textContent = `Delete ${product.product_name} (Product ID ${product.product_id}) at ${branches.join(', ')}? Historical sales will be kept.`;
+      deleteAgainPassword.value = '';
+      deleteAgainStatus.textContent = '';
+      deleteAgainStatus.className = 'dialog-status';
+      deleteAgainDialog.showModal();
+      deleteAgainPassword.focus();
+    }
+    document.querySelector('#delete-again-cancel').addEventListener('click', () => deleteAgainDialog.close());
+    deleteAgainDialog.addEventListener('close', () => { pendingDeleteAgain = null; });
+    deleteAgainForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!pendingDeleteAgain) return;
+      const { product } = pendingDeleteAgain;
+      const submitButton = deleteAgainForm.querySelector('button[type="submit"]');
+      submitButton.disabled = true;
+      deleteAgainStatus.className = 'dialog-status';
+      deleteAgainStatus.textContent = 'Queueing deletion...';
+      try {
+        const response = await fetch('/api/products/deleted/delete-again/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ product_id:product.product_id, password:deleteAgainPassword.value }) });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.message || 'The deletion could not be queued.');
+        deleteAgainDialog.close();
+        statusElement.className = '';
+        statusElement.textContent = data.branches.length
+          ? `Deletion queued for ${product.product_name} at ${data.branches.join(', ')}. Each branch removes it on its next sync.`
+          : `Deletion is already queued for ${product.product_name} at those branches.`;
+        await loadDeletionHistory();
+      } catch (error) {
+        deleteAgainStatus.className = 'dialog-status error';
+        deleteAgainStatus.textContent = error.message;
+        deleteAgainPassword.value = '';
+        deleteAgainPassword.focus();
+      } finally {
+        submitButton.disabled = false;
+      }
+    });
     let historyLoading = false;
     function renderHistory() {
       const query = searchInput.value.trim().toLowerCase();
@@ -99,6 +204,8 @@
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.message || 'Deletion history could not be loaded.');
         deletedProducts = data.products || [];
+        stillActiveProducts = data.still_active || [];
+        renderStillActive();
         statusElement.textContent = `${deletedProducts.length} deletion request${deletedProducts.length === 1 ? '' : 's'}`;
         statusElement.className = '';
         renderHistory();

@@ -7,7 +7,7 @@ from django.contrib.auth import authenticate, get_user_model
 from django.core.management import call_command
 from loraApi.state_store import load_state
 from django.utils import timezone
-from loraApi.models import BranchHeartbeat, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
+from loraApi.models import BranchHeartbeat, DeletedProductSighting, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
 import json
 
 
@@ -520,6 +520,105 @@ class ProductRenameTests(TestCase):
 		ProductDeletionRequest.objects.create(branch='BranchA', product_id=501, product_name='Old Name', status='completed')
 		self.assertEqual(self.rename('New Name').status_code, 409)
 		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=501).product_name, 'Old Name')
+
+
+class DeletedProductStillActiveTests(TestCase):
+	def setUp(self):
+		self.admin = get_user_model().objects.create_superuser(username='still-active-admin', password='StillActivePass4182!')
+		self.client.force_login(self.admin)
+		ProductDeletionRequest.objects.create(
+			branch='BranchA', product_id=601, product_name='Ghost Product', status='completed',
+			product_code='602', barcode='6006', selling_price='3.50', tax_rate='15.00',
+		)
+
+	def snapshot(self, branch, quantity=7):
+		return self.client.post(
+			'/api/stock/snapshot/',
+			data=json.dumps({'branch': branch, 'products': [{
+				'product_id': 601, 'product_name': 'Ghost Product', 'available_quantity': quantity,
+			}]}),
+			content_type='application/json',
+		)
+
+	def still_active(self):
+		return self.client.get('/api/products/deleted/').json()['still_active']
+
+	def test_snapshot_records_where_a_deleted_product_is_still_active(self):
+		self.assertEqual(self.snapshot('BranchB').status_code, 200)
+		self.assertEqual(self.snapshot('BranchB', quantity=5).status_code, 200)
+
+		self.assertFalse(ProductCatalog.objects.filter(product_id=601).exists())
+		active = self.still_active()
+		self.assertEqual(len(active), 1)
+		self.assertEqual(active[0]['product_id'], 601)
+		self.assertEqual([item['branch'] for item in active[0]['branches']], ['BranchB'])
+		self.assertEqual(active[0]['branches'][0]['available_quantity'], '5')
+		self.assertFalse(active[0]['branches'][0]['deletion_pending'])
+
+	def test_main_snapshot_is_not_recorded(self):
+		self.snapshot('MAIN')
+
+		self.assertEqual(self.still_active(), [])
+
+	def test_delete_again_requires_password_and_queues_only_remaining_branches(self):
+		self.snapshot('BranchB')
+		self.snapshot('BranchC')
+		ProductDeletionRequest.objects.create(branch='BranchC', product_id=601, product_name='Ghost Product', status='pending')
+
+		wrong = self.client.post(
+			'/api/products/deleted/delete-again/',
+			data=json.dumps({'product_id': 601, 'password': 'wrong'}),
+			content_type='application/json',
+		)
+		self.assertEqual(wrong.status_code, 403)
+
+		response = self.client.post(
+			'/api/products/deleted/delete-again/',
+			data=json.dumps({'product_id': 601, 'password': 'StillActivePass4182!'}),
+			content_type='application/json',
+		)
+		self.assertEqual(response.status_code, 202)
+		self.assertEqual(response.json()['branches'], ['BranchB'])
+		queued = ProductDeletionRequest.objects.get(branch='BranchB', product_id=601)
+		self.assertEqual(queued.status, 'pending')
+		self.assertEqual(queued.product_code, '602')
+		sync = self.client.get('/api/branch-sync/?branch=BranchB').json()
+		self.assertEqual([item['product_id'] for item in sync['pending_product_deletions']], [601])
+		self.assertTrue(all(branch['deletion_pending'] for branch in self.still_active()[0]['branches']))
+
+	def test_branch_completing_the_deletion_clears_it(self):
+		self.snapshot('BranchB')
+		deletion = ProductDeletionRequest.objects.create(branch='BranchB', product_id=601, product_name='Ghost Product')
+
+		complete = self.client.post(
+			'/api/products/delete/complete/',
+			data=json.dumps({'request_id': deletion.pk, 'branch': 'BranchB', 'success': True}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(complete.status_code, 200)
+		self.assertEqual(self.still_active(), [])
+
+	def test_restore_clears_it_and_the_branch_snapshot_shows_the_product_again(self):
+		self.snapshot('BranchB')
+
+		restore = self.client.post(
+			'/api/products/restore/',
+			data=json.dumps({'product_id': 601}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(restore.status_code, 202)
+		self.assertFalse(DeletedProductSighting.objects.exists())
+		self.assertEqual(self.still_active(), [])
+		self.snapshot('BranchB')
+		self.assertFalse(DeletedProductSighting.objects.exists())
+
+	def test_deleted_products_page_has_still_active_panel(self):
+		page = self.client.get('/products/deleted/')
+
+		self.assertContains(page, 'Still on branch POS')
+		self.assertContains(page, 'Delete at these branches')
 
 
 class StockTransferTests(TestCase):

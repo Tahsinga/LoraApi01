@@ -25,7 +25,7 @@ from django.utils.dateparse import parse_date, parse_datetime, parse_time
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.gzip import gzip_page
 
-from .models import BranchHeartbeat, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
+from .models import BranchHeartbeat, DeletedProductSighting, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
 from .state_store import sync_users_to_state
 
 WHATSAPP_STOCK_BRANCHES = (
@@ -1960,8 +1960,19 @@ def publish_branch_stock_snapshot(request):
         products_to_update = []
         update_field_names = set()
         movements_to_create = []
+        sightings_to_save = []
         for snapshot in snapshots:
             if snapshot['product_id'] in deleted_product_ids:
+                # Deleted on the web but still active on this POS: remember where,
+                # so the Deleted products page can show it.
+                if branch.casefold() != 'main':
+                    sightings_to_save.append(DeletedProductSighting(
+                        branch=branch,
+                        product_id=snapshot['product_id'],
+                        product_name=snapshot['product_name'],
+                        available_quantity=snapshot['available_quantity'],
+                        last_seen=now,
+                    ))
                 continue
 
             product = existing_products.get(snapshot['product_id'])
@@ -2061,6 +2072,14 @@ def publish_branch_stock_snapshot(request):
         if movements_to_create:
             StockMovement.objects.bulk_create(movements_to_create, batch_size=500)
         movements_recorded = len(movements_to_create)
+        if sightings_to_save:
+            DeletedProductSighting.objects.bulk_create(
+                sightings_to_save,
+                update_conflicts=True,
+                update_fields=['product_name', 'available_quantity', 'last_seen'],
+                unique_fields=['branch', 'product_id'],
+                batch_size=500,
+            )
 
     return JsonResponse({
         'status': 'ok',
@@ -2577,6 +2596,10 @@ def complete_branch_product_deletion(request):
                 branch__iexact=deletion.branch,
                 product_id=deletion.product_id,
             ).delete()
+            DeletedProductSighting.objects.filter(
+                branch__iexact=deletion.branch,
+                product_id=deletion.product_id,
+            ).delete()
 
     invalidate_product_catalog_cache()
     return JsonResponse({'status': 'ok', 'request_id': deletion.pk, 'deletion_status': deletion.status})
@@ -2692,7 +2715,102 @@ def deleted_products(request):
     return JsonResponse({
         'status': 'ok',
         'products': products,
+        'still_active': deleted_products_still_active(),
     })
+
+
+def deleted_products_still_active():
+    """Deleted products that a branch POS still reports as active, grouped by product."""
+    deleted_ids = set(
+        ProductDeletionRequest.objects.exclude(status='restored').values_list('product_id', flat=True)
+    )
+    sightings = list(DeletedProductSighting.objects.filter(product_id__in=deleted_ids))
+    pending = {
+        (branch.casefold(), product_id)
+        for branch, product_id in ProductDeletionRequest.objects.filter(
+            product_id__in={item.product_id for item in sightings},
+            status='pending',
+        ).values_list('branch', 'product_id')
+    }
+    grouped = {}
+    for sighting in sorted(sightings, key=lambda item: (item.product_name.casefold(), item.product_id, item.branch.casefold())):
+        entry = grouped.setdefault(sighting.product_id, {
+            'product_id': sighting.product_id,
+            'product_name': sighting.product_name,
+            'branches': [],
+        })
+        entry['branches'].append({
+            'branch': sighting.branch,
+            'available_quantity': str(sighting.available_quantity),
+            'last_seen': sighting.last_seen.isoformat(),
+            'deletion_pending': (sighting.branch.casefold(), sighting.product_id) in pending,
+        })
+    return list(grouped.values())
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
+@retry_on_database_lock
+def delete_product_at_remaining_branches(request):
+    """Queue the deletion again at the branches that still have a deleted product active."""
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+
+    try:
+        payload = json.loads(request.body or '{}')
+        if not isinstance(payload, dict):
+            raise ValueError
+        product_id = int(payload.get('product_id') or 0)
+        password = str(payload.get('password', ''))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return JsonResponse({'status': 'error', 'message': 'A valid product ID is required.'}, status=400)
+
+    if not password or not request.user.check_password(password):
+        return JsonResponse({'status': 'error', 'message': 'Enter your account password to confirm product deletion.'}, status=403)
+    if product_id <= 0:
+        return JsonResponse({'status': 'error', 'message': 'A valid product ID is required.'}, status=400)
+
+    with transaction.atomic():
+        deletions = list(ProductDeletionRequest.objects.select_for_update().filter(
+            product_id=product_id,
+        ).exclude(status='restored').order_by('-updated_at', '-pk'))
+        if not deletions:
+            return JsonResponse({'status': 'error', 'message': 'This product is not deleted.'}, status=409)
+        sightings = list(DeletedProductSighting.objects.filter(product_id=product_id).order_by('branch'))
+        if not sightings:
+            return JsonResponse({'status': 'error', 'message': 'No branch still has this product active.'}, status=404)
+
+        def first_known(field):
+            # Newest deletion record that actually has this detail (older records may be blank).
+            for item in deletions:
+                value = getattr(item, field)
+                if value not in ('', None) and value != 0:
+                    return value
+            return getattr(deletions[0], field)
+
+        pending_branches = {item.branch.casefold() for item in deletions if item.status == 'pending'}
+        queued = []
+        for sighting in sightings:
+            if sighting.branch.casefold() in pending_branches:
+                continue
+            ProductDeletionRequest.objects.create(
+                branch=sighting.branch,
+                product_id=product_id,
+                product_name=sighting.product_name or first_known('product_name'),
+                product_code=first_known('product_code'),
+                barcode=first_known('barcode'),
+                selling_price=first_known('selling_price'),
+                tax_rate=first_known('tax_rate'),
+                requested_by=request.user.get_username(),
+            )
+            queued.append(sighting.branch)
+
+    return JsonResponse({
+        'status': 'accepted',
+        'product_id': product_id,
+        'branches': queued,
+        'already_queued': [item.branch for item in sightings if item.branch not in queued],
+    }, status=202)
 
 
 @login_required(login_url='/login/')
@@ -2804,6 +2922,7 @@ def restore_deleted_product(request):
                 'branch_confirmed', 'pending_product_creation', 'pending_stock_quantity', 'updated_at',
             ])
 
+        DeletedProductSighting.objects.filter(product_id=product_id).delete()
         ProductDeletionRequest.objects.filter(product_id=product_id).update(
             status='restored',
             error='',

@@ -194,6 +194,28 @@ class ProductDeletionRequest(models.Model):
 		]
 
 
+class DeletedProductSighting(models.Model):
+	"""A product deleted on the website that a branch POS still reports as active.
+
+	Recorded from branch stock snapshots so the website can show where a deleted
+	product is still on sale; cleared when that branch deletes it or it is restored.
+	"""
+	branch = models.CharField(max_length=255)
+	product_id = models.IntegerField()
+	product_name = models.CharField(max_length=250, blank=True, default='')
+	available_quantity = models.DecimalField(max_digits=18, decimal_places=0, default=0)
+	last_seen = models.DateTimeField()
+
+	class Meta:
+		ordering = ['product_id', 'branch']
+		constraints = [
+			models.UniqueConstraint(fields=['branch', 'product_id'], name='unique_deleted_product_sighting'),
+		]
+		indexes = [
+			models.Index(fields=['product_id'], name='deleted_sighting_product_idx'),
+		]
+
+
 class BranchHeartbeat(models.Model):
 	branch = models.CharField(max_length=255, unique=True)
 	device_role = models.CharField(max_length=50, default='Branch PC')
