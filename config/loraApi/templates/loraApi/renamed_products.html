@@ -68,13 +68,14 @@
     .settings-grid[aria-disabled="true"] .setting:not(.master) { opacity:.5; }
 
     .stock-table-wrap { overflow-x:auto; border:1px solid var(--line); }
-    .stock-table { width:100%; min-width:980px; border-collapse:collapse; }
+    .stock-table { width:100%; min-width:860px; border-collapse:collapse; }
     .stock-table th { padding:11px 13px; color:var(--muted); background:#fafbf9; border-bottom:1px solid var(--line); text-align:left; font:700 10px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; white-space:nowrap; }
     .stock-table td { padding:13px; border-bottom:1px solid var(--line); vertical-align:top; font:11px Arial,sans-serif; }
     .stock-table tr:last-child td { border-bottom:0; }
     .stock-table tbody tr:hover td { background:#f6faf8; }
     .stock-table .product-name { font:13px Georgia,serif; overflow-wrap:anywhere; }
-    .stock-table .old-name { color:var(--muted); font:13px Georgia,serif; text-decoration:line-through; overflow-wrap:anywhere; }
+    .stock-table .old-name { color:var(--muted); font:12px Georgia,serif; text-decoration:line-through; overflow-wrap:anywhere; }
+    .stock-table .name-label { margin-top:7px; color:var(--muted); font:700 9px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; }
     .stock-table .product-id, .stock-table .earlier { margin-top:3px; color:var(--muted); font:10px Arial,sans-serif; }
     .stock-table td:last-child { white-space:nowrap; }
 
@@ -182,7 +183,7 @@
   const settingDays = document.querySelector('#setting-days');
   const settingHideCompleted = document.querySelector('#setting-hide-completed');
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
-  const formatDate = value => value ? new Date(value).toLocaleString(undefined, { dateStyle:'medium', timeStyle:'short' }) : 'â€“';
+  const formatDate = value => value ? new Date(value).toLocaleString(undefined, { dateStyle:'medium', timeStyle:'short' }) : '–';
   const STATE_LABEL = { updated:'Updated', waiting:'Updating', offline:'Offline', replaced:'Replaced' };
   const STATUS_LABEL = { done:'Updated everywhere', updating:'Updating', offline:'Waiting on offline branches', deleted:'Product deleted', none:'No branches yet' };
   let renameRows = [];
@@ -292,7 +293,7 @@
       return;
     }
     const popupSince = Date.now() - popupWindowDays() * 86400000;
-    historyElement.innerHTML = `<table class="stock-table"><thead><tr><th style="width:20%">Current name</th><th style="width:20%">Previous name</th><th>Branches</th><th>Status</th><th>Renamed by</th><th>Renamed at</th><th>Popup</th></tr></thead><tbody>${products.map(product => {
+    historyElement.innerHTML = `<table class="stock-table"><thead><tr><th style="width:30%">Product name</th><th>Branches</th><th>Status</th><th>Renamed by</th><th>Renamed at</th><th>Popup</th></tr></thead><tbody>${products.map(product => {
       const done = product.branches.filter(branch => branch.state === 'updated').length;
       const total = product.branches.length;
       const tags = product.branches.map(branch => {
@@ -310,11 +311,10 @@
         ? `<button class="row-button" type="button" data-show-popup="${escapeHtml(product.id)}">Show popup</button>`
         : `<span class="muted-note">Older than ${popupWindowDays()} day${popupWindowDays() === 1 ? '' : 's'}</span>`;
       return `<tr>
-        <td><div class="product-name">${highlight(product.current_name || product.new_name, query)}</div><div class="product-id">ID ${highlight(product.product_id, query)}${product.renameCount > 1 ? ` &middot; renamed ${product.renameCount} times` : ''}</div>${nameChangedSince}</td>
-        <td><div class="old-name">${highlight(product.old_name || 'â€“', query)}</div>${earlier}</td>
+        <td><div class="product-name">${highlight(product.current_name || product.new_name, query)}</div><div class="name-label">Previous name</div><div class="old-name">${highlight(product.old_name || '–', query)}</div>${earlier}<div class="product-id">ID ${highlight(product.product_id, query)}${product.renameCount > 1 ? ` &middot; renamed ${product.renameCount} times` : ''}</div>${nameChangedSince}</td>
         <td><div class="tags">${tags || '<span class="muted-note">No branches have this product yet.</span>'}</div>${total ? `<div class="progress">Updated at ${done} of ${total} branch${total === 1 ? '' : 'es'}</div><div class="bar"><span style="width:${Math.round(done / total * 100)}%"></span></div>` : ''}</td>
         <td><span class="transfer-status ${product.state === 'done' ? '' : escapeHtml(product.state)}">${escapeHtml(STATUS_LABEL[product.state])}</span></td>
-        <td>${highlight(product.renamed_by || 'â€“', query)}</td>
+        <td>${highlight(product.renamed_by || '–', query)}</td>
         <td>${escapeHtml(formatDate(product.renamed_at))}</td>
         <td>${popupCell}</td>
       </tr>`;

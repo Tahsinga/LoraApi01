@@ -173,6 +173,17 @@
     stack.setAttribute('aria-label', 'Product rename notifications');
     stack.hidden = true;
     document.body.appendChild(stack);
+    // Same width as the "API received today" box, starting just below it.
+    const meter = document.getElementById('api-bandwidth-meter');
+    const matchMeter = () => {
+      if (!meter || !meter.offsetWidth) return;
+      const box = meter.getBoundingClientRect();
+      stack.style.setProperty('--rename-notice-width', `${Math.round(box.width)}px`);
+      stack.style.setProperty('--rename-notice-top', `${Math.round(box.bottom + 8)}px`);
+    };
+    matchMeter();
+    if (meter && window.ResizeObserver) new ResizeObserver(matchMeter).observe(meter);
+    window.addEventListener('resize', matchMeter);
     stack.addEventListener('click', event => {
       const card = event.target.closest('[data-rename-notice]');
       if (!card) return;
