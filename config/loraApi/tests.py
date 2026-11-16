@@ -603,39 +603,50 @@ class ProductRenameTests(TestCase):
 		)
 
 	def test_removed_branch_is_left_out_of_renames_and_can_be_added_back(self):
-		BranchHeartbeat.objects.create(branch='TEST', last_seen=timezone.now() - timedelta(days=30))
+		BranchHeartbeat.objects.create(branch='OLDBRANCH', last_seen=timezone.now() - timedelta(days=30))
 		self.rename('New Name')
-		self.assertIn('TEST', self.rename_status()[1])
+		self.assertIn('OLDBRANCH', self.rename_status()[1])
 
-		response = self.branch_tracking('test', 'remove')
+		response = self.branch_tracking('oldbranch', 'remove')
 		self.assertEqual(response.status_code, 200)
-		self.assertEqual([item['branch'] for item in response.json()['removed_branches']], ['test'])
+		self.assertIn('oldbranch', [item['branch'] for item in response.json()['removed_branches']])
 		# Removing twice is harmless.
-		self.assertEqual(self.branch_tracking('TEST', 'remove').status_code, 200)
-		self.assertEqual(RenameIgnoredBranch.objects.count(), 1)
+		self.assertEqual(self.branch_tracking('OLDBRANCH', 'remove').status_code, 200)
+		self.assertEqual(RenameIgnoredBranch.objects.filter(branch__iexact='OLDBRANCH').count(), 1)
 
 		renames, states = self.rename_status()
-		self.assertNotIn('TEST', states)
+		self.assertNotIn('OLDBRANCH', states)
 		self.assertEqual(renames[0]['branch_count'], 2)
 		recent = self.client.get('/api/products/renames/?recent=1').json()['renames']
-		self.assertNotIn('TEST', [item['branch'] for item in recent[0]['branches']])
+		self.assertNotIn('OLDBRANCH', [item['branch'] for item in recent[0]['branches']])
 		# New renames skip it too.
 		self.rename('Newer Name')
-		self.assertFalse(ProductRenameBranch.objects.filter(rename__new_name='Newer Name', branch='TEST').exists())
+		self.assertFalse(ProductRenameBranch.objects.filter(rename__new_name='Newer Name', branch='OLDBRANCH').exists())
 		# Nothing else about the branch changes.
-		self.assertTrue(BranchHeartbeat.objects.filter(branch='TEST').exists())
+		self.assertTrue(BranchHeartbeat.objects.filter(branch='OLDBRANCH').exists())
 
-		self.assertEqual(self.branch_tracking('TEST', 'restore').status_code, 200)
-		self.assertEqual(RenameIgnoredBranch.objects.count(), 0)
+		self.assertEqual(self.branch_tracking('OLDBRANCH', 'restore').status_code, 200)
+		self.assertFalse(RenameIgnoredBranch.objects.filter(branch__iexact='OLDBRANCH').exists())
 		renames = self.client.get('/api/products/renames/?product_id=501').json()['renames']
-		self.assertIn('TEST', [item['branch'] for item in renames[1]['branches']])
+		self.assertIn('OLDBRANCH', [item['branch'] for item in renames[1]['branches']])
 
 	def test_branch_tracking_rejects_bad_requests(self):
 		self.assertEqual(self.branch_tracking('', 'remove').status_code, 400)
-		self.assertEqual(self.branch_tracking('TEST', 'delete').status_code, 400)
+		self.assertEqual(self.branch_tracking('OLDBRANCH', 'delete').status_code, 400)
 		self.client.logout()
-		self.assertEqual(self.branch_tracking('TEST', 'remove').status_code, 302)
-		self.assertEqual(RenameIgnoredBranch.objects.count(), 0)
+		self.assertEqual(self.branch_tracking('OLDBRANCH', 'remove').status_code, 302)
+		self.assertFalse(RenameIgnoredBranch.objects.filter(branch__iexact='OLDBRANCH').exists())
+
+	def test_old_and_test_branches_are_removed_from_renames(self):
+		self.assertEqual(sorted(RenameIgnoredBranch.objects.values_list('branch', flat=True)), ['CROSSCOUNTRY', 'LAXDOM TEST', 'TEST'])
+		for branch in ['CROSSCOUNTRY', 'LAXDOM TEST', 'TEST', 'CROSS COUNTRY']:
+			BranchHeartbeat.objects.create(branch=branch, last_seen=timezone.now())
+		self.rename('New Name')
+		states = self.rename_status()[1]
+		self.assertNotIn('CROSSCOUNTRY', states)
+		self.assertNotIn('LAXDOM TEST', states)
+		self.assertNotIn('TEST', states)
+		self.assertIn('CROSS COUNTRY', states)
 
 	def test_main_catalog_publish_with_old_name_does_not_undo_rename(self):
 		self.rename('New Name')
