@@ -23,7 +23,7 @@ public sealed class BranchSyncDashboardForm : Form
     private readonly Button _backButton = new();
     private readonly System.Windows.Forms.Timer _autoPollTimer = new();
     private readonly SemaphoreSlim _syncGate = new(1, 1);
-    private readonly Dictionary<int, (decimal Balance, decimal Sold, decimal Received, string Date)> _publishedStockStates = new();
+    private readonly Dictionary<int, (decimal Balance, decimal Sold, decimal Received, string Date, string Name)> _publishedStockStates = new();
     private DateTimeOffset? _sharedProductCatalogSince;
     private string? _publishedStockSnapshotBranch;
 
@@ -426,7 +426,7 @@ public sealed class BranchSyncDashboardForm : Form
             command.Parameters.AddWithValue("@movementDate", movementDateNumber);
 
             var products = new List<object>();
-            var changedStates = new Dictionary<int, (decimal Balance, decimal Sold, decimal Received, string Date)>();
+            var changedStates = new Dictionary<int, (decimal Balance, decimal Sold, decimal Received, string Date, string Name)>();
             using (var reader = await command.ExecuteReaderAsync())
             {
                 while (await reader.ReadAsync())
@@ -435,7 +435,11 @@ public sealed class BranchSyncDashboardForm : Form
                     var availableQuantity = Convert.ToDecimal(reader["AvailableQuantity"], CultureInfo.InvariantCulture);
                     var soldQuantity = Convert.ToDecimal(reader["SoldQuantity"], CultureInfo.InvariantCulture);
                     var receivedQuantity = Convert.ToDecimal(reader["ReceivedQuantity"], CultureInfo.InvariantCulture);
-                    var currentState = (availableQuantity, soldQuantity, receivedQuantity, movementDateText);
+                    // The name is part of the state so a rename applied from the website is reported back
+                    // on the next sync even when the stock has not changed; the website uses that report
+                    // to show the rename as updated at this branch.
+                    var productName = reader["ProductDesc"]?.ToString()?.Trim() ?? string.Empty;
+                    var currentState = (availableQuantity, soldQuantity, receivedQuantity, movementDateText, productName);
                     if (_publishedStockStates.TryGetValue(productId, out var previousState)
                         && previousState == currentState)
                     {
@@ -445,7 +449,7 @@ public sealed class BranchSyncDashboardForm : Form
                     products.Add(new
                     {
                         product_id = productId,
-                        product_name = reader["ProductDesc"]?.ToString()?.Trim() ?? string.Empty,
+                        product_name = productName,
                         product_code = reader["ProductCode"]?.ToString()?.Trim() ?? string.Empty,
                         barcode = reader["BarCode"]?.ToString()?.Trim() ?? string.Empty,
                         selling_price = Convert.ToDecimal(reader["SellingPrice"], CultureInfo.InvariantCulture),

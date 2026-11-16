@@ -7,7 +7,7 @@ from django.contrib.auth import authenticate, get_user_model
 from django.core.management import call_command
 from loraApi.state_store import load_state
 from django.utils import timezone
-from loraApi.models import BranchHeartbeat, DeletedProductSighting, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
+from loraApi.models import BranchHeartbeat, DeletedProductSighting, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, ProductRename, ProductRenameBranch, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
 import json
 
 
@@ -499,6 +499,60 @@ class ProductRenameTests(TestCase):
 		self.assertEqual(product.pending_product_name, '')
 		self.assertEqual(self.snapshot('Renamed In Quantum').status_code, 200)
 		self.assertEqual(ProductCatalog.objects.get(branch='BranchA', product_id=501).product_name, 'Renamed In Quantum')
+
+	def rename_status(self):
+		response = self.client.get('/api/products/renames/?product_id=501')
+		self.assertEqual(response.status_code, 200)
+		renames = response.json()['renames']
+		return renames, {item['branch']: item['state'] for item in renames[0]['branches']}
+
+	def test_rename_lists_every_branch_including_offline_ones(self):
+		BranchHeartbeat.objects.create(branch='BranchA', last_seen=timezone.now())
+		BranchHeartbeat.objects.create(branch='BranchC', last_seen=timezone.now() - timedelta(days=2))
+		self.rename('New Name')
+
+		renames, states = self.rename_status()
+		self.assertEqual(renames[0]['old_name'], 'Old Name')
+		self.assertEqual(renames[0]['new_name'], 'New Name')
+		# MAIN is not a branch POS; BranchC has no copy yet but is a branch that is offline.
+		self.assertEqual(states, {'BranchA': 'waiting', 'BranchB': 'offline', 'BranchC': 'offline'})
+		self.assertEqual(renames[0]['updated_count'], 0)
+
+	def test_branch_snapshot_with_new_name_marks_that_branch_updated(self):
+		self.rename('New Name')
+		self.snapshot('Old Name')
+		self.assertEqual(self.rename_status()[1]['BranchA'], 'offline')
+
+		self.snapshot('New Name')
+
+		renames, states = self.rename_status()
+		self.assertEqual(states, {'BranchA': 'updated', 'BranchB': 'offline'})
+		self.assertEqual(renames[0]['updated_count'], 1)
+		self.assertIsNotNone(renames[0]['branches'][0]['confirmed_at'])
+
+	def test_main_publish_of_a_branch_row_does_not_confirm_that_branch(self):
+		self.rename('New Name')
+		# The Main PC republishes branch rows it got from the website inbox.
+		self.client.post(
+			'/api/products/publish/',
+			data=json.dumps({'products': [{
+				'branch': 'BranchB', 'product_id': 501, 'product_name': 'New Name', 'available_quantity': 4,
+			}]}),
+			content_type='application/json',
+		)
+
+		self.assertEqual(ProductCatalog.objects.get(branch='BranchB', product_id=501).pending_product_name, 'New Name')
+		self.assertEqual(self.rename_status()[1]['BranchB'], 'offline')
+
+	def test_a_newer_rename_replaces_the_older_one(self):
+		self.rename('First Name')
+		self.rename('Second Name')
+
+		renames = self.client.get('/api/products/renames/').json()['renames']
+		self.assertEqual([item['new_name'] for item in renames], ['Second Name', 'First Name'])
+		self.assertEqual({item['state'] for item in renames[1]['branches']}, {'replaced'})
+		self.assertEqual(renames[1]['old_name'], 'Old Name')
+		self.assertEqual(renames[0]['old_name'], 'First Name')
 
 	def test_main_catalog_publish_with_old_name_does_not_undo_rename(self):
 		self.rename('New Name')

@@ -163,6 +163,22 @@
     .product-delete-dialog .product-delete-cancel { color:var(--ink); background:#e8eeea; }
     .product-movement-dialog { width:min(1120px, calc(100% - 28px)); max-height:90vh; padding:22px; color:var(--ink); background:var(--white); border:1px solid var(--line); border-radius:8px; box-shadow:0 18px 60px rgba(0,0,0,.24); }
     .product-movement-dialog::backdrop { background:rgba(15,29,28,.58); }
+    .rename-status-dialog { width:min(760px, calc(100% - 28px)); }
+    .rename-status-list { display:grid; gap:10px; max-height:62vh; overflow:auto; }
+    .rename-status-item { padding:12px 14px; background:#fbfcfa; border:1px solid var(--line); border-radius:5px; }
+    .rename-status-item.replaced { opacity:.6; }
+    .rename-status-item h3 { margin:0; font:700 12px/1.4 Arial,sans-serif; overflow-wrap:anywhere; }
+    .rename-status-item h3 s { color:var(--muted); font-weight:400; }
+    .rename-status-item small { display:block; margin-top:4px; color:var(--muted); font:10px Arial,sans-serif; }
+    .rename-branches { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+    .rename-branch { display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border-radius:999px; font:700 10px Arial,sans-serif; }
+    .rename-branch::before { content:''; width:7px; height:7px; border-radius:50%; background:currentColor; }
+    .rename-branch.updated { color:#14633a; background:#d8f0e1; }
+    .rename-branch.waiting { color:#8a5a00; background:#f8e8c4; }
+    .rename-branch.offline { color:#8b2d20; background:#f7d9d3; }
+    .rename-branch.replaced { color:var(--muted); background:#e8eeea; }
+    .rename-legend { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 12px; }
+    .rename-status-button { width:auto; grid-column:auto; margin:0; padding:9px 12px; }
     .product-movement-header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:14px; }
     .product-movement-header h2, .product-movement-header p { margin:0; }
     .product-movement-header .sub { margin-top:5px; }
@@ -366,7 +382,7 @@
       </div>
       </div>
       <div id="products-panel" class="panel panel-wide product-browser branch-data-card" data-branch-loading-card>
-        <div class="browser-heading"><div><h2>Branch products</h2></div><div class="browser-actions"><div class="highlight-tools" role="group" aria-label="Highlight products"><button id="highlight-duplicates" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products that share a name"><span class="chip-dot" aria-hidden="true"></span>Same names<span class="chip-count" data-chip-count>0</span></button><div class="price-chip-group"><button id="highlight-low-prices" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products priced at or under the limit"><span class="chip-dot" aria-hidden="true"></span>Low prices<span class="chip-count" data-chip-count>0</span></button><label class="low-price-limit">&le;<input id="low-price-limit" type="number" min="0" step="0.01" value="0.50" aria-label="Low price limit"></label></div></div><label class="activity-date-label">Movement date<input id="product-movement-date" type="date"></label><span id="product-catalog-status" class="catalog-status">Select a branch to load products.</span></div></div>
+        <div class="browser-heading"><div><h2>Branch products</h2></div><div class="browser-actions"><div class="highlight-tools" role="group" aria-label="Highlight products"><button id="highlight-duplicates" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products that share a name"><span class="chip-dot" aria-hidden="true"></span>Same names<span class="chip-count" data-chip-count>0</span></button><div class="price-chip-group"><button id="highlight-low-prices" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products priced at or under the limit"><span class="chip-dot" aria-hidden="true"></span>Low prices<span class="chip-count" data-chip-count>0</span></button><label class="low-price-limit">&le;<input id="low-price-limit" type="number" min="0" step="0.01" value="0.50" aria-label="Low price limit"></label></div></div><button id="rename-status-open" class="rename-status-button refresh-stock-button" type="button" title="See which branches have received renamed products">Renames</button><label class="activity-date-label">Movement date<input id="product-movement-date" type="date"></label><span id="product-catalog-status" class="catalog-status">Select a branch to load products.</span></div></div>
         <label>Search products<input id="branch-product-search" type="search" placeholder="Search products by name, code, or barcode" autocomplete="off"></label>
         <div id="branch-products" class="stock-table-wrap"><p class="empty">Select a branch to see its products.</p></div>
       </div>
@@ -396,6 +412,12 @@
         <div class="product-delete-actions"><button id="product-rename-cancel" class="product-delete-cancel" type="button">Cancel</button><button type="submit">Save name</button></div>
         <p id="product-rename-status" class="notice" role="status"></p>
       </form>
+    </dialog>
+    <dialog id="rename-status-dialog" class="product-movement-dialog rename-status-dialog" aria-labelledby="rename-status-title">
+      <div class="product-movement-header"><div><h2 id="rename-status-title">Renamed products</h2><p id="rename-status-sub" class="sub">Where each new name has reached the branch POS.</p></div><button id="rename-status-close" class="product-movement-close" type="button">Close</button></div>
+      <div class="rename-legend"><span class="rename-branch updated">Updated on POS</span><span class="rename-branch waiting">Online, updating</span><span class="rename-branch offline">Offline, updates when it reconnects</span></div>
+      <div id="rename-status-list" class="rename-status-list"></div>
+      <p id="rename-status-message" class="product-movement-status" role="status"></p>
     </dialog>
     <dialog id="movement-adjustment-confirm-dialog" class="movement-adjustment-dialog" aria-labelledby="movement-adjustment-confirm-title">
       <form id="movement-adjustment-confirm-form">
@@ -463,6 +485,12 @@
   const productRenameStatus = document.querySelector('#product-rename-status');
   const productRenameCancel = document.querySelector('#product-rename-cancel');
   let pendingProductRename = null;
+  const renameStatusDialog = document.querySelector('#rename-status-dialog');
+  const renameStatusList = document.querySelector('#rename-status-list');
+  const renameStatusMessage = document.querySelector('#rename-status-message');
+  const renameStatusTitle = document.querySelector('#rename-status-title');
+  let renameStatusProductId = null;
+  let renameStatusTimer = null;
   const productMovementDialog = document.querySelector('#product-movement-dialog');
   const productMovementTitle = document.querySelector('#product-movement-title');
   const productMovementSubtitle = document.querySelector('#product-movement-subtitle');
@@ -1004,6 +1032,53 @@
     productRenameName.focus();
     productRenameName.select();
   }
+  const renameStateLabels = { updated:'Updated', waiting:'Updating', offline:'Offline', replaced:'Replaced by a newer name' };
+  function formatRenameTime(value) {
+    return value ? new Intl.DateTimeFormat(undefined, {dateStyle:'medium', timeStyle:'short'}).format(new Date(value)) : '';
+  }
+  function renderRenameStatus(renames) {
+    if (!renames.length) {
+      renameStatusList.innerHTML = '<p class="empty">No products have been renamed on the website yet.</p>';
+      return;
+    }
+    renameStatusList.innerHTML = renames.map(rename => {
+      const branches = rename.branches.map(item => {
+        const detail = item.state === 'updated'
+          ? `Updated ${formatRenameTime(item.confirmed_at)}`
+          : item.last_seen ? `Last online ${formatRenameTime(item.last_seen)}` : 'Branch app has not connected yet';
+        return `<span class="rename-branch ${escapeHtml(item.state)}" title="${escapeHtml(detail)}">${escapeHtml(item.branch)} &middot; ${escapeHtml(renameStateLabels[item.state] || item.state)}</span>`;
+      }).join('');
+      const progress = rename.latest
+        ? `${rename.updated_count} of ${rename.branch_count} branch${rename.branch_count === 1 ? '' : 'es'} updated`
+        : 'Replaced by a newer name';
+      return `<article class="rename-status-item${rename.latest ? '' : ' replaced'}"><h3><s>${escapeHtml(rename.old_name)}</s> &rarr; ${escapeHtml(rename.new_name)}</h3><small>Product ID ${escapeHtml(rename.product_id)} &middot; ${escapeHtml(formatRenameTime(rename.renamed_at))}${rename.renamed_by ? ` by ${escapeHtml(rename.renamed_by)}` : ''} &middot; ${escapeHtml(progress)}</small><div class="rename-branches">${branches || '<small>No branches have this product yet.</small>'}</div></article>`;
+    }).join('');
+  }
+  async function loadRenameStatus() {
+    const query = renameStatusProductId ? `?product_id=${encodeURIComponent(renameStatusProductId)}` : '';
+    try {
+      const response = await fetch(`/api/products/renames/${query}`, { cache:'no-store' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'Rename status could not be loaded.');
+      renderRenameStatus(data.renames || []);
+      renameStatusMessage.textContent = `Checked ${formatRenameTime(new Date().toISOString())}. Refreshes every 15 seconds while open.`;
+    } catch (error) {
+      renameStatusMessage.textContent = error.message;
+    }
+  }
+  function openRenameStatus(productId = null) {
+    renameStatusProductId = productId;
+    renameStatusTitle.textContent = productId ? 'Rename progress' : 'Renamed products';
+    renameStatusList.innerHTML = '<p class="empty">Loading...</p>';
+    renameStatusMessage.textContent = '';
+    if (!renameStatusDialog.open) renameStatusDialog.showModal();
+    loadRenameStatus();
+    clearInterval(renameStatusTimer);
+    renameStatusTimer = setInterval(loadRenameStatus, 15000);
+  }
+  document.querySelector('#rename-status-open').addEventListener('click', () => openRenameStatus());
+  document.querySelector('#rename-status-close').addEventListener('click', () => renameStatusDialog.close());
+  renameStatusDialog.addEventListener('close', () => { clearInterval(renameStatusTimer); renameStatusTimer = null; });
   productRenameCancel.addEventListener('click', () => productRenameDialog.close());
   productRenameDialog.addEventListener('close', () => { pendingProductRename = null; });
   productRenameForm.addEventListener('submit', async event => {
@@ -1033,6 +1108,7 @@
       productRenameDialog.close();
       productCatalogStatus.textContent = `Renamed ${data.old_name} to ${data.product_name}. POS branches will receive the new name on sync.`;
       renderBranchProducts();
+      openRenameStatus(product.product_id);
     } catch (error) {
       productRenameStatus.className = 'notice error';
       productRenameStatus.textContent = error.message;

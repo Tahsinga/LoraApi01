@@ -218,6 +218,40 @@ class DeletedProductSighting(models.Model):
 		]
 
 
+class ProductRename(models.Model):
+	"""A product name changed on the website, kept so the site can show where it arrived."""
+	id = models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')
+	product_id = models.IntegerField()
+	old_name = models.CharField(max_length=250, blank=True, default='')
+	new_name = models.CharField(max_length=250)
+	renamed_by = models.CharField(max_length=255, blank=True, default='')
+	renamed_at = models.DateTimeField()
+
+	class Meta:
+		ordering = ['-renamed_at', '-id']
+		indexes = [
+			models.Index(fields=['product_id', '-renamed_at'], name='product_rename_product_idx'),
+			models.Index(fields=['-renamed_at'], name='product_rename_time_idx'),
+		]
+
+
+class ProductRenameBranch(models.Model):
+	"""One branch of a rename; confirmed_at is set when that branch's own POS reports the new name."""
+	id = models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')
+	rename = models.ForeignKey(ProductRename, on_delete=models.CASCADE, related_name='branches')
+	branch = models.CharField(max_length=255)
+	confirmed_at = models.DateTimeField(null=True, blank=True)
+
+	class Meta:
+		ordering = ['branch']
+		constraints = [
+			models.UniqueConstraint(fields=['rename', 'branch'], name='unique_product_rename_branch'),
+		]
+		indexes = [
+			models.Index(fields=['branch', 'confirmed_at'], name='product_rename_branch_idx'),
+		]
+
+
 class BranchHeartbeat(models.Model):
 	branch = models.CharField(max_length=255, unique=True)
 	device_role = models.CharField(max_length=50, default='Branch PC')

@@ -25,7 +25,7 @@ from django.utils.dateparse import parse_date, parse_datetime, parse_time
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.gzip import gzip_page
 
-from .models import BranchHeartbeat, DeletedProductSighting, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
+from .models import BranchHeartbeat, DeletedProductSighting, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, ProductRename, ProductRenameBranch, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
 from .state_store import sync_users_to_state
 from .branch_restore import MAIN_FALLBACK_SQL, build_restore_script
 
@@ -2183,6 +2183,7 @@ def publish_branch_stock_snapshot(request):
         update_field_names = set()
         movements_to_create = []
         sightings_to_save = []
+        confirmed_renames = {}
         for snapshot in snapshots:
             if snapshot['product_id'] in deleted_product_ids:
                 # Deleted on the web but still active on this POS: remember where,
@@ -2235,6 +2236,7 @@ def publish_branch_stock_snapshot(request):
                 # A name edited on the website wins until the POS reports it back.
                 snapshot_fields = snapshot_fields[1:]
                 if names_match(snapshot['product_name'], product.pending_product_name):
+                    confirmed_renames[product.product_id] = product.pending_product_name
                     product.pending_product_name = ''
                     changed_fields.append('pending_product_name')
             for field in snapshot_fields:
@@ -2294,6 +2296,8 @@ def publish_branch_stock_snapshot(request):
         if movements_to_create:
             StockMovement.objects.bulk_create(movements_to_create, batch_size=500)
         movements_recorded = len(movements_to_create)
+        if confirmed_renames:
+            confirm_branch_renames(branch, confirmed_renames, now)
         if sightings_to_save:
             DeletedProductSighting.objects.bulk_create(
                 sightings_to_save,
@@ -2515,6 +2519,7 @@ def rename_product(request):
             item.updated_at = now
         ProductCatalog.objects.bulk_update(products, ['product_name', 'pending_product_name', 'updated_at'])
         MainStockBalance.objects.filter(product_id=product_id).update(product_name=product_name)
+        record_product_rename(product_id, old_name, product_name, request.user.get_username(), now)
 
     invalidate_product_catalog_cache()
     return JsonResponse({
@@ -2524,6 +2529,111 @@ def rename_product(request):
         'product_name': product_name,
         'branch_count': sum(1 for item in products if item.branch.casefold() != 'main'),
     })
+
+
+RENAME_BRANCH_ONLINE_WINDOW = timedelta(minutes=5)
+
+
+def record_product_rename(product_id, old_name, new_name, renamed_by, now):
+    """Save a website rename and the branches whose POS still has to apply it.
+
+    Every branch that has the product is listed, plus every branch app that has
+    ever connected, so a branch that is offline right now is shown as waiting.
+    """
+    branches = {}
+    for branch in ProductCatalog.objects.filter(product_id=product_id).values_list('branch', flat=True):
+        if branch and branch.casefold() != 'main':
+            branches.setdefault(branch.casefold(), branch)
+    for branch in BranchHeartbeat.objects.values_list('branch', flat=True):
+        if branch and branch.casefold() != 'main':
+            branches.setdefault(branch.casefold(), branch)
+    rename = ProductRename.objects.create(
+        product_id=product_id,
+        old_name=old_name or '',
+        new_name=new_name,
+        renamed_by=renamed_by or '',
+        renamed_at=now,
+    )
+    ProductRenameBranch.objects.bulk_create(
+        [ProductRenameBranch(rename=rename, branch=branch) for branch in sorted(branches.values())],
+        batch_size=500,
+    )
+    return rename
+
+
+def confirm_branch_renames(branch, confirmed_names, now):
+    """Mark renames as arrived at a branch whose POS reported the new name."""
+    waiting = ProductRenameBranch.objects.filter(
+        branch__iexact=branch,
+        confirmed_at__isnull=True,
+        rename__product_id__in=list(confirmed_names),
+    ).select_related('rename')
+    confirmed_ids = [
+        item.id for item in waiting
+        if names_match(item.rename.new_name, confirmed_names.get(item.rename.product_id))
+    ]
+    if confirmed_ids:
+        ProductRenameBranch.objects.filter(id__in=confirmed_ids).update(confirmed_at=now)
+
+
+def product_rename_rows(renames, now=None):
+    now = now or timezone.now()
+    last_seen = {item.branch.casefold(): item.last_seen for item in BranchHeartbeat.objects.only('branch', 'last_seen')}
+    # Only the newest rename of a product is still being sent to branches.
+    latest_ids = {}
+    for row in ProductRename.objects.filter(
+        product_id__in={rename.product_id for rename in renames},
+    ).order_by('product_id', '-renamed_at', '-id').values('product_id', 'id'):
+        latest_ids.setdefault(row['product_id'], row['id'])
+    rows = []
+    for rename in renames:
+        is_latest = latest_ids.get(rename.product_id) == rename.id
+        branches = []
+        for item in rename.branches.all():
+            seen = last_seen.get(item.branch.casefold())
+            if item.confirmed_at:
+                state = 'updated'
+            elif not is_latest:
+                state = 'replaced'
+            elif seen and now - seen <= RENAME_BRANCH_ONLINE_WINDOW:
+                state = 'waiting'
+            else:
+                state = 'offline'
+            branches.append({
+                'branch': item.branch,
+                'state': state,
+                'confirmed_at': item.confirmed_at.isoformat() if item.confirmed_at else None,
+                'last_seen': seen.isoformat() if seen else None,
+            })
+        rows.append({
+            'id': rename.id,
+            'product_id': rename.product_id,
+            'old_name': rename.old_name,
+            'new_name': rename.new_name,
+            'renamed_by': rename.renamed_by,
+            'renamed_at': rename.renamed_at.isoformat(),
+            'latest': is_latest,
+            'updated_count': sum(1 for item in branches if item['state'] == 'updated'),
+            'branch_count': len(branches),
+            'branches': branches,
+        })
+    return rows
+
+
+@login_required(login_url='/login/')
+def product_rename_status(request):
+    """Recent website renames and, per branch, whether its POS has the new name yet."""
+    if request.method != 'GET':
+        return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
+
+    renames = ProductRename.objects.prefetch_related('branches')
+    product_id = str(request.GET.get('product_id', '')).strip()
+    if product_id:
+        try:
+            renames = renames.filter(product_id=int(product_id))
+        except ValueError:
+            return JsonResponse({'status': 'error', 'message': 'Invalid product.'}, status=400)
+    return JsonResponse({'status': 'ok', 'renames': product_rename_rows(list(renames[:100]))})
 
 
 @login_required(login_url='/login/')
@@ -3388,7 +3498,9 @@ def publish_product_catalog(request):
             pending_name = current['pending_product_name'] if current is not None else ''
             if pending_name:
                 # A name edited on the website wins until the POS reports it back.
-                if names_match(row.product_name, pending_name):
+                # Branch rows published by the Main PC are copies of website data,
+                # so only that branch's own stock snapshot may confirm its rename.
+                if names_match(row.product_name, pending_name) and row.branch.casefold() == 'main':
                     row.pending_product_name = ''
                 else:
                     row.product_name = pending_name
