@@ -3048,6 +3048,13 @@ class BranchRestoreTests(TestCase):
 		self.assertNotIn('Still Being Created', script)
 		self.assertIn('Products:     2   (total units 27)', script)
 		self.assertIn('IF @Apply = 1 COMMIT TRANSACTION; ELSE ROLLBACK TRANSACTION;', script)
+		# uses the Quantum database's own company, not always 412
+		self.assertIn('SELECT TOP (1) @CompanyId = companies.companyId FROM (', script)
+		# POSViewer cannot add the same products halfway through (duplicate key)
+		self.assertIn('FROM dbo.Products WITH (TABLOCKX, HOLDLOCK);', script)
+		self.assertIn('WHERE NOT EXISTS (SELECT 1 FROM dbo.Products AS p WHERE p.ProductID = n.ProductID);', script)
+		# rows older POSViewer versions saved under company 412 are moved to the right company
+		self.assertIn('IF @CompanyId <> @OldPosCompanyId', script)
 
 	def test_large_branch_is_split_into_batches(self):
 		ProductCatalog.objects.bulk_create([

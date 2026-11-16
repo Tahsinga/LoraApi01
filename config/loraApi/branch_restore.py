@@ -27,7 +27,32 @@ MAIN_FALLBACK_SQL = Path(__file__).resolve().parent / 'sql' / 'restore_branch_fr
 RESTORE_SQL_BODY = """\
 BEGIN TRANSACTION;
 
-DECLARE @ProductsUpdated int = 0, @ProductsAdded int = 0, @StockRowsSet int = 0, @StockRowsAdded int = 0;
+DECLARE @ProductsUpdated int = 0, @ProductsAdded int = 0, @StockRowsSet int = 0, @StockRowsAdded int = 0,
+    @ProductsMoved int = 0, @StockRowsMoved int = 0, @Locked int;
+
+-- 0) Lock the product and stock tables until the restore finishes, so the branch sync
+--    (POSViewer) cannot add the same products halfway through.
+SELECT @Locked = COUNT(*) FROM dbo.Products WITH (TABLOCKX, HOLDLOCK);
+SELECT @Locked = COUNT(*) FROM dbo.ProductStockBalances WITH (TABLOCKX, HOLDLOCK);
+
+-- 0b) Older POSViewer versions always saved products and stock under company 412. If this
+--     Quantum database uses another company, move those rows to it so Quantum shows them.
+IF @CompanyId <> @OldPosCompanyId
+BEGIN
+    UPDATE p SET p.coid = @CompanyId
+    FROM dbo.Products AS p
+    WHERE p.coid = @OldPosCompanyId
+      AND NOT EXISTS (SELECT 1 FROM dbo.Products AS x WHERE x.coid = @CompanyId AND x.ProductCode = p.ProductCode);
+    SET @ProductsMoved = @@ROWCOUNT;
+
+    UPDATE s SET s.coid = @CompanyId
+    FROM dbo.ProductStockBalances AS s
+    WHERE s.coid = @OldPosCompanyId
+      AND NOT EXISTS (
+          SELECT 1 FROM dbo.ProductStockBalances AS x
+          WHERE x.ProductID = s.ProductID AND x.branch = s.branch AND x.coid = @CompanyId);
+    SET @StockRowsMoved = @@ROWCOUNT;
+END
 
 -- 1) Products that already exist: bring name, barcode, price and tax rate up to date, make them active.
 UPDATE p
@@ -68,7 +93,8 @@ BEGIN
         0, 0, 0, 0,
         0, 0, 0, 0, 0, 0,
         0
-    FROM #NewProducts AS n;
+    FROM #NewProducts AS n
+    WHERE NOT EXISTS (SELECT 1 FROM dbo.Products AS p WHERE p.ProductID = n.ProductID);
     SET @ProductsAdded = @@ROWCOUNT;
     IF COLUMNPROPERTY(OBJECT_ID(N'dbo.Products'), 'ProductID', 'IsIdentity') = 1
         SET IDENTITY_INSERT dbo.Products OFF;
@@ -94,7 +120,12 @@ SET @StockRowsAdded = @@ROWCOUNT;
 
 -- 4) Result.
 SELECT @Branch AS Branch,
+    @CompanyId AS CompanyId,
+    CASE WHEN EXISTS (SELECT 1 FROM dbo.Branches WHERE Branch = @Branch) THEN N'yes'
+         ELSE N'NO - this Quantum database has no branch with this name' END AS BranchInQuantum,
     (SELECT COUNT(*) FROM #RestoreProducts) AS ProductsInBackup,
+    @ProductsMoved AS ProductsMovedToCompany,
+    @StockRowsMoved AS StockRowsMovedToCompany,
     @ProductsUpdated AS ProductsUpdated,
     @ProductsAdded AS ProductsAdded,
     @StockRowsSet AS StockRowsSet,
@@ -103,6 +134,9 @@ SELECT @Branch AS Branch,
     (SELECT SUM(s.StockBal) FROM dbo.ProductStockBalances AS s
         WHERE s.coid = @CompanyId AND s.branch = @Branch
           AND s.ProductID IN (SELECT ProductID FROM #RestoreProducts)) AS UnitsInPosNow,
+    (SELECT COUNT(*) FROM dbo.Products AS p
+        WHERE p.coid = @CompanyId AND p.IsActive = 1
+          AND p.ProductID IN (SELECT ProductID FROM #RestoreProducts)) AS ProductsQuantumShows,
     CASE WHEN @Apply = 1 THEN N'RESTORED - start the branch sync (POSViewer) again.'
          ELSE N'DRY RUN - nothing was saved. Set @Apply = 1 and run again to restore.' END AS Result;
 
@@ -154,6 +188,15 @@ def restore_header(branch, source, generated_at, product_count, total_units, sto
         'DECLARE @Apply bit = 0;                 -- 0 = dry run (nothing saved), 1 = restore',
         f'DECLARE @Branch varchar(50) = {sql_text(branch)};',
         f'DECLARE @CompanyId int = {POS_COMPANY_ID};',
+        f'DECLARE @OldPosCompanyId int = {POS_COMPANY_ID};   -- company older POSViewer versions always used',
+        '',
+        '-- Use this Quantum database\'s own company: the branch row first, then the company record.',
+        "IF OBJECT_ID(N'dbo.Branches', N'U') IS NOT NULL AND OBJECT_ID(N'dbo.Company', N'U') IS NOT NULL",
+        '    SELECT TOP (1) @CompanyId = companies.companyId FROM (',
+        "        SELECT 0 AS priority, CAST(Coid AS int) AS companyId FROM dbo.Branches WHERE Branch = @Branch AND Coid > 0",
+        '        UNION ALL',
+        '        SELECT 1, CAST(CompanyID AS int) FROM dbo.Company WHERE CompanyID > 0',
+        '    ) AS companies ORDER BY companies.priority;',
         '',
         "IF OBJECT_ID(N'dbo.Products', N'U') IS NULL OR OBJECT_ID(N'dbo.ProductStockBalances', N'U') IS NULL",
         'BEGIN',

@@ -63,6 +63,15 @@ SET XACT_ABORT ON;
 DECLARE @Apply bit = 0;                 -- 0 = dry run (nothing saved), 1 = restore
 DECLARE @Branch varchar(50) = N''{branch}'';
 DECLARE @CompanyId int = 412;
+DECLARE @OldPosCompanyId int = 412;   -- company older POSViewer versions always used
+
+-- Use this Quantum database''s own company: the branch row first, then the company record.
+IF OBJECT_ID(N''dbo.Branches'', N''U'') IS NOT NULL AND OBJECT_ID(N''dbo.Company'', N''U'') IS NOT NULL
+    SELECT TOP (1) @CompanyId = companies.companyId FROM (
+        SELECT 0 AS priority, CAST(Coid AS int) AS companyId FROM dbo.Branches WHERE Branch = @Branch AND Coid > 0
+        UNION ALL
+        SELECT 1, CAST(CompanyID AS int) FROM dbo.Company WHERE CompanyID > 0
+    ) AS companies ORDER BY companies.priority;
 
 IF OBJECT_ID(N''dbo.Products'', N''U'') IS NULL OR OBJECT_ID(N''dbo.ProductStockBalances'', N''U'') IS NULL
 BEGIN
@@ -128,7 +137,32 @@ DEALLOCATE products;
 -- Restore steps (same text as the website version).
 PRINT N'BEGIN TRANSACTION;';
 PRINT '';
-PRINT N'DECLARE @ProductsUpdated int = 0, @ProductsAdded int = 0, @StockRowsSet int = 0, @StockRowsAdded int = 0;';
+PRINT N'DECLARE @ProductsUpdated int = 0, @ProductsAdded int = 0, @StockRowsSet int = 0, @StockRowsAdded int = 0,';
+PRINT N'    @ProductsMoved int = 0, @StockRowsMoved int = 0, @Locked int;';
+PRINT '';
+PRINT N'-- 0) Lock the product and stock tables until the restore finishes, so the branch sync';
+PRINT N'--    (POSViewer) cannot add the same products halfway through.';
+PRINT N'SELECT @Locked = COUNT(*) FROM dbo.Products WITH (TABLOCKX, HOLDLOCK);';
+PRINT N'SELECT @Locked = COUNT(*) FROM dbo.ProductStockBalances WITH (TABLOCKX, HOLDLOCK);';
+PRINT '';
+PRINT N'-- 0b) Older POSViewer versions always saved products and stock under company 412. If this';
+PRINT N'--     Quantum database uses another company, move those rows to it so Quantum shows them.';
+PRINT N'IF @CompanyId <> @OldPosCompanyId';
+PRINT N'BEGIN';
+PRINT N'    UPDATE p SET p.coid = @CompanyId';
+PRINT N'    FROM dbo.Products AS p';
+PRINT N'    WHERE p.coid = @OldPosCompanyId';
+PRINT N'      AND NOT EXISTS (SELECT 1 FROM dbo.Products AS x WHERE x.coid = @CompanyId AND x.ProductCode = p.ProductCode);';
+PRINT N'    SET @ProductsMoved = @@ROWCOUNT;';
+PRINT '';
+PRINT N'    UPDATE s SET s.coid = @CompanyId';
+PRINT N'    FROM dbo.ProductStockBalances AS s';
+PRINT N'    WHERE s.coid = @OldPosCompanyId';
+PRINT N'      AND NOT EXISTS (';
+PRINT N'          SELECT 1 FROM dbo.ProductStockBalances AS x';
+PRINT N'          WHERE x.ProductID = s.ProductID AND x.branch = s.branch AND x.coid = @CompanyId);';
+PRINT N'    SET @StockRowsMoved = @@ROWCOUNT;';
+PRINT N'END';
 PRINT '';
 PRINT N'-- 1) Products that already exist: bring name, barcode, price and tax rate up to date, make them active.';
 PRINT N'UPDATE p';
@@ -169,7 +203,8 @@ PRINT N'        n.TaxRate, 0, ''EA'', ''0'', 1, '''', @CompanyId, NULL,';
 PRINT N'        0, 0, 0, 0,';
 PRINT N'        0, 0, 0, 0, 0, 0,';
 PRINT N'        0';
-PRINT N'    FROM #NewProducts AS n;';
+PRINT N'    FROM #NewProducts AS n';
+PRINT N'    WHERE NOT EXISTS (SELECT 1 FROM dbo.Products AS p WHERE p.ProductID = n.ProductID);';
 PRINT N'    SET @ProductsAdded = @@ROWCOUNT;';
 PRINT N'    IF COLUMNPROPERTY(OBJECT_ID(N''dbo.Products''), ''ProductID'', ''IsIdentity'') = 1';
 PRINT N'        SET IDENTITY_INSERT dbo.Products OFF;';
@@ -195,7 +230,12 @@ PRINT N'SET @StockRowsAdded = @@ROWCOUNT;';
 PRINT '';
 PRINT N'-- 4) Result.';
 PRINT N'SELECT @Branch AS Branch,';
+PRINT N'    @CompanyId AS CompanyId,';
+PRINT N'    CASE WHEN EXISTS (SELECT 1 FROM dbo.Branches WHERE Branch = @Branch) THEN N''yes''';
+PRINT N'         ELSE N''NO - this Quantum database has no branch with this name'' END AS BranchInQuantum,';
 PRINT N'    (SELECT COUNT(*) FROM #RestoreProducts) AS ProductsInBackup,';
+PRINT N'    @ProductsMoved AS ProductsMovedToCompany,';
+PRINT N'    @StockRowsMoved AS StockRowsMovedToCompany,';
 PRINT N'    @ProductsUpdated AS ProductsUpdated,';
 PRINT N'    @ProductsAdded AS ProductsAdded,';
 PRINT N'    @StockRowsSet AS StockRowsSet,';
@@ -204,6 +244,9 @@ PRINT N'    (SELECT SUM(StockBal) FROM #RestoreProducts) AS UnitsInBackup,';
 PRINT N'    (SELECT SUM(s.StockBal) FROM dbo.ProductStockBalances AS s';
 PRINT N'        WHERE s.coid = @CompanyId AND s.branch = @Branch';
 PRINT N'          AND s.ProductID IN (SELECT ProductID FROM #RestoreProducts)) AS UnitsInPosNow,';
+PRINT N'    (SELECT COUNT(*) FROM dbo.Products AS p';
+PRINT N'        WHERE p.coid = @CompanyId AND p.IsActive = 1';
+PRINT N'          AND p.ProductID IN (SELECT ProductID FROM #RestoreProducts)) AS ProductsQuantumShows,';
 PRINT N'    CASE WHEN @Apply = 1 THEN N''RESTORED - start the branch sync (POSViewer) again.''';
 PRINT N'         ELSE N''DRY RUN - nothing was saved. Set @Apply = 1 and run again to restore.'' END AS Result;';
 PRINT '';

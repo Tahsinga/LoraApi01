@@ -10,7 +10,10 @@ namespace POSViewer;
 
 public sealed class BranchSyncDashboardForm : Form
 {
-    private const int BranchCompanyId = 412;
+    // Quantum company id (coid) of this branch database. Read from the branch's own
+    // Quantum database at every sync; 412 is only used if it cannot be read.
+    private const int DefaultBranchCompanyId = 412;
+    private static int BranchCompanyId { get; set; } = DefaultBranchCompanyId;
     private const int BranchSqlCommandTimeoutSeconds = 120;
     private readonly ConnectionForm _connectionForm;
     private readonly ConnectionSettings _settings;
@@ -103,6 +106,46 @@ public sealed class BranchSyncDashboardForm : Form
         _ = SyncNowAsync();
     }
 
+    private async Task RefreshBranchCompanyIdAsync(string branchName)
+    {
+        try
+        {
+            using var connection = new SqlConnection(_settings.BuildConnectionString());
+            await connection.OpenAsync();
+            // The branch row's company first, then the Quantum company record.
+            const string companySql = @"
+                SELECT TOP (1) companyId FROM (
+                    SELECT 0 AS priority, CAST(Coid AS int) AS companyId
+                    FROM [dbo].[Branches]
+                    WHERE UPPER(LTRIM(RTRIM(CAST(Branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
+                      AND Coid IS NOT NULL AND Coid > 0
+                    UNION ALL
+                    SELECT 1, CAST(CompanyID AS int)
+                    FROM [dbo].[Company]
+                    WHERE CompanyID IS NOT NULL AND CompanyID > 0
+                ) AS companies
+                ORDER BY priority;";
+            using var command = new SqlCommand(companySql, connection) { CommandTimeout = BranchSqlCommandTimeoutSeconds };
+            command.Parameters.AddWithValue("@branch", branchName ?? string.Empty);
+            var value = await command.ExecuteScalarAsync();
+            if (value is null or DBNull)
+            {
+                return;
+            }
+
+            var companyId = Convert.ToInt32(value, CultureInfo.InvariantCulture);
+            if (companyId > 0 && companyId != BranchCompanyId)
+            {
+                BranchCompanyId = companyId;
+                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [SYNC] Using Quantum company ID {companyId} for {branchName}.");
+            }
+        }
+        catch (Exception ex)
+        {
+            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Could not read the Quantum company ID, using {BranchCompanyId}: {ex.Message}");
+        }
+    }
+
     private void LoadSyncQueue()
     {
         _syncQueueListBox.Items.Clear();
@@ -125,6 +168,7 @@ public sealed class BranchSyncDashboardForm : Form
                 AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli,
             }) { Timeout = TimeSpan.FromMinutes(3) };
             var branchName = await GetBranchNameAsync();
+            await RefreshBranchCompanyIdAsync(branchName);
 
             try
             {
