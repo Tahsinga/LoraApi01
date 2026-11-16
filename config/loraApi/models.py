@@ -252,6 +252,17 @@ class ProductRenameBranch(models.Model):
 		]
 
 
+class RenameIgnoredBranch(models.Model):
+	"""A branch left out of rename tracking (old or test branches); it can be added back."""
+	id = models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')
+	branch = models.CharField(max_length=255, unique=True)
+	removed_by = models.CharField(max_length=255, blank=True, default='')
+	removed_at = models.DateTimeField()
+
+	class Meta:
+		ordering = ['branch']
+
+
 class BranchHeartbeat(models.Model):
 	branch = models.CharField(max_length=255, unique=True)
 	device_role = models.CharField(max_length=50, default='Branch PC')

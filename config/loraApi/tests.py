@@ -7,7 +7,7 @@ from django.contrib.auth import authenticate, get_user_model
 from django.core.management import call_command
 from loraApi.state_store import load_state
 from django.utils import timezone
-from loraApi.models import BranchHeartbeat, DeletedProductSighting, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, ProductRename, ProductRenameBranch, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
+from loraApi.models import BranchHeartbeat, DeletedProductSighting, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, ProductRename, ProductRenameBranch, RenameIgnoredBranch, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
 import json
 
 
@@ -594,6 +594,48 @@ class ProductRenameTests(TestCase):
 		# Out-of-range and invalid values fall back safely.
 		self.assertEqual(len(self.client.get('/api/products/renames/?recent=1&days=99').json()['renames']), 1)
 		self.assertEqual(self.client.get('/api/products/renames/?recent=1&days=x').status_code, 200)
+
+	def branch_tracking(self, branch, action):
+		return self.client.post(
+			'/api/products/renames/branches/',
+			data=json.dumps({'branch': branch, 'action': action}),
+			content_type='application/json',
+		)
+
+	def test_removed_branch_is_left_out_of_renames_and_can_be_added_back(self):
+		BranchHeartbeat.objects.create(branch='TEST', last_seen=timezone.now() - timedelta(days=30))
+		self.rename('New Name')
+		self.assertIn('TEST', self.rename_status()[1])
+
+		response = self.branch_tracking('test', 'remove')
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual([item['branch'] for item in response.json()['removed_branches']], ['test'])
+		# Removing twice is harmless.
+		self.assertEqual(self.branch_tracking('TEST', 'remove').status_code, 200)
+		self.assertEqual(RenameIgnoredBranch.objects.count(), 1)
+
+		renames, states = self.rename_status()
+		self.assertNotIn('TEST', states)
+		self.assertEqual(renames[0]['branch_count'], 2)
+		recent = self.client.get('/api/products/renames/?recent=1').json()['renames']
+		self.assertNotIn('TEST', [item['branch'] for item in recent[0]['branches']])
+		# New renames skip it too.
+		self.rename('Newer Name')
+		self.assertFalse(ProductRenameBranch.objects.filter(rename__new_name='Newer Name', branch='TEST').exists())
+		# Nothing else about the branch changes.
+		self.assertTrue(BranchHeartbeat.objects.filter(branch='TEST').exists())
+
+		self.assertEqual(self.branch_tracking('TEST', 'restore').status_code, 200)
+		self.assertEqual(RenameIgnoredBranch.objects.count(), 0)
+		renames = self.client.get('/api/products/renames/?product_id=501').json()['renames']
+		self.assertIn('TEST', [item['branch'] for item in renames[1]['branches']])
+
+	def test_branch_tracking_rejects_bad_requests(self):
+		self.assertEqual(self.branch_tracking('', 'remove').status_code, 400)
+		self.assertEqual(self.branch_tracking('TEST', 'delete').status_code, 400)
+		self.client.logout()
+		self.assertEqual(self.branch_tracking('TEST', 'remove').status_code, 302)
+		self.assertEqual(RenameIgnoredBranch.objects.count(), 0)
 
 	def test_main_catalog_publish_with_old_name_does_not_undo_rename(self):
 		self.rename('New Name')

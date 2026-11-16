@@ -94,6 +94,26 @@
     .row-button { display:inline-flex; align-items:center; justify-content:center; min-height:28px; margin:0; padding:5px 8px; color:#fff; background:var(--teal); border:0; border-radius:2px; cursor:pointer; font:700 9px Arial,sans-serif; letter-spacing:1px; line-height:1.1; text-transform:uppercase; white-space:nowrap; }
     .row-button:hover { background:var(--teal-dark); }
     .muted-note { color:var(--muted); font:11px Arial,sans-serif; }
+    .tag-remove { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; margin:0 -3px 0 2px; padding:0; color:inherit; background:transparent; border:0; border-radius:50%; cursor:pointer; font:700 13px/1 Arial,sans-serif; opacity:.6; }
+    .tag-remove:hover, .tag-remove:focus-visible { opacity:1; background:rgba(0,0,0,.08); outline:none; }
+    .branch-list { display:grid; grid-template-columns:repeat(auto-fill, minmax(250px, 1fr)); gap:8px; }
+    .branch-item { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; background:#fbfcfa; border:1px solid var(--line); border-left:4px solid #18794e; }
+    .branch-item.offline { border-left-color:#c74337; }
+    .branch-item.waiting { border-left-color:#d49a16; }
+    .branch-item.removed { border-left-color:#9aa5a7; }
+    .branch-item strong { display:block; font:700 12px Arial,sans-serif; overflow-wrap:anywhere; }
+    .branch-item small { display:block; margin-top:3px; color:var(--muted); font:10px Arial,sans-serif; }
+    .row-button.danger { background:#9c352b; } .row-button.danger:hover { background:#76271f; }
+    .row-button.quiet { color:var(--ink); background:#e8eeea; } .row-button.quiet:hover { background:#dce5df; }
+    .row-button:disabled { opacity:.6; cursor:wait; }
+    .section-label { margin:18px 0 8px; color:#435153; font:700 10px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; }
+    .confirm-dialog { width:min(440px, calc(100% - 32px)); padding:24px; color:var(--ink); background:var(--white); border:1px solid var(--line); box-shadow:0 18px 60px rgba(0,0,0,.24); }
+    .confirm-dialog::backdrop { background:rgba(15,29,28,.52); }
+    .confirm-dialog h2 { margin:0 0 8px; }
+    .confirm-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
+    .confirm-actions button { margin:0; padding:11px 14px; color:#fff; background:#9c352b; border:0; border-radius:2px; cursor:pointer; font:700 10px Arial,sans-serif; letter-spacing:1.3px; text-transform:uppercase; }
+    .confirm-actions .cancel { color:var(--ink); background:#e8eeea; }
+    .notice { margin:10px 0 0; font:11px/1.4 Arial,sans-serif; } .notice.error { color:#a53b2e; }
     .empty { margin:0; padding:18px 13px; color:var(--muted); font:11px Arial,sans-serif; }
     .foot { margin-top:12px; color:var(--muted); font:11px Arial,sans-serif; }
     mark { padding:0 1px; color:inherit; background:#fff1a8; }
@@ -158,6 +178,15 @@
 
       <div class="panel">
         <div class="browser-heading">
+          <div><h2>Branches</h2><p class="sub">Every branch renames are sent to. Remove old or test branches so they no longer show on renames and popups. Only rename tracking changes; the branch's stock, history and POS sync stay as they are.</p></div>
+          <div class="browser-actions"><span id="branches-status" class="catalog-status" role="status"></span></div>
+        </div>
+        <div id="branch-list" class="branch-list"><p class="empty">Loading branches...</p></div>
+        <div id="removed-branches-wrap" hidden><p class="section-label">Removed from renames</p><div id="removed-branches" class="branch-list"></div></div>
+      </div>
+
+      <div class="panel">
+        <div class="browser-heading">
           <div><h2>Rename history</h2><p class="sub">One row per product, with the newest rename. Branch status is for the current name.</p></div>
           <div class="browser-actions"><span id="status" class="catalog-status" role="status">Loading renamed products...</span><button id="refresh" class="refresh-stock-button" type="button">Refresh</button></div>
         </div>
@@ -167,6 +196,13 @@
     </section>
   </main>
 </div>
+
+<dialog id="remove-branch-dialog" class="confirm-dialog" aria-labelledby="remove-branch-title">
+  <h2 id="remove-branch-title">Remove branch from renames</h2>
+  <p id="remove-branch-description" class="sub"></p>
+  <div class="confirm-actions"><button id="remove-branch-cancel" class="cancel" type="button">Cancel</button><button id="remove-branch-confirm" type="button">Remove branch</button></div>
+  <p id="remove-branch-status" class="notice" role="status"></p>
+</dialog>
 
 <script>
   const historyElement = document.querySelector('#history');
@@ -187,6 +223,14 @@
   const STATE_LABEL = { updated:'Updated', waiting:'Updating', offline:'Offline', replaced:'Replaced' };
   const STATUS_LABEL = { done:'Updated everywhere', updating:'Updating', offline:'Waiting on offline branches', deleted:'Product deleted', none:'No branches yet' };
   let renameRows = [];
+  let removedBranches = [];
+  let pendingRemoveBranch = null;
+  const branchListElement = document.querySelector('#branch-list');
+  const removedBranchesElement = document.querySelector('#removed-branches');
+  const removedBranchesWrap = document.querySelector('#removed-branches-wrap');
+  const branchesStatus = document.querySelector('#branches-status');
+  const removeBranchDialog = document.querySelector('#remove-branch-dialog');
+  const removeBranchStatus = document.querySelector('#remove-branch-status');
   let activeFilter = 'all';
   let loading = false;
 
@@ -300,7 +344,7 @@
         const detail = branch.state === 'updated'
           ? `Updated ${formatDate(branch.confirmed_at)}`
           : branch.last_seen ? `Last online ${formatDate(branch.last_seen)}` : 'Branch app has not connected yet';
-        return `<span class="tag ${branch.state === 'updated' ? '' : escapeHtml(branch.state)}" title="${escapeHtml(detail)}">${highlight(branch.branch, query)} &middot; ${escapeHtml(STATE_LABEL[branch.state] || branch.state)}</span>`;
+        return `<span class="tag ${branch.state === 'updated' ? '' : escapeHtml(branch.state)}" title="${escapeHtml(detail)}">${highlight(branch.branch, query)} &middot; ${escapeHtml(STATE_LABEL[branch.state] || branch.state)}<button class="tag-remove" type="button" data-remove-branch="${escapeHtml(branch.branch)}" aria-label="Remove ${escapeHtml(branch.branch)} from renames" title="Remove ${escapeHtml(branch.branch)} from renames">&times;</button></span>`;
       }).join('');
       const nameChangedSince = product.current_name && product.current_name !== product.new_name
         ? `<div class="earlier">Renamed on the web to ${highlight(product.new_name, query)}; a POS has since reported this name.</div>` : '';
@@ -331,6 +375,8 @@
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || 'Renamed products could not be loaded.');
       renameRows = data.renames || [];
+      removedBranches = data.removed_branches || [];
+      renderBranches();
       statusElement.className = 'catalog-status';
       statusElement.textContent = `Updated ${new Date().toLocaleTimeString(undefined, { timeStyle:'short' })}`;
       renderHistory();
@@ -342,6 +388,82 @@
       loading = false;
     }
   }
+
+  // --- Branches: remove old or test branches from rename tracking, or add them back ---
+  function renderBranches() {
+    const latest = groupedProducts().filter(product => !product.deleted);
+    const branches = new Map();
+    latest.forEach(product => product.branches.forEach(branch => {
+      const key = branch.branch.toLowerCase();
+      if (!branches.has(key)) branches.set(key, { branch: branch.branch, updated: 0, waiting: 0, offline: 0, last_seen: branch.last_seen });
+      const entry = branches.get(key);
+      if (branch.state in entry) entry[branch.state] += 1;
+      if (branch.last_seen && (!entry.last_seen || branch.last_seen > entry.last_seen)) entry.last_seen = branch.last_seen;
+    }));
+    const list = [...branches.values()].sort((a, b) => (b.offline - a.offline) || a.branch.localeCompare(b.branch));
+    branchListElement.innerHTML = list.length ? list.map(entry => {
+      const state = entry.offline ? 'offline' : entry.waiting ? 'waiting' : '';
+      const summary = entry.offline
+        ? `Offline &middot; waiting on ${entry.offline} rename${entry.offline === 1 ? '' : 's'}`
+        : entry.waiting ? `Updating ${entry.waiting} rename${entry.waiting === 1 ? '' : 's'}` : `All ${entry.updated} rename${entry.updated === 1 ? '' : 's'} updated`;
+      const seen = entry.last_seen ? `Last online ${escapeHtml(formatDate(entry.last_seen))}` : 'Branch app has not connected recently';
+      return `<div class="branch-item ${state}"><div><strong>${escapeHtml(entry.branch)}</strong><small>${summary}</small><small>${seen}</small></div><button class="row-button ${entry.offline ? 'danger' : 'quiet'}" type="button" data-remove-branch="${escapeHtml(entry.branch)}">Remove</button></div>`;
+    }).join('') : '<p class="empty">No branches are being tracked for renames.</p>';
+    removedBranchesWrap.hidden = !removedBranches.length;
+    removedBranchesElement.innerHTML = removedBranches.map(item => `<div class="branch-item removed"><div><strong>${escapeHtml(item.branch)}</strong><small>Removed ${escapeHtml(formatDate(item.removed_at))}${item.removed_by ? ` by ${escapeHtml(item.removed_by)}` : ''}</small></div><button class="row-button" type="button" data-restore-branch="${escapeHtml(item.branch)}">Add back</button></div>`).join('');
+    const offline = list.filter(entry => entry.offline).length;
+    branchesStatus.textContent = `${list.length} branch${list.length === 1 ? '' : 'es'}${offline ? ` · ${offline} offline` : ''}${removedBranches.length ? ` · ${removedBranches.length} removed` : ''}`;
+  }
+
+  async function changeBranchTracking(branch, action) {
+    const response = await fetch('/api/products/renames/branches/', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ branch, action }) });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || 'The branch could not be changed.');
+    removedBranches = data.removed_branches || [];
+    await loadRenames(true);
+    if (notices()) notices().refresh();
+  }
+  function openRemoveBranch(branch) {
+    pendingRemoveBranch = branch;
+    document.querySelector('#remove-branch-description').textContent = `Remove ${branch} from rename tracking? It will no longer show on renamed products or rename popups. Its stock, history and POS sync are not changed, and you can add it back at any time.`;
+    removeBranchStatus.className = 'notice';
+    removeBranchStatus.textContent = '';
+    removeBranchDialog.showModal();
+    document.querySelector('#remove-branch-cancel').focus();
+  }
+  document.querySelector('#remove-branch-cancel').addEventListener('click', () => removeBranchDialog.close());
+  removeBranchDialog.addEventListener('close', () => { pendingRemoveBranch = null; });
+  document.querySelector('#remove-branch-confirm').addEventListener('click', async event => {
+    if (!pendingRemoveBranch) return;
+    const button = event.currentTarget;
+    const branch = pendingRemoveBranch;
+    button.disabled = true;
+    removeBranchStatus.textContent = 'Removing...';
+    try {
+      await changeBranchTracking(branch, 'remove');
+      removeBranchDialog.close();
+      branchesStatus.textContent = `${branch} removed from renames.`;
+    } catch (error) {
+      removeBranchStatus.className = 'notice error';
+      removeBranchStatus.textContent = error.message;
+    } finally {
+      button.disabled = false;
+    }
+  });
+  document.addEventListener('click', async event => {
+    const remove = event.target.closest('[data-remove-branch]');
+    if (remove) { event.stopPropagation(); openRemoveBranch(remove.dataset.removeBranch); return; }
+    const restore = event.target.closest('[data-restore-branch]');
+    if (!restore) return;
+    restore.disabled = true;
+    try {
+      await changeBranchTracking(restore.dataset.restoreBranch, 'restore');
+      branchesStatus.textContent = `${restore.dataset.restoreBranch} added back to renames.`;
+    } catch (error) {
+      branchesStatus.textContent = error.message;
+      restore.disabled = false;
+    }
+  });
 
   historyElement.addEventListener('click', async event => {
     const button = event.target.closest('[data-show-popup]');
@@ -361,7 +483,7 @@
     renderHistory();
   }));
   document.addEventListener('keydown', event => {
-    if (event.key === '/' && document.activeElement !== searchInput && !['INPUT', 'SELECT'].includes(document.activeElement.tagName)) { event.preventDefault(); searchInput.focus(); }
+    if (event.key === '/' && !removeBranchDialog.open && document.activeElement !== searchInput && !['INPUT', 'SELECT'].includes(document.activeElement.tagName)) { event.preventDefault(); searchInput.focus(); }
   });
   window.addEventListener('storage', event => { if (event.key === 'loraRenameNoticeSettings' || event.key === 'loraRenameNotices') { fillSettings(); renderHistory(); } });
   // rename_notifications.js loads with defer, after this inline script.

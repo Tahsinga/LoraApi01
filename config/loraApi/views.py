@@ -25,7 +25,7 @@ from django.utils.dateparse import parse_date, parse_datetime, parse_time
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.gzip import gzip_page
 
-from .models import BranchHeartbeat, DeletedProductSighting, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, ProductRename, ProductRenameBranch, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
+from .models import BranchHeartbeat, DeletedProductSighting, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, ProductRename, ProductRenameBranch, RenameIgnoredBranch, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
 from .state_store import sync_users_to_state
 from .branch_restore import MAIN_FALLBACK_SQL, build_restore_script
 
@@ -2547,11 +2547,12 @@ def record_product_rename(product_id, old_name, new_name, renamed_by, now):
     ever connected, so a branch that is offline right now is shown as waiting.
     """
     branches = {}
+    ignored = ignored_rename_branches()
     for branch in ProductCatalog.objects.filter(product_id=product_id).values_list('branch', flat=True):
-        if branch and branch.casefold() != 'main':
+        if branch and branch.casefold() != 'main' and branch.casefold() not in ignored:
             branches.setdefault(branch.casefold(), branch)
     for branch in BranchHeartbeat.objects.values_list('branch', flat=True):
-        if branch and branch.casefold() != 'main':
+        if branch and branch.casefold() != 'main' and branch.casefold() not in ignored:
             branches.setdefault(branch.casefold(), branch)
     rename = ProductRename.objects.create(
         product_id=product_id,
@@ -2565,6 +2566,11 @@ def record_product_rename(product_id, old_name, new_name, renamed_by, now):
         batch_size=500,
     )
     return rename
+
+
+def ignored_rename_branches():
+    """Branches left out of rename tracking, case-folded."""
+    return {branch.casefold() for branch in RenameIgnoredBranch.objects.values_list('branch', flat=True)}
 
 
 def confirm_branch_renames(branch, confirmed_names, now):
@@ -2602,11 +2608,14 @@ def product_rename_rows(renames, now=None):
     deleted_ids = set(ProductDeletionRequest.objects.filter(
         product_id__in={rename.product_id for rename in renames},
     ).exclude(status='restored').values_list('product_id', flat=True))
+    ignored = ignored_rename_branches()
     rows = []
     for rename in renames:
         is_latest = latest_ids.get(rename.product_id) == rename.id
         branches = []
         for item in rename.branches.all():
+            if item.branch.casefold() in ignored:
+                continue  # removed from rename tracking; its rows are kept so it can be added back
             seen = last_seen.get(item.branch.casefold())
             if item.confirmed_at:
                 state = 'updated'
@@ -2663,7 +2672,50 @@ def product_rename_status(request):
         )[:50]))
         return JsonResponse({'status': 'ok', 'renames': [row for row in rows if row['latest']]})
     limit = 1000 if str(request.GET.get('all', '')).strip() == '1' else 100
-    return JsonResponse({'status': 'ok', 'renames': product_rename_rows(list(renames[:limit]))})
+    return JsonResponse({
+        'status': 'ok',
+        'renames': product_rename_rows(list(renames[:limit])),
+        'removed_branches': removed_rename_branch_rows(),
+    })
+
+
+def removed_rename_branch_rows():
+    return [
+        {'branch': item.branch, 'removed_by': item.removed_by, 'removed_at': item.removed_at.isoformat()}
+        for item in RenameIgnoredBranch.objects.all()
+    ]
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
+@retry_on_database_lock
+def rename_tracking_branches(request):
+    """Remove a branch from rename tracking (old or test branches), or add it back.
+
+    Nothing else about the branch changes: its stock, history and POS sync are untouched.
+    """
+    if request.method == 'GET':
+        return JsonResponse({'status': 'ok', 'removed_branches': removed_rename_branch_rows()})
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use GET or POST method'}, status=405)
+    try:
+        payload = json.loads(request.body or '{}')
+        if not isinstance(payload, dict):
+            raise ValueError
+    except (ValueError, json.JSONDecodeError):
+        return JsonResponse({'status': 'error', 'message': 'Invalid JSON'}, status=400)
+    branch = ' '.join(str(payload.get('branch', '')).split())
+    action = str(payload.get('action', '')).strip()
+    if not branch or action not in ('remove', 'restore'):
+        return JsonResponse({'status': 'error', 'message': 'A branch and an action (remove or restore) are required.'}, status=400)
+
+    existing = RenameIgnoredBranch.objects.filter(branch__iexact=branch)
+    if action == 'remove':
+        if not existing.exists():
+            RenameIgnoredBranch.objects.create(branch=branch, removed_by=request.user.get_username(), removed_at=timezone.now())
+    else:
+        existing.delete()
+    return JsonResponse({'status': 'ok', 'branch': branch, 'action': action, 'removed_branches': removed_rename_branch_rows()})
 
 
 @login_required(login_url='/login/')
