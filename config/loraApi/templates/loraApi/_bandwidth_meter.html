@@ -4,6 +4,39 @@
   #api-bandwidth-meter strong { color:#075d5a; font-size:14px; }
   #api-bandwidth-meter small { color:#6d7b7d; font-size:11px; }
   #api-bandwidth-meter:hover { border-color:#087f78; }
+  #rename-notice-stack { position:fixed; top:64px; right:14px; z-index:39; display:flex; flex-direction:column; gap:10px; width:min(340px, calc(100vw - 28px)); max-height:calc(100vh - 84px); overflow-y:auto; padding:2px; }
+  #rename-notice-stack[hidden] { display:none; }
+  .rename-notice { position:relative; overflow:hidden; flex:0 0 auto; padding:12px 14px 14px; color:#182326; background:#fff; border:1px solid #dbe3df; border-left:4px solid #087f78; box-shadow:0 8px 24px rgba(28,62,54,.18); font:12px/1.4 Arial,sans-serif; animation:rename-notice-in .2s ease-out; }
+  .rename-notice.closing { opacity:0; transform:translateX(16px); transition:opacity .18s, transform .18s; }
+  .rename-notice-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .rename-notice-head strong { color:#075d5a; font-size:11px; letter-spacing:.6px; text-transform:uppercase; }
+  .rename-notice-actions { display:flex; align-items:center; gap:4px; }
+  .rename-notice-actions button { display:inline-flex; align-items:center; gap:4px; width:auto; min-height:28px; margin:0; padding:4px 8px; color:#182326; background:#e8eeea; border:0; border-radius:4px; cursor:pointer; font:700 10px Arial,sans-serif; letter-spacing:0; text-transform:none; }
+  .rename-notice-actions button:hover { background:#dce5df; }
+  .rename-notice-actions button:focus-visible { outline:2px solid #087f78; outline-offset:1px; }
+  .rename-notice-pin svg { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:2; stroke-linejoin:round; }
+  .rename-notice-pin[aria-pressed="true"] { color:#fff; background:#087f78; }
+  .rename-notice-pin[aria-pressed="true"]:hover { background:#075d5a; }
+  .rename-notice-pin[aria-pressed="true"] svg { fill:currentColor; }
+  .rename-notice-close { min-width:28px; justify-content:center; font-size:16px !important; line-height:1; }
+  .rename-notice-names { margin:8px 0 2px; overflow-wrap:anywhere; }
+  .rename-notice-names s { color:#6d7b7d; }
+  .rename-notice-meta { margin:0; color:#6d7b7d; font-size:10px; }
+  .rename-notice-progress { height:4px; margin:8px 0; background:#e8eeea; border-radius:2px; overflow:hidden; }
+  .rename-notice-progress span { display:block; height:100%; background:#1f8a4c; transition:width .3s; }
+  .rename-notice-chips { display:flex; flex-wrap:wrap; gap:5px; }
+  .rename-notice-chips small { color:#6d7b7d; font-size:10px; }
+  .rename-notice-chip { display:inline-flex; align-items:center; gap:5px; padding:3px 7px; border-radius:999px; font:700 10px Arial,sans-serif; }
+  .rename-notice-chip::before { content:''; width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .rename-notice-chip.updated { color:#14633a; background:#d8f0e1; }
+  .rename-notice-chip.waiting { color:#8a5a00; background:#f8e8c4; }
+  .rename-notice-chip.offline { color:#8b2d20; background:#f7d9d3; }
+  .rename-notice-timer { position:absolute; left:0; bottom:0; height:3px; width:100%; background:#087f78; opacity:.45; transform-origin:left; animation:rename-notice-countdown var(--rename-notice-close, 10s) linear forwards; }
+  .rename-notice.pinned .rename-notice-timer, .rename-notice.hold .rename-notice-timer { display:none; }
+  @keyframes rename-notice-in { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:none; } }
+  @keyframes rename-notice-countdown { from { transform:scaleX(1); } to { transform:scaleX(0); } }
+  @media (prefers-reduced-motion:reduce) { .rename-notice, .rename-notice-timer { animation:none; } .rename-notice.closing { transition:none; } }
+  @media (max-width:520px) { #rename-notice-stack { top:8px; right:8px; left:8px; width:auto; max-height:calc(100vh - 140px); } }
   @media (max-width:520px) { #api-bandwidth-meter { top:auto; right:8px; bottom:80px; gap:6px; padding:7px 9px; font-size:11px; } }
 </style>
 <a id="api-bandwidth-meter" href="/bandwidth/" aria-label="View API bandwidth details" title="View browser-measured API response transfer today. Request uploads are not included.">
@@ -12,3 +45,4 @@
   <small data-bandwidth-count>0 responses</small>
 </a>
 <script src="{% static 'loraApi/bandwidth.js' %}" defer></script>
+<script src="{% static 'loraApi/rename_notifications.js' %}" defer></script>

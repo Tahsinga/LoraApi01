@@ -1108,7 +1108,7 @@
       productRenameDialog.close();
       productCatalogStatus.textContent = `Renamed ${data.old_name} to ${data.product_name}. POS branches will receive the new name on sync.`;
       renderBranchProducts();
-      openRenameStatus(product.product_id);
+      if (window.LoraRenameNotices) window.LoraRenameNotices.refresh();
     } catch (error) {
       productRenameStatus.className = 'notice error';
       productRenameStatus.textContent = error.message;

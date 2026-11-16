@@ -2532,6 +2532,7 @@ def rename_product(request):
 
 
 RENAME_BRANCH_ONLINE_WINDOW = timedelta(minutes=5)
+RENAME_NOTIFICATION_WINDOW = timedelta(days=3)
 
 
 def record_product_rename(product_id, old_name, new_name, renamed_by, now):
@@ -2633,6 +2634,12 @@ def product_rename_status(request):
             renames = renames.filter(product_id=int(product_id))
         except ValueError:
             return JsonResponse({'status': 'error', 'message': 'Invalid product.'}, status=400)
+    if str(request.GET.get('recent', '')).strip() == '1':
+        # Notifications: renames of the last few days that are still the current name.
+        rows = product_rename_rows(list(renames.filter(
+            renamed_at__gte=timezone.now() - RENAME_NOTIFICATION_WINDOW,
+        )[:50]))
+        return JsonResponse({'status': 'ok', 'renames': [row for row in rows if row['latest']]})
     return JsonResponse({'status': 'ok', 'renames': product_rename_rows(list(renames[:100]))})
 
 

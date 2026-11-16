@@ -554,6 +554,21 @@ class ProductRenameTests(TestCase):
 		self.assertEqual(renames[1]['old_name'], 'Old Name')
 		self.assertEqual(renames[0]['old_name'], 'First Name')
 
+	def test_recent_renames_for_notifications_skip_old_and_replaced_ones(self):
+		self.rename('First Name')
+		self.rename('Second Name')
+		ProductCatalog.objects.create(branch='BranchA', product_id=502, product_name='Other Old', available_quantity=1)
+		self.rename('Other New', product_id=502)
+		ProductRename.objects.filter(new_name='Other New').update(renamed_at=timezone.now() - timedelta(days=4))
+
+		renames = self.client.get('/api/products/renames/?recent=1').json()['renames']
+		self.assertEqual([item['new_name'] for item in renames], ['Second Name'])
+
+	def test_pages_with_the_api_meter_load_rename_notifications(self):
+		response = self.client.get('/stock/')
+		self.assertContains(response, 'rename_notifications.js')
+		self.assertContains(response, 'API received today')
+
 	def test_main_catalog_publish_with_old_name_does_not_undo_rename(self):
 		self.rename('New Name')
 
