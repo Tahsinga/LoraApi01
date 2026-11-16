@@ -16,7 +16,7 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.forms import SetPasswordForm, UserCreationForm
 from django.core.cache import cache
 from django.db import OperationalError, ProgrammingError, close_old_connections, connection, transaction
-from django.db.models import BigIntegerField, Case, DateTimeField, F, IntegerField, Max, OuterRef, Q, Subquery, Sum, Value, When
+from django.db.models import Count, BigIntegerField, Case, DateTimeField, F, IntegerField, Max, OuterRef, Q, Subquery, Sum, Value, When
 from django.db.models.functions import Cast, Coalesce
 from django.http import JsonResponse, HttpResponse
 from django.shortcuts import render
@@ -27,6 +27,7 @@ from django.views.decorators.gzip import gzip_page
 
 from .models import BranchHeartbeat, DeletedProductSighting, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
 from .state_store import sync_users_to_state
+from .branch_restore import MAIN_FALLBACK_SQL, build_restore_script
 
 WHATSAPP_STOCK_BRANCHES = (
     'COMPLEX',
@@ -479,6 +480,126 @@ def product_stock_matrix(request):
     response = render(request, 'loraApi/product_stock_matrix.html')
     response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response['Pragma'] = 'no-cache'
+    return response
+
+
+# --------------------------------------------------------------------------
+# Branch restore: rebuild a branch's Quantum POS stock from the cloud copy.
+# --------------------------------------------------------------------------
+
+def branch_restore_rows(branch):
+    """What the cloud holds for one branch: active (not deleted) products and stock."""
+    products = ProductCatalog.objects.filter(
+        branch__iexact=branch,
+        branch_confirmed=True,
+        pending_product_creation=False,
+    ).exclude(
+        product_id__in=deleted_product_id_subquery(),
+    ).order_by('product_id')
+    rows = []
+    for product in products:
+        price = product.selling_price
+        if product.pending_price_update and product.pending_selling_price is not None:
+            price = product.pending_selling_price  # the website price wins
+        rows.append({
+            'branch': product.branch,
+            'product_id': product.product_id,
+            'product_name': product.pending_product_name or product.product_name,
+            'product_code': product.product_code,
+            'barcode': product.barcode,
+            'selling_price': price,
+            'tax_rate': product.tax_rate,
+            'quantity': product.available_quantity,
+            'updated_at': product.updated_at,
+        })
+    return rows
+
+
+def branch_restore_last_seen():
+    try:
+        return {item.branch.casefold(): item.last_seen for item in BranchHeartbeat.objects.only('branch', 'last_seen')}
+    except ProgrammingError:
+        return {}
+
+
+@login_required(login_url='/login/')
+def branch_restore_page(request):
+    return render(request, 'loraApi/branch_restore.html')
+
+
+@login_required(login_url='/login/')
+def branch_restore_branches(request):
+    if request.method != 'GET':
+        return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
+
+    last_seen = branch_restore_last_seen()
+    totals = {}
+    for row in ProductCatalog.objects.filter(
+        branch_confirmed=True,
+        pending_product_creation=False,
+    ).exclude(branch__iexact='MAIN').exclude(branch='').exclude(
+        product_id__in=deleted_product_id_subquery(),
+    ).values('branch').annotate(
+        products=Count('id'),
+        units=Sum('available_quantity'),
+        last_stock_update=Max('updated_at'),
+    ):
+        key = row['branch'].casefold()
+        entry = totals.setdefault(key, {'branch': row['branch'], 'products': 0, 'units': Decimal('0'), 'last_stock_update': None})
+        entry['products'] += row['products']
+        entry['units'] += row['units'] or Decimal('0')
+        if row['last_stock_update'] and (entry['last_stock_update'] is None or row['last_stock_update'] > entry['last_stock_update']):
+            entry['last_stock_update'] = row['last_stock_update']
+
+    branches = []
+    for key, entry in sorted(totals.items()):
+        seen = last_seen.get(key)
+        branches.append({
+            'branch': entry['branch'],
+            'products': entry['products'],
+            'units': str(entry['units']),
+            'last_seen': seen.isoformat() if seen else None,
+            'last_stock_update': entry['last_stock_update'].isoformat() if entry['last_stock_update'] else None,
+        })
+    return JsonResponse({'status': 'ok', 'branches': branches})
+
+
+@login_required(login_url='/login/')
+def branch_restore_script(request):
+    if request.method != 'GET':
+        return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
+
+    branch = str(request.GET.get('branch', '')).strip()
+    if not branch or branch.casefold() == 'main':
+        return JsonResponse({'status': 'error', 'message': 'Choose a branch to restore.'}, status=400)
+    rows = branch_restore_rows(branch)
+    if not rows:
+        return JsonResponse({'status': 'error', 'message': 'The cloud has no products for that branch.'}, status=404)
+    if len(rows[0]['branch']) > 50:
+        return JsonResponse({'status': 'error', 'message': 'Branch names longer than 50 characters do not fit the Quantum database.'}, status=400)
+
+    branch_name = rows[0]['branch']
+    seen = branch_restore_last_seen().get(branch_name.casefold())
+    last_update = max(row['updated_at'] for row in rows)
+    as_of = seen or last_update
+    script = build_restore_script(
+        branch_name,
+        rows,
+        source=f'Lora website (cloud database), requested by {request.user.get_username()}',
+        generated_at=timezone.localtime().strftime('%Y-%m-%d %H:%M %Z'),
+        stock_as_of=f"last branch sync {timezone.localtime(as_of).strftime('%Y-%m-%d %H:%M %Z')}",
+    )
+    safe_name = ''.join(char if char.isalnum() else '_' for char in branch_name).strip('_') or 'branch'
+    response = HttpResponse(script, content_type='application/sql; charset=utf-8')
+    response['Content-Disposition'] = f'attachment; filename="restore_{safe_name}_{timezone.localtime().strftime("%Y%m%d_%H%M")}.sql"'
+    response['Cache-Control'] = 'no-store'
+    return response
+
+
+@login_required(login_url='/login/')
+def branch_restore_main_fallback(request):
+    response = HttpResponse(MAIN_FALLBACK_SQL.read_text(encoding='utf-8'), content_type='application/sql; charset=utf-8')
+    response['Content-Disposition'] = 'attachment; filename="restore_branch_from_main.sql"'
     return response
 
 

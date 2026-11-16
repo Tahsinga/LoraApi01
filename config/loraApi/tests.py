@@ -3005,3 +3005,74 @@ class AuthenticationTests(TestCase):
 		self.assertEqual(self.client.post('/logout/').status_code, 302)
 		self.assertEqual(self.client.post('/logout/').url, '/login/')
 		self.assertRedirects(self.client.get('/'), '/login/?next=/')
+
+
+class BranchRestoreTests(TestCase):
+	def setUp(self):
+		self.admin = get_user_model().objects.create_superuser(username='restore-admin', password='RestorePass4182!')
+		self.client.force_login(self.admin)
+		ProductCatalog.objects.create(branch='WEST', product_id=701, product_name="KELLOGG'S", product_code='702', barcode='600', selling_price='2.50', tax_rate='15.00', available_quantity=24)
+		ProductCatalog.objects.create(branch='WEST', product_id=703, product_name='Old Name', pending_product_name='Website Name', product_code='', selling_price='1.00', pending_price_update=True, pending_selling_price='1.20', available_quantity=3)
+		ProductCatalog.objects.create(branch='WEST', product_id=705, product_name='Deleted Product', available_quantity=9)
+		ProductCatalog.objects.create(branch='WEST', product_id=707, product_name='Still Being Created', pending_product_creation=True, available_quantity=0)
+		ProductCatalog.objects.create(branch='VEES', product_id=701, product_name="KELLOGG'S", available_quantity=5)
+		ProductCatalog.objects.create(branch='MAIN', product_id=701, product_name="KELLOGG'S", available_quantity=100)
+		ProductDeletionRequest.objects.create(branch='WEST', product_id=705, status='completed')
+		BranchHeartbeat.objects.create(branch='WEST', last_seen=timezone.now())
+
+	def test_page_and_branch_list(self):
+		page = self.client.get('/stock/restore/')
+		self.assertContains(page, 'Branch restore')
+		self.assertContains(page, 'Download restore script')
+		self.assertContains(page, '/api/stock/restore/main-fallback.sql')
+
+		branches = {item['branch']: item for item in self.client.get('/api/stock/restore/').json()['branches']}
+		self.assertEqual(set(branches), {'VEES', 'WEST'})
+		self.assertEqual(branches['WEST']['products'], 2)
+		self.assertEqual(branches['WEST']['units'], '27')
+		self.assertIsNotNone(branches['WEST']['last_seen'])
+
+	def test_restore_script_has_the_branch_stock(self):
+		response = self.client.get('/api/stock/restore/script/?branch=west')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertIn('attachment; filename="restore_WEST_', response['Content-Disposition'])
+		script = response.content.decode()
+		self.assertIn("DECLARE @Branch varchar(50) = N'WEST';", script)
+		self.assertIn('DECLARE @Apply bit = 0;', script)
+		self.assertIn('DECLARE @CompanyId int = 412;', script)
+		self.assertIn("(701, N'KELLOGG''S', N'702', N'600', 2.5, 15, 24)", script)
+		# website rename and price win; empty code falls back to ProductID + 1 like the POS sync
+		self.assertIn("(703, N'Website Name', N'704', N'', 1.2, 0, 3)", script)
+		self.assertNotIn('Deleted Product', script)
+		self.assertNotIn('Still Being Created', script)
+		self.assertIn('Products:     2   (total units 27)', script)
+		self.assertIn('IF @Apply = 1 COMMIT TRANSACTION; ELSE ROLLBACK TRANSACTION;', script)
+
+	def test_large_branch_is_split_into_batches(self):
+		ProductCatalog.objects.bulk_create([
+			ProductCatalog(branch='BIG', product_id=20000 + index, product_name=f'Item {index}', available_quantity=1)
+			for index in range(1001)
+		])
+
+		script = self.client.get('/api/stock/restore/script/?branch=BIG').content.decode()
+
+		self.assertEqual(script.count('INSERT INTO #RestoreProducts'), 3)
+
+	def test_restore_requires_a_known_branch_and_login(self):
+		self.assertEqual(self.client.get('/api/stock/restore/script/').status_code, 400)
+		self.assertEqual(self.client.get('/api/stock/restore/script/?branch=MAIN').status_code, 400)
+		self.assertEqual(self.client.get('/api/stock/restore/script/?branch=NOWHERE').status_code, 404)
+		self.client.logout()
+		self.assertEqual(self.client.get('/api/stock/restore/script/?branch=WEST').status_code, 302)
+		self.assertEqual(self.client.get('/stock/restore/').status_code, 302)
+
+	def test_main_computer_fallback_matches_the_website_script(self):
+		from loraApi.branch_restore import MAIN_FALLBACK_SQL, build_main_fallback_sql
+
+		response = self.client.get('/api/stock/restore/main-fallback.sql')
+
+		self.assertEqual(response.status_code, 200)
+		on_disk = MAIN_FALLBACK_SQL.read_text(encoding='utf-8')  # read_text normalises line endings
+		self.assertEqual(on_disk, build_main_fallback_sql(), 'regenerate loraApi/sql/restore_branch_from_main.sql')
+		self.assertIn('dbo.BranchProductCatalog', on_disk)

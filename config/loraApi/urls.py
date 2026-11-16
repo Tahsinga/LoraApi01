@@ -2,7 +2,7 @@ from django.urls import path
 from .views import (
     branch_status, branch_sync, cancel_sale, health_check, main_sync,
     index, favicon, confirm_deletion, cancellation_history_api, request_sales_report, complete_sales_report, request_invoice_reprint, complete_invoice_reprint,
-    adjust_main_stock, stocktake_branch_products, stocktake_branch_batch, submit_branch_stock_updates, create_stock_transfer, complete_stock_transfer, pending_stock_transfers, request_branch_price_update, update_product_tax_rate, rename_product, complete_branch_price_update, create_branch_product, complete_branch_product_creation, delete_branch_product, complete_branch_product_deletion, product_catalog, deleted_products, restore_deleted_product, delete_product_at_remaining_branches, product_catalog_sync_disabled,
+    adjust_main_stock, stocktake_branch_products, stocktake_branch_batch, submit_branch_stock_updates, create_stock_transfer, complete_stock_transfer, pending_stock_transfers, request_branch_price_update, update_product_tax_rate, rename_product, complete_branch_price_update, create_branch_product, complete_branch_product_creation, delete_branch_product, complete_branch_product_deletion, product_catalog, deleted_products, restore_deleted_product, branch_restore_branches, branch_restore_script, branch_restore_main_fallback, delete_product_at_remaining_branches, product_catalog_sync_disabled,
     product_sync_inbox, shared_product_catalog, publish_product_catalog, publish_branch_stock_snapshot, stock_summary, product_stock_matrix_data, stock_movements, product_movement_history_api, stock_transfer_logs, whatsapp_stock_lookup, movement_adjustment_history_api, stock_transfer_device_logs, stock_movement_device_logs, cancellation_device_logs, record_branch_sales, sales_report_schedules,
 )
 
@@ -50,6 +50,9 @@ urlpatterns = [
     path('products/', product_catalog, name='product_catalog'),
     path('products/deleted/', deleted_products, name='deleted_products'),
     path('products/restore/', restore_deleted_product, name='restore_deleted_product'),
+    path('stock/restore/', branch_restore_branches, name='branch_restore_branches'),
+    path('stock/restore/script/', branch_restore_script, name='branch_restore_script'),
+    path('stock/restore/main-fallback.sql', branch_restore_main_fallback, name='branch_restore_main_fallback'),
     path('products/deleted/delete-again/', delete_product_at_remaining_branches, name='delete_product_at_remaining_branches'),
     path('products/sync/', product_catalog_sync_disabled, name='sync_product_catalog'),
     path('products/inbox/', product_sync_inbox, name='product_sync_inbox'),
