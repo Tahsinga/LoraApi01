@@ -609,6 +609,11 @@ def deleted_products_page(request):
 
 
 @login_required(login_url='/login/')
+def renamed_products_page(request):
+    return render(request, 'loraApi/renamed_products.html')
+
+
+@login_required(login_url='/login/')
 def product_movement_history(request):
     """Show the searchable, date-filtered stock movement audit page."""
     return render(request, 'loraApi/product_movements.html')
@@ -2586,6 +2591,17 @@ def product_rename_rows(renames, now=None):
         product_id__in={rename.product_id for rename in renames},
     ).order_by('product_id', '-renamed_at', '-id').values('product_id', 'id'):
         latest_ids.setdefault(row['product_id'], row['id'])
+    # The name the website has now; a branch row first, MAIN only as a fallback.
+    current_names = {}
+    for item in ProductCatalog.objects.filter(
+        product_id__in={rename.product_id for rename in renames},
+    ).order_by(
+        Case(When(branch__iexact='MAIN', then=1), default=0, output_field=IntegerField()), '-updated_at',
+    ).values('product_id', 'product_name', 'pending_product_name'):
+        current_names.setdefault(item['product_id'], item['pending_product_name'] or item['product_name'])
+    deleted_ids = set(ProductDeletionRequest.objects.filter(
+        product_id__in={rename.product_id for rename in renames},
+    ).exclude(status='restored').values_list('product_id', flat=True))
     rows = []
     for rename in renames:
         is_latest = latest_ids.get(rename.product_id) == rename.id
@@ -2611,6 +2627,8 @@ def product_rename_rows(renames, now=None):
             'product_id': rename.product_id,
             'old_name': rename.old_name,
             'new_name': rename.new_name,
+            'current_name': current_names.get(rename.product_id, rename.new_name),
+            'deleted': rename.product_id in deleted_ids,
             'renamed_by': rename.renamed_by,
             'renamed_at': rename.renamed_at.isoformat(),
             'latest': is_latest,
@@ -2636,11 +2654,16 @@ def product_rename_status(request):
             return JsonResponse({'status': 'error', 'message': 'Invalid product.'}, status=400)
     if str(request.GET.get('recent', '')).strip() == '1':
         # Notifications: renames of the last few days that are still the current name.
+        try:
+            days = min(max(int(request.GET.get('days') or RENAME_NOTIFICATION_WINDOW.days), 1), 14)
+        except ValueError:
+            days = RENAME_NOTIFICATION_WINDOW.days
         rows = product_rename_rows(list(renames.filter(
-            renamed_at__gte=timezone.now() - RENAME_NOTIFICATION_WINDOW,
+            renamed_at__gte=timezone.now() - timedelta(days=days),
         )[:50]))
         return JsonResponse({'status': 'ok', 'renames': [row for row in rows if row['latest']]})
-    return JsonResponse({'status': 'ok', 'renames': product_rename_rows(list(renames[:100]))})
+    limit = 1000 if str(request.GET.get('all', '')).strip() == '1' else 100
+    return JsonResponse({'status': 'ok', 'renames': product_rename_rows(list(renames[:limit]))})
 
 
 @login_required(login_url='/login/')

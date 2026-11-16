@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lora | Renamed products</title>
+  <style>
+    /* Same theme and layout as the Deleted products page. */
+    :root { --ink:#182326; --muted:#6d7b7d; --line:#dbe3df; --paper:#f5f7f4; --white:#fff; --teal:#087f78; --teal-dark:#075d5a; --coral:#d95f4d; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--paper); font-family:Georgia, 'Times New Roman', serif; }
+    .shell { min-height:100vh; background:radial-gradient(circle at 90% 0, #dceee7 0, transparent 34%), linear-gradient(135deg, #f8faf7 0, #edf3ef 100%); }
+    header { display:flex; justify-content:space-between; align-items:center; gap:24px; max-width:1416px; margin:42px auto 0; padding:26px 28px 20px; border-bottom:1px solid rgba(201,221,213,.8); }
+    .page-title { flex-shrink:0; }
+    .eyebrow { margin:0 0 7px; color:var(--teal); font:700 10px/1.2 Arial,sans-serif; letter-spacing:1.5px; text-transform:uppercase; }
+    h1 { margin:0; font-size:28px; line-height:1; font-weight:500; white-space:nowrap; }
+    .nav { display:flex; align-items:center; gap:3px; flex-wrap:wrap; justify-content:flex-end; padding:5px; background:rgba(231,242,238,.86); border:1px solid #d6e6e0; border-radius:7px; }
+    .nav-link { padding:9px 10px; color:var(--teal-dark); border-radius:4px; font:700 10px Arial,sans-serif; text-decoration:none; text-transform:uppercase; white-space:nowrap; }
+    .nav-link[aria-current="page"] { color:#fff; background:var(--teal); }
+    .nav-link[aria-current="page"]:hover { color:#fff; background:var(--teal-dark); }
+    .nav-link:not([aria-current="page"]):hover { color:var(--coral); background:#fff; }
+    .logout-form { display:inline; margin:0; }
+    .logout-button { padding:9px 10px; color:#9c352b; background:transparent; border:0; border-left:1px solid #c9ddd5; cursor:pointer; font:700 10px Arial,sans-serif; text-transform:uppercase; white-space:nowrap; }
+    .logout-button:hover { color:#76271f; background:#fbe9e6; }
+    main { max-width:1416px; margin:auto; padding:0 28px 54px; }
+    .intro { margin:22px 0; color:var(--muted); font:12px/1.5 Arial,sans-serif; }
+    .workspace { display:grid; grid-template-columns:minmax(0, 1fr); gap:20px; }
+    .panel { background:var(--white); border:1px solid var(--line); padding:26px; box-shadow:0 12px 35px rgba(28,62,54,.06); }
+    h2 { margin:0 0 5px; font-size:20px; font-weight:500; }
+    .sub { margin:0; color:var(--muted); font:12px/1.5 Arial,sans-serif; max-width:780px; }
+    .browser-heading { display:flex; justify-content:space-between; align-items:start; gap:20px; margin-bottom:18px; }
+    .browser-actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; justify-content:flex-end; }
+    .catalog-status { color:var(--muted); font:11px Arial,sans-serif; }
+    .catalog-status.error { color:#a53b2e; }
+
+    .search-label { display:flex; flex-direction:column; gap:7px; color:#435153; font:700 10px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; }
+    .search-label input { width:100%; height:46px; padding:12px 13px; color:var(--ink); background:#fbfcfa; border:1px solid #cbd7d2; border-radius:2px; outline:none; font:14px Georgia,serif; }
+    .search-label input:focus { border-color:var(--teal); box-shadow:0 0 0 3px #d9efeb; }
+    .toolbar { display:grid; grid-template-columns:minmax(0, 1fr) auto; align-items:end; gap:16px; }
+
+    .highlight-tools { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .highlight-chip { display:inline-flex; align-items:center; gap:7px; height:34px; margin:0; padding:0 12px; color:var(--teal-dark); background:#e1f0eb; border:0; border-radius:2px; cursor:pointer; font:700 10px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; white-space:nowrap; }
+    .highlight-chip:hover { background:#cce7df; }
+    .highlight-chip .chip-dot { width:8px; height:8px; border-radius:50%; background:var(--teal); }
+    .highlight-chip .chip-count { min-width:20px; padding:2px 6px; color:var(--teal-dark); background:#fff; border-radius:2px; letter-spacing:0; text-align:center; }
+    .highlight-chip[data-filter="done"] .chip-dot { background:#18794e; }
+    .highlight-chip[data-filter="updating"] .chip-dot { background:#d49a16; }
+    .highlight-chip[data-filter="offline"] .chip-dot { background:#c74337; }
+    .highlight-chip[aria-pressed="true"] { color:#fff; background:var(--teal); }
+    .highlight-chip[aria-pressed="true"] .chip-dot { background:#fff; }
+    .highlight-chip[aria-pressed="true"] .chip-count { color:var(--ink); }
+
+    .refresh-stock-button { margin:0; padding:9px 12px; color:#fff; background:var(--teal); border:0; border-radius:2px; cursor:pointer; font:700 10px Arial,sans-serif; letter-spacing:1.3px; text-transform:uppercase; }
+    .refresh-stock-button:hover { background:var(--teal-dark); }
+    .refresh-stock-button.quiet { color:var(--ink); background:#e8eeea; }
+    .refresh-stock-button.quiet:hover { background:#dce5df; }
+    .refresh-stock-button:disabled { opacity:.55; cursor:default; }
+
+    .settings-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:14px 22px; margin:0; }
+    .setting { display:flex; flex-direction:column; gap:7px; margin:0; color:#435153; font:700 10px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; }
+    .setting small { color:var(--muted); font:400 11px/1.4 Arial,sans-serif; letter-spacing:0; text-transform:none; }
+    .setting input[type="number"], .setting select { width:100%; height:42px; padding:9px 11px; color:var(--ink); background:#fbfcfa; border:1px solid #cbd7d2; border-radius:2px; outline:none; font:14px Georgia,serif; }
+    .setting input:focus, .setting select:focus { border-color:var(--teal); box-shadow:0 0 0 3px #d9efeb; }
+    .setting.toggle { flex-direction:row; align-items:flex-start; gap:10px; padding:11px 12px; background:#fbfcfa; border:1px solid var(--line); cursor:pointer; }
+    .setting.toggle input { flex:0 0 auto; width:18px; height:18px; margin:0; accent-color:var(--teal); }
+    .setting.toggle span { display:flex; flex-direction:column; gap:4px; }
+    .settings-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:18px; }
+    .settings-grid[aria-disabled="true"] .setting:not(.master) { opacity:.5; }
+
+    .stock-table-wrap { overflow-x:auto; border:1px solid var(--line); }
+    .stock-table { width:100%; min-width:980px; border-collapse:collapse; }
+    .stock-table th { padding:11px 13px; color:var(--muted); background:#fafbf9; border-bottom:1px solid var(--line); text-align:left; font:700 10px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; white-space:nowrap; }
+    .stock-table td { padding:13px; border-bottom:1px solid var(--line); vertical-align:top; font:11px Arial,sans-serif; }
+    .stock-table tr:last-child td { border-bottom:0; }
+    .stock-table tbody tr:hover td { background:#f6faf8; }
+    .stock-table .product-name { font:13px Georgia,serif; overflow-wrap:anywhere; }
+    .stock-table .old-name { color:var(--muted); font:13px Georgia,serif; text-decoration:line-through; overflow-wrap:anywhere; }
+    .stock-table .product-id, .stock-table .earlier { margin-top:3px; color:var(--muted); font:10px Arial,sans-serif; }
+    .stock-table td:last-child { white-space:nowrap; }
+
+    .tags { display:flex; flex-wrap:wrap; gap:5px; }
+    .tag { display:inline-flex; align-items:center; gap:5px; padding:4px 7px; color:#176342; background:#dff2e7; border-radius:2px; font:700 10px Arial,sans-serif; letter-spacing:.4px; text-transform:uppercase; white-space:nowrap; }
+    .tag.waiting { color:#78570b; background:#fff1c7; }
+    .tag.offline { color:#a53b2e; background:#f9dfda; }
+    .tag.replaced { color:#596579; background:#eef2ef; }
+    .transfer-status { display:inline-block; padding:5px 8px; color:#176342; background:#dff2e7; font:700 10px Arial,sans-serif; letter-spacing:.8px; text-transform:uppercase; white-space:nowrap; }
+    .transfer-status.updating { color:#78570b; background:#fff1c7; }
+    .transfer-status.offline { color:#a53b2e; background:#f9dfda; }
+    .transfer-status.deleted { color:#596579; background:#eef2ef; }
+    .progress { margin-top:7px; color:var(--muted); font:10px Arial,sans-serif; }
+    .bar { max-width:220px; height:3px; margin-top:4px; background:#eef2ef; }
+    .bar span { display:block; height:100%; background:var(--teal); }
+    .row-button { display:inline-flex; align-items:center; justify-content:center; min-height:28px; margin:0; padding:5px 8px; color:#fff; background:var(--teal); border:0; border-radius:2px; cursor:pointer; font:700 9px Arial,sans-serif; letter-spacing:1px; line-height:1.1; text-transform:uppercase; white-space:nowrap; }
+    .row-button:hover { background:var(--teal-dark); }
+    .muted-note { color:var(--muted); font:11px Arial,sans-serif; }
+    .empty { margin:0; padding:18px 13px; color:var(--muted); font:11px Arial,sans-serif; }
+    .foot { margin-top:12px; color:var(--muted); font:11px Arial,sans-serif; }
+    mark { padding:0 1px; color:inherit; background:#fff1a8; }
+
+    @media (max-width:760px) {
+      header { display:grid; gap:16px; margin-top:22px; padding:21px 14px 15px; }
+      h1 { font-size:26px; white-space:normal; }
+      .nav { justify-content:flex-start; }
+      .nav-link, .logout-button { padding:9px 8px; font-size:9px; }
+      main { padding:0 12px 32px; }
+      .panel { padding:16px; }
+      h2 { font-size:18px; }
+      .browser-heading { display:block; }
+      .browser-actions { justify-content:flex-start; margin-top:10px; }
+      .toolbar { grid-template-columns:1fr; }
+      .highlight-chip { height:44px; }
+      .stock-table th, .stock-table td { padding:10px 9px; }
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div class="page-title"><p class="eyebrow">Lora operations</p><h1>Renamed products</h1></div>
+    <nav class="nav" aria-label="Main navigation"><a class="nav-link" href="/stock/">Main stock</a><a class="nav-link" href="/stock/product-matrix/">Branch stock matrix</a><a class="nav-link" href="/stock/movement-adjustments/">Movement adjustments</a><a class="nav-link" href="/stock/movements/history/">Product movements</a><a class="nav-link" href="/stock/restore/">Branch restore</a><a class="nav-link" href="/products/deleted/">Deleted products</a><a class="nav-link" href="/products/renamed/" aria-current="page">Renamed products</a><a class="nav-link" href="/">Sale control</a><a class="nav-link" href="/history/">Cancellation history</a>{% if user.is_superuser %}<a class="nav-link" href="/users/">User accounts</a>{% endif %}<form method="post" action="/logout/" class="logout-form">{% csrf_token %}<button type="submit" class="logout-button">Sign out</button></form></nav>
+  </header>
+  <main>
+    <p class="intro">Every product renamed on the website, with its previous name and the name it has now. A branch shows as updated once its POS reports the new name; offline branches get it when they reconnect.</p>
+    <section class="workspace">
+      <div class="panel">
+        <div class="toolbar">
+          <label class="search-label">Search renamed products<input id="search" type="search" placeholder="Current or previous name, product ID, branch or user" autocomplete="off"></label>
+          <div class="highlight-tools" role="group" aria-label="Filter renamed products">
+            <button class="highlight-chip" type="button" data-filter="all" aria-pressed="true"><span class="chip-dot" aria-hidden="true"></span>All<span class="chip-count" data-count="all">0</span></button>
+            <button class="highlight-chip" type="button" data-filter="done" aria-pressed="false"><span class="chip-dot" aria-hidden="true"></span>Updated everywhere<span class="chip-count" data-count="done">0</span></button>
+            <button class="highlight-chip" type="button" data-filter="updating" aria-pressed="false"><span class="chip-dot" aria-hidden="true"></span>Updating<span class="chip-count" data-count="updating">0</span></button>
+            <button class="highlight-chip" type="button" data-filter="offline" aria-pressed="false"><span class="chip-dot" aria-hidden="true"></span>Waiting on offline branches<span class="chip-count" data-count="offline">0</span></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="browser-heading">
+          <div><h2>Popup settings</h2><p class="sub">How rename popups behave under the API received box at the top right. Saved in this browser.</p></div>
+          <div class="browser-actions"><span id="settings-status" class="catalog-status" role="status"></span></div>
+        </div>
+        <form id="settings-form">
+          <div class="settings-grid" id="settings-grid">
+            <label class="setting toggle master"><input id="setting-enabled" type="checkbox"><span>Show rename popups<small>Turn off to hide every rename popup in this browser.</small></span></label>
+            <label class="setting">New popups arrive<select id="setting-pin-new"><option value="pinned">Pinned (stay until closed)</option><option value="unpinned">Unpinned (close by themselves)</option></select><small>You can still pin or unpin each popup.</small></label>
+            <label class="setting">Unpinned popups close after (seconds)<input id="setting-close-seconds" type="number" min="3" max="120" step="1" required><small>Between 3 and 120 seconds.</small></label>
+            <label class="setting">Show renames from the last (days)<input id="setting-days" type="number" min="1" max="14" step="1" required><small>Between 1 and 14 days.</small></label>
+            <label class="setting toggle"><input id="setting-hide-completed" type="checkbox"><span>Hide finished renames<small>Close a popup by itself once every branch is updated.</small></span></label>
+          </div>
+          <div class="settings-actions">
+            <button class="refresh-stock-button" type="submit">Save settings</button>
+            <button id="settings-reset" class="refresh-stock-button quiet" type="button">Reset to defaults</button>
+            <button id="settings-show-closed" class="refresh-stock-button quiet" type="button">Show closed popups again</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel">
+        <div class="browser-heading">
+          <div><h2>Rename history</h2><p class="sub">One row per product, with the newest rename. Branch status is for the current name.</p></div>
+          <div class="browser-actions"><span id="status" class="catalog-status" role="status">Loading renamed products...</span><button id="refresh" class="refresh-stock-button" type="button">Refresh</button></div>
+        </div>
+        <div class="stock-table-wrap" id="history"><p class="empty">Loading renamed products...</p></div>
+        <div class="foot" id="foot" hidden></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+  const historyElement = document.querySelector('#history');
+  const searchInput = document.querySelector('#search');
+  const statusElement = document.querySelector('#status');
+  const footElement = document.querySelector('#foot');
+  const filterButtons = [...document.querySelectorAll('[data-filter]')];
+  const settingsForm = document.querySelector('#settings-form');
+  const settingsGrid = document.querySelector('#settings-grid');
+  const settingsStatus = document.querySelector('#settings-status');
+  const settingEnabled = document.querySelector('#setting-enabled');
+  const settingPinNew = document.querySelector('#setting-pin-new');
+  const settingCloseSeconds = document.querySelector('#setting-close-seconds');
+  const settingDays = document.querySelector('#setting-days');
+  const settingHideCompleted = document.querySelector('#setting-hide-completed');
+  const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
+  const formatDate = value => value ? new Date(value).toLocaleString(undefined, { dateStyle:'medium', timeStyle:'short' }) : 'â€“';
+  const STATE_LABEL = { updated:'Updated', waiting:'Updating', offline:'Offline', replaced:'Replaced' };
+  const STATUS_LABEL = { done:'Updated everywhere', updating:'Updating', offline:'Waiting on offline branches', deleted:'Product deleted', none:'No branches yet' };
+  let renameRows = [];
+  let activeFilter = 'all';
+  let loading = false;
+
+  function highlight(text, query) {
+    const raw = String(text ?? '');
+    const index = query ? raw.toLowerCase().indexOf(query) : -1;
+    if (index < 0) return escapeHtml(raw);
+    return escapeHtml(raw.slice(0, index)) + '<mark>' + escapeHtml(raw.slice(index, index + query.length)) + '</mark>' + escapeHtml(raw.slice(index + query.length));
+  }
+  const matches = (values, query) => !query || values.some(value => String(value ?? '').toLowerCase().includes(query));
+
+  // --- Popup settings (stored by rename_notifications.js in this browser) ---
+  const notices = () => window.LoraRenameNotices;
+  function fillSettings() {
+    const api = notices();
+    if (!api) return;
+    const current = api.getSettings();
+    settingEnabled.checked = current.enabled;
+    settingPinNew.value = current.pinNew ? 'pinned' : 'unpinned';
+    settingCloseSeconds.value = current.closeSeconds;
+    settingDays.value = current.days;
+    settingHideCompleted.checked = current.hideCompleted;
+    syncSettingsState();
+  }
+  function syncSettingsState() {
+    settingsGrid.setAttribute('aria-disabled', String(!settingEnabled.checked));
+    const closed = notices() ? notices().closedCount() : 0;
+    const showClosed = document.querySelector('#settings-show-closed');
+    showClosed.disabled = closed === 0;
+    showClosed.textContent = closed ? `Show ${closed} closed popup${closed === 1 ? '' : 's'} again` : 'No closed popups';
+  }
+  function settingsMessage(text, isError = false) {
+    settingsStatus.className = `catalog-status${isError ? ' error' : ''}`;
+    settingsStatus.textContent = text;
+  }
+  settingEnabled.addEventListener('change', syncSettingsState);
+  settingsForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!notices()) { settingsMessage('Popups are not available on this page yet. Refresh and try again.', true); return; }
+    if (!settingsForm.reportValidity()) return;
+    await notices().saveSettings({
+      enabled: settingEnabled.checked,
+      pinNew: settingPinNew.value === 'pinned',
+      closeSeconds: Number(settingCloseSeconds.value),
+      days: Number(settingDays.value),
+      hideCompleted: settingHideCompleted.checked,
+    });
+    fillSettings();
+    settingsMessage(`Saved ${new Date().toLocaleTimeString(undefined, { timeStyle:'short' })}.`);
+    renderHistory();
+  });
+  document.querySelector('#settings-reset').addEventListener('click', async () => {
+    if (!notices()) return;
+    await notices().saveSettings(notices().defaults);
+    fillSettings();
+    settingsMessage('Settings reset to defaults.');
+    renderHistory();
+  });
+  document.querySelector('#settings-show-closed').addEventListener('click', async () => {
+    if (!notices()) return;
+    await notices().showClosedAgain();
+    syncSettingsState();
+    settingsMessage('Closed popups from the chosen days are showing again.');
+  });
+
+  // --- Rename history ---
+  // One entry per product; the API returns renames newest first.
+  function groupedProducts() {
+    const groups = new Map();
+    for (const rename of renameRows) {
+      const id = String(rename.product_id);
+      if (!groups.has(id)) groups.set(id, { latest: rename, earlier: [] });
+      else groups.get(id).earlier.push(rename);
+    }
+    return [...groups.values()].map(({ latest, earlier }) => {
+      const branches = latest.branches || [];
+      let state = 'updating';
+      if (latest.deleted) state = 'deleted';
+      else if (!branches.length) state = 'none';
+      else if (branches.every(branch => branch.state === 'updated')) state = 'done';
+      else if (branches.some(branch => branch.state === 'offline')) state = 'offline';
+      const earlierNames = [...new Set(earlier.map(rename => rename.old_name).filter(name => name && name !== latest.old_name))];
+      return { ...latest, branches, state, earlierNames, renameCount: earlier.length + 1 };
+    });
+  }
+
+  function popupWindowDays() {
+    return notices() ? notices().getSettings().days : 3;
+  }
+
+  function renderHistory() {
+    const query = searchInput.value.trim().toLowerCase();
+    const all = groupedProducts();
+    const counts = { all:all.length, done:0, updating:0, offline:0 };
+    all.forEach(product => { if (product.state in counts) counts[product.state] += 1; });
+    Object.entries(counts).forEach(([key, value]) => { const element = document.querySelector(`[data-count="${key}"]`); if (element) element.textContent = value; });
+
+    const products = all.filter(product =>
+      (activeFilter === 'all' || product.state === activeFilter) &&
+      matches([product.current_name, product.new_name, product.old_name, ...product.earlierNames, product.product_id, product.renamed_by, ...product.branches.map(branch => branch.branch)], query));
+    if (!products.length) {
+      historyElement.innerHTML = `<p class="empty">${query || activeFilter !== 'all' ? 'No renamed products match your search.' : 'No products have been renamed on the website yet.'}</p>`;
+      footElement.hidden = true;
+      return;
+    }
+    const popupSince = Date.now() - popupWindowDays() * 86400000;
+    historyElement.innerHTML = `<table class="stock-table"><thead><tr><th style="width:20%">Current name</th><th style="width:20%">Previous name</th><th>Branches</th><th>Status</th><th>Renamed by</th><th>Renamed at</th><th>Popup</th></tr></thead><tbody>${products.map(product => {
+      const done = product.branches.filter(branch => branch.state === 'updated').length;
+      const total = product.branches.length;
+      const tags = product.branches.map(branch => {
+        const detail = branch.state === 'updated'
+          ? `Updated ${formatDate(branch.confirmed_at)}`
+          : branch.last_seen ? `Last online ${formatDate(branch.last_seen)}` : 'Branch app has not connected yet';
+        return `<span class="tag ${branch.state === 'updated' ? '' : escapeHtml(branch.state)}" title="${escapeHtml(detail)}">${highlight(branch.branch, query)} &middot; ${escapeHtml(STATE_LABEL[branch.state] || branch.state)}</span>`;
+      }).join('');
+      const nameChangedSince = product.current_name && product.current_name !== product.new_name
+        ? `<div class="earlier">Renamed on the web to ${highlight(product.new_name, query)}; a POS has since reported this name.</div>` : '';
+      const earlier = product.earlierNames.length
+        ? `<div class="earlier">Earlier: ${product.earlierNames.map(name => highlight(name, query)).join(' &middot; ')}</div>` : '';
+      const canPopup = new Date(product.renamed_at).getTime() >= popupSince && !product.deleted;
+      const popupCell = canPopup
+        ? `<button class="row-button" type="button" data-show-popup="${escapeHtml(product.id)}">Show popup</button>`
+        : `<span class="muted-note">Older than ${popupWindowDays()} day${popupWindowDays() === 1 ? '' : 's'}</span>`;
+      return `<tr>
+        <td><div class="product-name">${highlight(product.current_name || product.new_name, query)}</div><div class="product-id">ID ${highlight(product.product_id, query)}${product.renameCount > 1 ? ` &middot; renamed ${product.renameCount} times` : ''}</div>${nameChangedSince}</td>
+        <td><div class="old-name">${highlight(product.old_name || 'â€“', query)}</div>${earlier}</td>
+        <td><div class="tags">${tags || '<span class="muted-note">No branches have this product yet.</span>'}</div>${total ? `<div class="progress">Updated at ${done} of ${total} branch${total === 1 ? '' : 'es'}</div><div class="bar"><span style="width:${Math.round(done / total * 100)}%"></span></div>` : ''}</td>
+        <td><span class="transfer-status ${product.state === 'done' ? '' : escapeHtml(product.state)}">${escapeHtml(STATUS_LABEL[product.state])}</span></td>
+        <td>${highlight(product.renamed_by || 'â€“', query)}</td>
+        <td>${escapeHtml(formatDate(product.renamed_at))}</td>
+        <td>${popupCell}</td>
+      </tr>`;
+    }).join('')}</tbody></table>`;
+    footElement.hidden = false;
+    footElement.textContent = `Showing ${products.length} of ${all.length} renamed product${all.length === 1 ? '' : 's'}`;
+  }
+
+  async function loadRenames(force = false) {
+    if (loading || (!force && document.visibilityState !== 'visible')) return;
+    loading = true;
+    try {
+      const response = await fetch('/api/products/renames/?all=1', { cache:'no-store' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'Renamed products could not be loaded.');
+      renameRows = data.renames || [];
+      statusElement.className = 'catalog-status';
+      statusElement.textContent = `Updated ${new Date().toLocaleTimeString(undefined, { timeStyle:'short' })}`;
+      renderHistory();
+    } catch (error) {
+      statusElement.className = 'catalog-status error';
+      statusElement.textContent = error.message;
+      if (!renameRows.length) historyElement.innerHTML = '<p class="empty">Renamed products are unavailable. It will retry automatically.</p>';
+    } finally {
+      loading = false;
+    }
+  }
+
+  historyElement.addEventListener('click', async event => {
+    const button = event.target.closest('[data-show-popup]');
+    if (!button || !notices()) return;
+    if (!notices().getSettings().enabled) {
+      settingsMessage('Rename popups are turned off. Turn on "Show rename popups" and save.', true);
+      return;
+    }
+    await notices().show(button.dataset.showPopup);
+    syncSettingsState();
+  });
+  searchInput.addEventListener('input', renderHistory);
+  document.querySelector('#refresh').addEventListener('click', () => loadRenames(true));
+  filterButtons.forEach(button => button.addEventListener('click', () => {
+    activeFilter = button.dataset.filter;
+    filterButtons.forEach(other => other.setAttribute('aria-pressed', String(other === button)));
+    renderHistory();
+  }));
+  document.addEventListener('keydown', event => {
+    if (event.key === '/' && document.activeElement !== searchInput && !['INPUT', 'SELECT'].includes(document.activeElement.tagName)) { event.preventDefault(); searchInput.focus(); }
+  });
+  window.addEventListener('storage', event => { if (event.key === 'loraRenameNoticeSettings' || event.key === 'loraRenameNotices') { fillSettings(); renderHistory(); } });
+  // rename_notifications.js loads with defer, after this inline script.
+  window.addEventListener('DOMContentLoaded', () => { fillSettings(); renderHistory(); });
+  loadRenames(true);
+  window.setInterval(loadRenames, 30000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadRenames(); });
+</script>
+{% include 'loraApi/_bandwidth_meter.html' %}
+</body>
+</html>

@@ -569,6 +569,32 @@ class ProductRenameTests(TestCase):
 		self.assertContains(response, 'rename_notifications.js')
 		self.assertContains(response, 'API received today')
 
+	def test_renamed_products_page_lists_previous_and_current_names(self):
+		page = self.client.get('/products/renamed/')
+		self.assertContains(page, 'Renamed products')
+		self.assertContains(page, 'Popup settings')
+		self.assertContains(page, 'rename_notifications.js')
+
+		self.rename('New Name')
+		# A branch POS later renames it itself; the page shows the name the web has now.
+		self.snapshot('New Name')
+		self.snapshot('Renamed In Quantum')
+		renames = self.client.get('/api/products/renames/?all=1').json()['renames']
+		self.assertEqual(renames[0]['old_name'], 'Old Name')
+		self.assertEqual(renames[0]['new_name'], 'New Name')
+		self.assertEqual(renames[0]['current_name'], 'Renamed In Quantum')
+		self.assertFalse(renames[0]['deleted'])
+
+	def test_popup_days_setting_limits_recent_renames(self):
+		self.rename('New Name')
+		ProductRename.objects.update(renamed_at=timezone.now() - timedelta(days=5))
+
+		self.assertEqual(self.client.get('/api/products/renames/?recent=1').json()['renames'], [])
+		self.assertEqual(len(self.client.get('/api/products/renames/?recent=1&days=7').json()['renames']), 1)
+		# Out-of-range and invalid values fall back safely.
+		self.assertEqual(len(self.client.get('/api/products/renames/?recent=1&days=99').json()['renames']), 1)
+		self.assertEqual(self.client.get('/api/products/renames/?recent=1&days=x').status_code, 200)
+
 	def test_main_catalog_publish_with_old_name_does_not_undo_rename(self):
 		self.rename('New Name')
 
