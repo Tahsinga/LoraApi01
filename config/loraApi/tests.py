@@ -743,6 +743,27 @@ class ProductRenameTests(TestCase):
 		self.assertEqual(self.force(999999).status_code, 404)
 		self.assertEqual(self.force(0).status_code, 404)
 
+	def test_branch_without_the_product_at_rename_time_confirms_when_it_reports_it(self):
+		BranchHeartbeat.objects.create(branch='BranchC', last_seen=timezone.now())
+		self.rename('New Name')
+		self.assertEqual(self.rename_status()[1]['BranchC'], 'waiting')
+		self.client.post(
+			'/api/stock/snapshot/',
+			data=json.dumps({'branch': 'BranchC', 'products': [{'product_id': 501, 'product_name': 'new  name', 'available_quantity': 2}]}),
+			content_type='application/json',
+		)
+		self.assertEqual(self.rename_status()[1]['BranchC'], 'updated')
+
+	def test_branch_reporting_the_old_name_stays_waiting(self):
+		BranchHeartbeat.objects.create(branch='BranchC', last_seen=timezone.now())
+		self.rename('New Name')
+		self.client.post(
+			'/api/stock/snapshot/',
+			data=json.dumps({'branch': 'BranchC', 'products': [{'product_id': 501, 'product_name': 'Old Name', 'available_quantity': 2}]}),
+			content_type='application/json',
+		)
+		self.assertEqual(self.rename_status()[1]['BranchC'], 'waiting')
+
 	def test_main_catalog_publish_with_old_name_does_not_undo_rename(self):
 		self.rename('New Name')
 

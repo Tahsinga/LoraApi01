@@ -2194,7 +2194,7 @@ def publish_branch_stock_snapshot(request):
         update_field_names = set()
         movements_to_create = []
         sightings_to_save = []
-        confirmed_renames = {}
+        reported_names = {}
         for snapshot in snapshots:
             if snapshot['product_id'] in deleted_product_ids:
                 # Deleted on the web but still active on this POS: remember where,
@@ -2209,6 +2209,7 @@ def publish_branch_stock_snapshot(request):
                     ))
                 continue
 
+            reported_names[snapshot['product_id']] = snapshot['product_name']
             product = existing_products.get(snapshot['product_id'])
             created = product is None
             if created:
@@ -2247,7 +2248,6 @@ def publish_branch_stock_snapshot(request):
                 # A name edited on the website wins until the POS reports it back.
                 snapshot_fields = snapshot_fields[1:]
                 if names_match(snapshot['product_name'], product.pending_product_name):
-                    confirmed_renames[product.product_id] = product.pending_product_name
                     product.pending_product_name = ''
                     changed_fields.append('pending_product_name')
             for field in snapshot_fields:
@@ -2307,8 +2307,10 @@ def publish_branch_stock_snapshot(request):
         if movements_to_create:
             StockMovement.objects.bulk_create(movements_to_create, batch_size=500)
         movements_recorded = len(movements_to_create)
-        if confirmed_renames:
-            confirm_branch_renames(branch, confirmed_renames, now)
+        # Any rename still waiting at this branch is done once its POS reports the new
+        # name, even when the website had no row for the product here at rename time.
+        if reported_names and branch.casefold() != 'main':
+            confirm_branch_renames(branch, reported_names, now)
         if sightings_to_save:
             DeletedProductSighting.objects.bulk_create(
                 sightings_to_save,
