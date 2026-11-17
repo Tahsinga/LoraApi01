@@ -1613,7 +1613,7 @@ def stock_movements(request):
         created_at__lt=day_end,
     ).order_by('-created_at')[:2000]
     for transfer in transfers:
-        expected_source = f'{transfer.created_by or "System"} (transfer to {transfer.branch})'
+        expected_source = transfer_movement_source(transfer)
         matching_movement = next((
             movement for movement in movement_records
             if movement.id not in matched_movement_ids
@@ -1641,6 +1641,11 @@ def stock_movements(request):
         'status': 'ok',
         'movements': [event[2] for event in movement_events[:20]],
     })
+
+
+def transfer_movement_source(transfer):
+    """Movement source for a completed stock transfer: the user who sent it, then the branch."""
+    return f'{transfer.created_by or "System"} (transfer to {transfer.branch})'
 
 
 @login_required(login_url='/login/')
@@ -3746,7 +3751,7 @@ def complete_stock_transfer(request):
                         product_name=transfer.product_name,
                         movement_type='received',
                         quantity=transfer.quantity,
-                        source='Web stock transfer',
+                        source=transfer_movement_source(transfer),
                     )
                 if is_stock_take or applied_stock:
                     catalog.pending_stock_adjustment = True

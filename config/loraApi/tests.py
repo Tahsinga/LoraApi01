@@ -1801,6 +1801,46 @@ class StockTransferTests(TestCase):
 		self.assertEqual(StockMovement.objects.filter(product_id=999, branch='BranchA').count(), 2)
 		self.assertEqual(product['movement_balance'], '20')
 
+	def test_movement_page_shows_who_sent_the_transfer(self):
+		ProductCatalog.objects.create(branch='BranchA', product_id=999, product_name='Test Product', available_quantity=0)
+		self.client.post(
+			'/api/stock/transfers/',
+			data=json.dumps({'branch': 'BranchA', 'product_id': 999, 'product_name': 'Test Product', 'quantity': 5}),
+			content_type='application/json',
+		)
+		transfer = StockTransfer.objects.get()
+		self.client.post(
+			'/api/stock/transfers/complete/',
+			data=json.dumps({'transfer_id': transfer.transfer_id, 'branch': 'BranchA', 'success': True}),
+			content_type='application/json',
+		)
+		movements = self.client.get('/api/stock/movements/history/?branch=BranchA&product_id=999').json()['movements']
+		self.assertEqual([(item['movement_type'], item['source']) for item in movements], [
+			('received', 'transfer-admin (transfer to BranchA)'),
+		])
+
+	def test_old_transfer_movements_get_the_user_who_sent_them(self):
+		from django.apps import apps
+		migration = importlib.import_module('loraApi.migrations.0044_transfer_movement_done_by')
+		now = timezone.now()
+		StockTransfer.objects.create(
+			transfer_id='t-old', branch='BranchA', product_id=999, product_name='Test Product', quantity=5,
+			status='completed', created_by='Anesu', completed_at=now,
+		)
+		old = StockMovement.objects.create(
+			branch='BranchA', product_id=999, product_name='Test Product', movement_type='received', quantity=5,
+			source='Web stock transfer',
+		)
+		unmatched = StockMovement.objects.create(
+			branch='BranchA', product_id=999, product_name='Test Product', movement_type='received', quantity=7,
+			source='Web stock transfer',
+		)
+		migration.name_transfer_movements(apps, None)
+		old.refresh_from_db()
+		unmatched.refresh_from_db()
+		self.assertEqual(old.source, 'Anesu (transfer to BranchA)')
+		self.assertEqual(unmatched.source, 'Web stock transfer')
+
 	def test_stock_take_updates_main_and_branch_together(self):
 		ProductCatalog.objects.create(
 			branch='BranchA', product_id=999, product_name='Test Product', available_quantity=4,
