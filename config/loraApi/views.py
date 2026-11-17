@@ -153,7 +153,8 @@ def auto_delete_still_active_products(sightings=None, now=None):
     now = now or timezone.now()
     if sightings is None:
         sightings = DeletedProductSighting.objects.filter(product_id__in=deleted_product_id_subquery())
-    sightings = list(sightings)
+    ignored = ignored_rename_branches()
+    sightings = [item for item in sightings if item.branch.casefold() not in ignored]
     if not sightings:
         return []
 
@@ -2690,9 +2691,10 @@ def removed_rename_branch_rows():
 @csrf_exempt
 @retry_on_database_lock
 def rename_tracking_branches(request):
-    """Remove a branch from rename tracking (old or test branches), or add it back.
+    """Remove a branch from rename and deletion tracking (old or test branches), or add it back.
 
-    Nothing else about the branch changes: its stock, history and POS sync are untouched.
+    Removed branches are left out of renames, rename popups and the deletion history, and
+    new deletions are not sent to them. Their stock, history and POS sync are untouched.
     """
     if request.method == 'GET':
         return JsonResponse({'status': 'ok', 'removed_branches': removed_rename_branch_rows()})
@@ -2927,9 +2929,10 @@ def delete_branch_product(request):
             InvoiceReprintRequest.objects.exclude(branch='').values_list('branch', flat=True).distinct()
         )
         branches_by_key = {}
+        ignored = ignored_rename_branches()
         for target in branch_targets:
             target = str(target).strip()
-            if target and target.casefold() not in {'main', 'unknown'}:
+            if target and target.casefold() not in {'main', 'unknown'} and target.casefold() not in ignored:
                 branches_by_key.setdefault(target.casefold(), target)
         branches = sorted(branches_by_key.values(), key=str.casefold)
 
@@ -3107,12 +3110,17 @@ def deleted_products(request):
 
     auto_delete_still_active_products_throttled()
 
-    deletions = list(ProductDeletionRequest.objects.order_by('-updated_at')[:500])
+    ignored = ignored_rename_branches()
+    deletions = [
+        item for item in ProductDeletionRequest.objects.order_by('-updated_at')[:500]
+        if item.branch.casefold() not in ignored
+    ]
     branch_products = {}
     for product in ProductCatalog.objects.filter(
         product_id__in={item.product_id for item in deletions},
     ).exclude(branch__iexact='MAIN'):
-        branch_products.setdefault(product.product_id, []).append(product)
+        if product.branch.casefold() not in ignored:
+            branch_products.setdefault(product.product_id, []).append(product)
     restore_status_by_product = {}
     for product_id in {item.product_id for item in deletions}:
         product_deletions = [item for item in deletions if item.product_id == product_id]
@@ -3150,7 +3158,11 @@ def deleted_products_still_active():
     deleted_ids = set(
         ProductDeletionRequest.objects.exclude(status='restored').values_list('product_id', flat=True)
     )
-    sightings = list(DeletedProductSighting.objects.filter(product_id__in=deleted_ids))
+    ignored = ignored_rename_branches()
+    sightings = [
+        item for item in DeletedProductSighting.objects.filter(product_id__in=deleted_ids)
+        if item.branch.casefold() not in ignored
+    ]
     pending = {
         (branch.casefold(), product_id)
         for branch, product_id in ProductDeletionRequest.objects.filter(
@@ -3214,7 +3226,11 @@ def delete_product_at_remaining_branches(request):
         ).exclude(status='restored').order_by('-updated_at', '-pk'))
         if not deletions:
             return JsonResponse({'status': 'error', 'message': 'This product is not deleted.'}, status=409)
-        sightings = list(DeletedProductSighting.objects.filter(product_id=product_id).order_by('branch'))
+        ignored = ignored_rename_branches()
+        sightings = [
+            item for item in DeletedProductSighting.objects.filter(product_id=product_id).order_by('branch')
+            if item.branch.casefold() not in ignored
+        ]
         if not sightings:
             return JsonResponse({'status': 'error', 'message': 'No branch still has this product active.'}, status=404)
 

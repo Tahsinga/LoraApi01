@@ -178,7 +178,7 @@
 
       <div class="panel">
         <div class="browser-heading">
-          <div><h2>Branches</h2><p class="sub">Every branch renames are sent to. Remove old or test branches so they no longer show on renames and popups. Only rename tracking changes; the branch's stock, history and POS sync stay as they are.</p></div>
+          <div><h2>Branches</h2><p class="sub">Every branch renames are sent to. Remove old or test branches so they no longer show on renames, popups or the deletion history. The branch's stock, history and POS sync stay as they are.</p></div>
           <div class="browser-actions"><span id="branches-status" class="catalog-status" role="status"></span></div>
         </div>
         <div id="branch-list" class="branch-list"><p class="empty">Loading branches...</p></div>
@@ -425,7 +425,7 @@
   }
   function openRemoveBranch(branch) {
     pendingRemoveBranch = branch;
-    document.querySelector('#remove-branch-description').textContent = `Remove ${branch} from rename tracking? It will no longer show on renamed products or rename popups. Its stock, history and POS sync are not changed, and you can add it back at any time.`;
+    document.querySelector('#remove-branch-description').textContent = `Remove ${branch} from renames and deletions? It will no longer show on renamed products, rename popups or the deletion history. Its stock, history and POS sync are not changed, and you can add it back at any time.`;
     removeBranchStatus.className = 'notice';
     removeBranchStatus.textContent = '';
     removeBranchDialog.showModal();

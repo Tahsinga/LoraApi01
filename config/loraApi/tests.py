@@ -8,10 +8,19 @@ from django.core.management import call_command
 from loraApi.state_store import load_state
 from django.utils import timezone
 from loraApi.models import BranchHeartbeat, DeletedProductSighting, DeletionRecord, InvoiceReprintRequest, MainStockBalance, ProductCatalog, ProductDeletionRequest, ProductRename, ProductRenameBranch, RenameIgnoredBranch, SalesReportRequest, SalesReportSchedule, StockMovement, StockTransfer
+import importlib
 import json
 
 
 from django.core.cache import cache
+
+# Migration 0043 removes these test branches from renames and deletions on the live
+# site. The tests use BranchA as a normal branch, so clear that once for the test run.
+TEST_BRANCH_MIGRATION = importlib.import_module('loraApi.migrations.0043_remove_test_branches_from_deletions')
+
+
+def setUpModule():
+	RenameIgnoredBranch.objects.filter(branch__in=TEST_BRANCH_MIGRATION.TEST_BRANCHES, removed_by='setup').delete()
 class ProductDeletionTests(TestCase):
 	def setUp(self):
 		self.password = 'ProductDeletePass4182!'
@@ -647,6 +656,37 @@ class ProductRenameTests(TestCase):
 		self.assertNotIn('LAXDOM TEST', states)
 		self.assertNotIn('TEST', states)
 		self.assertIn('CROSS COUNTRY', states)
+
+	def test_test_branches_migration_removes_them(self):
+		from django.apps import apps
+		TEST_BRANCH_MIGRATION.remove_test_branches(apps, None)
+		TEST_BRANCH_MIGRATION.remove_test_branches(apps, None)
+		self.assertEqual(
+			sorted(RenameIgnoredBranch.objects.values_list('branch', flat=True)),
+			['BranchA', 'CROSSCOUNTRY', 'LAXDOM TEST', 'Pangoline', 'TASHINGA', 'TEST'],
+		)
+		TEST_BRANCH_MIGRATION.add_test_branches_back(apps, None)
+		self.assertFalse(RenameIgnoredBranch.objects.filter(branch='BranchA').exists())
+
+	def test_removed_branch_is_left_out_of_deletions(self):
+		password = 'ProductRenamePass4182!'
+		ProductDeletionRequest.objects.create(branch='BranchA', product_id=777, product_name='Old Test', requested_by='x')
+		ProductDeletionRequest.objects.create(branch='BranchB', product_id=777, product_name='Old Test', requested_by='x', status='completed')
+		self.assertEqual(self.branch_tracking('brancha', 'remove').status_code, 200)
+
+		branches = [item['branch'] for item in self.client.get('/api/products/deleted/').json()['products']]
+		self.assertEqual(branches, ['BranchB'])
+
+		response = self.client.post(
+			'/api/products/delete/',
+			data=json.dumps({'branch': 'BranchB', 'product_id': 501, 'password': password}),
+			content_type='application/json',
+		)
+		self.assertEqual(response.status_code, 202)
+		self.assertEqual(response.json()['branches'], ['BranchB'])
+
+		DeletedProductSighting.objects.create(branch='BranchA', product_id=501, product_name='Old Name', last_seen=timezone.now())
+		self.assertEqual(self.client.get('/api/products/deleted/').json()['still_active'], [])
 
 	def test_main_catalog_publish_with_old_name_does_not_undo_rename(self):
 		self.rename('New Name')
