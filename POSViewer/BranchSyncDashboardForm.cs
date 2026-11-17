@@ -738,10 +738,12 @@ public sealed class BranchSyncDashboardForm : Form
         string preferredCode,
         int companyId)
     {
+        // Checked across every company: some Quantum databases key Products on the code
+        // alone, and older rows can sit under another coid (e.g. 412).
         const string productCodeExistsSql = @"
             SELECT TOP 1 1
             FROM [dbo].[Products] WITH (UPDLOCK, HOLDLOCK)
-            WHERE ProductCode = @productCode AND coid = @coid;";
+            WHERE ProductCode = @productCode;";
 
         for (var suffix = 0; ; suffix++)
         {
@@ -849,6 +851,20 @@ public sealed class BranchSyncDashboardForm : Form
             deleteSql += ";";
 
             _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] DEBUG: SQL Query:\n{deleteSql}");
+
+            ReceiptPrinter.ReturnSnapshot? returnSnapshot = null;
+            if (productId > 0)
+            {
+                try
+                {
+                    returnSnapshot = await ReceiptPrinter.CaptureReturnSnapshotAsync(
+                        connection, null, invoiceNum, branchName, deletion.coid ?? 0, productId, entryNo);
+                }
+                catch (Exception ex)
+                {
+                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Could not read return line for the credit note: {ex.Message}");
+                }
+            }
 
             using (var command = new SqlCommand(deleteSql, connection))
             {
@@ -979,7 +995,20 @@ public sealed class BranchSyncDashboardForm : Form
             {
                 _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] → API confirmed: deletion_id={deletion.id}");
 
-                var printed = ReceiptPrinter.TryPrint(
+                bool printed;
+                string printError;
+                if (returnSnapshot is not null)
+                {
+                    (printed, printError) = await ReceiptPrinter.TryPrintReturnCreditNoteAsync(
+                        _settings.PrinterName,
+                        connection,
+                        returnSnapshot,
+                        branchName,
+                        $"{invoiceNum}-RETURN",
+                        string.IsNullOrWhiteSpace(deletion.message) ? "Return / Credit" : deletion.message);
+                }
+                else
+                printed = ReceiptPrinter.TryPrint(
                     _settings.PrinterName,
                     "CANCELLATION CONFIRMATION",
                     new List<(string Label, string Value)>
@@ -998,7 +1027,7 @@ public sealed class BranchSyncDashboardForm : Form
                         ("Date", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")),
                         ("Machine", Environment.MachineName)
                     },
-                    out var printError);
+                    out printError);
 
                 if (!printed)
                 {
@@ -1070,8 +1099,23 @@ public sealed class BranchSyncDashboardForm : Form
             _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] Invoice {invoiceNum} is already cancelled in Quantum; skipping duplicate cancellation.");
         }
 
-        var creditNote = BuildCancellationReceiptDetails(cancelledDetails, stockLines, invoiceNum, branchName);
-        var printed = ReceiptPrinter.TryPrint(_settings.PrinterName, "CREDIT NOTE", creditNote, out var printError);
+        bool printed;
+        string printError;
+        if (cancelledDetails.Rows.Count > 0)
+        {
+            (printed, printError) = await ReceiptPrinter.TryPrintQuantumCreditNoteAsync(
+                _settings.PrinterName,
+                connection,
+                invoiceNumber,
+                companyId,
+                branchName,
+                cancelledDetails);
+        }
+        else
+        {
+            var creditNote = BuildCancellationReceiptDetails(cancelledDetails, stockLines, invoiceNum, branchName);
+            printed = ReceiptPrinter.TryPrint(_settings.PrinterName, "CREDIT NOTE", creditNote, out printError);
+        }
         if (!printed)
         {
             _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Cancellation completed, but credit note was not printed: {printError}");
@@ -1423,6 +1467,12 @@ public sealed class BranchSyncDashboardForm : Form
 
             if (isStockTake)
             {
+                // Bring the stored balance in line with the movement history first, so the
+                // stock-take difference is posted against the same figure Quantum recalculates
+                // from. Otherwise a drifted ProductStockBalances row makes the final balance
+                // miss the counted quantity and the stock take is rolled back.
+                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Re-syncing POS balance from movement history for product {transfer.product_id}.");
+                await RefreshStockBalanceFromMovementsAsync(connection, transaction, transfer.product_id, branchName);
                 _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Reading current POS balance for product {transfer.product_id}.");
             }
             var currentBalance = await GetProductStockBalanceAsync(connection, transaction, transfer.product_id, branchName);
@@ -1525,16 +1575,7 @@ public sealed class BranchSyncDashboardForm : Form
 
             if (isStockTake)
             {
-                using var refreshBalanceCommand = new SqlCommand("SetQuickStockBalForOne", connection, transaction)
-                {
-                    CommandType = CommandType.StoredProcedure,
-                    CommandTimeout = BranchSqlCommandTimeoutSeconds
-                };
-                refreshBalanceCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
-                refreshBalanceCommand.Parameters.AddWithValue("@branch", branchName);
-                refreshBalanceCommand.Parameters.AddWithValue("@iswarehouse", 0);
-                refreshBalanceCommand.Parameters.AddWithValue("@productid", transfer.product_id);
-                await refreshBalanceCommand.ExecuteNonQueryAsync();
+                await RefreshStockBalanceFromMovementsAsync(connection, transaction, transfer.product_id, branchName);
             }
 
             var actualBalance = await GetProductStockBalanceAsync(connection, transaction, transfer.product_id, branchName);
@@ -1586,6 +1627,24 @@ public sealed class BranchSyncDashboardForm : Form
 
             throw;
         }
+    }
+
+    private static async Task RefreshStockBalanceFromMovementsAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int productId,
+        string branchName)
+    {
+        using var refreshBalanceCommand = new SqlCommand("SetQuickStockBalForOne", connection, transaction)
+        {
+            CommandType = CommandType.StoredProcedure,
+            CommandTimeout = BranchSqlCommandTimeoutSeconds
+        };
+        refreshBalanceCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
+        refreshBalanceCommand.Parameters.AddWithValue("@branch", branchName);
+        refreshBalanceCommand.Parameters.AddWithValue("@iswarehouse", 0);
+        refreshBalanceCommand.Parameters.AddWithValue("@productid", productId);
+        await refreshBalanceCommand.ExecuteNonQueryAsync();
     }
 
     private static async Task<decimal> GetProductStockBalanceAsync(
@@ -1725,9 +1784,17 @@ public sealed class BranchSyncDashboardForm : Form
                 throw new InvalidOperationException($"Invalid opening quantity: {productCreation.initial_quantity}");
             }
 
+            // A duplicate key means another sync (or another till on this database) added the
+            // product between our check and our insert. Try again: the check then finds it and
+            // reactivates it instead of inserting it a second time.
+            for (var attempt = 1; ; attempt++)
+            {
+            actualProductId = productCreation.product_id;
+            try
+            {
             using var connection = new SqlConnection(_settings.BuildConnectionString());
             await connection.OpenAsync();
-            using var transaction = connection.BeginTransaction();
+            using var transaction = connection.BeginTransaction(System.Data.IsolationLevel.Serializable);
             try
             {
             // A request for an ID that already exists in Quantum is a restore of a product deleted
@@ -1812,7 +1879,7 @@ public sealed class BranchSyncDashboardForm : Form
                 actualProductId = await InsertPosProductAsync(
                     connection,
                     transaction,
-                    productCreation.product_id,
+                    actualProductId,
                     requestedProductName,
                     (actualProductId + 1).ToString(CultureInfo.InvariantCulture),
                     requestedBarcode,
@@ -1851,13 +1918,20 @@ public sealed class BranchSyncDashboardForm : Form
                 try { transaction.Rollback(); } catch { }
                 throw;
             }
+            break;
+            }
+            catch (SqlException ex) when ((ex.Number == 2627 || ex.Number == 2601) && attempt < 3)
+            {
+                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [PRODUCT] {productCreation.product_name} (Product {productCreation.product_id}) was added at the same time by another sync; checking again.");
+            }
+            }
             success = true;
             _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✓ PRODUCT CREATED: {productCreation.product_name} (Product {actualProductId})");
         }
         catch (Exception ex)
         {
             error = ex.Message;
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] PRODUCT CREATION FAILED: {error}");
+            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] PRODUCT CREATION FAILED for {productCreation.product_name} (Product {productCreation.product_id}): {error}");
         }
 
         var completion = new
@@ -2095,8 +2169,10 @@ public sealed class BranchSyncDashboardForm : Form
             using var connection = new SqlConnection(_settings.BuildConnectionString());
             await connection.OpenAsync();
                         const string query = @"
-                            WITH Sales AS (
+                            WITH SaleLines AS (
                                 SELECT
+                                    m.TranDate,
+                                    m.DateCancelled,
                                     CAST(m.InvoiceNum AS nvarchar(100)) AS InvoiceNumber,
                                     COALESCE(NULLIF(LTRIM(RTRIM(m.DoneBy)), ''), 'Unknown') AS Cashier,
                                     COALESCE(pm.PaymentMethodDesc, CONCAT('Method ', COALESCE(CAST(m.ReceiptDisplayPaymentMethod AS nvarchar(20)), '0'))) AS PaymentMethod,
@@ -2120,9 +2196,23 @@ public sealed class BranchSyncDashboardForm : Form
                                       AND (coid = m.coid OR coid IS NULL)
                                     ORDER BY CASE WHEN coid = m.coid THEN 0 ELSE 1 END
                                 ) AS pm
-                                WHERE m.TranDate = @reportDate
+                                WHERE (m.TranDate = @reportDate OR m.DateCancelled = @reportDate)
                                   AND UPPER(CAST(m.Branch AS nvarchar(100))) = UPPER(@branch)
                                   AND ISNULL(m.IsStockIn, 0) = 0
+                            ),
+                            Sales AS (
+                                -- Sales made on the report day.
+                                SELECT InvoiceNumber, Cashier, PaymentMethod, Currency, Rate,
+                                    SaleTotal, TaxTotal, 0 AS IsReturn
+                                FROM SaleLines
+                                WHERE TranDate = @reportDate
+                                UNION ALL
+                                -- Credit notes (Quantum CancelSale) issued on the report day are
+                                -- subtracted from the cashier and payment method of the original sale.
+                                SELECT InvoiceNumber, Cashier, PaymentMethod, Currency, Rate,
+                                    -SaleTotal, -TaxTotal, 1 AS IsReturn
+                                FROM SaleLines
+                                WHERE DateCancelled = @reportDate
                             )
                                 SELECT
                                 InvoiceNumber,
@@ -2130,11 +2220,12 @@ public sealed class BranchSyncDashboardForm : Form
                                 PaymentMethod,
                                 Currency,
                                 Rate,
+                                IsReturn,
                                 CAST(SUM(SaleTotal) AS decimal(28, 2)) AS Total,
                                 CAST(SUM(TaxTotal) AS decimal(28, 2)) AS TaxTotal
                                 FROM Sales
-                                    GROUP BY InvoiceNumber, Cashier, PaymentMethod, Currency, Rate
-                                    ORDER BY Cashier, InvoiceNumber, PaymentMethod, Currency, Rate;";
+                                    GROUP BY InvoiceNumber, Cashier, PaymentMethod, Currency, Rate, IsReturn
+                                    ORDER BY Cashier, InvoiceNumber, PaymentMethod, Currency, Rate, IsReturn;";
 
             using var command = new SqlCommand(query, connection);
             command.Parameters.Add("@reportDate", SqlDbType.Int).Value = int.Parse(reportDate.ToString("yyyyMMdd"));
