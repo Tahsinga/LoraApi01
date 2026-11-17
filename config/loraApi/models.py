@@ -241,6 +241,8 @@ class ProductRenameBranch(models.Model):
 	rename = models.ForeignKey(ProductRename, on_delete=models.CASCADE, related_name='branches')
 	branch = models.CharField(max_length=255)
 	confirmed_at = models.DateTimeField(null=True, blank=True)
+	# Set when someone marked the branch updated on the website instead of its POS reporting it.
+	forced_by = models.CharField(max_length=255, blank=True, default='')
 
 	class Meta:
 		ordering = ['branch']

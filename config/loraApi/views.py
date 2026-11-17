@@ -2635,6 +2635,7 @@ def product_rename_rows(renames, now=None):
                 'branch': item.branch,
                 'state': state,
                 'confirmed_at': item.confirmed_at.isoformat() if item.confirmed_at else None,
+                'forced_by': item.forced_by,
                 'last_seen': seen.isoformat() if seen else None,
             })
         rows.append({
@@ -2682,6 +2683,65 @@ def product_rename_status(request):
         'status': 'ok',
         'renames': product_rename_rows(list(renames[:limit])),
         'removed_branches': removed_rename_branch_rows(),
+    })
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
+@retry_on_database_lock
+def force_product_rename(request):
+    """Mark a rename as updated at branches whose POS has not reported it, and send it again.
+
+    For branches that apply the name but never report it back (older branch apps). The
+    branch rows get the new name on the website, and the name is re-sent through the
+    shared catalog on their next sync.
+    """
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+    try:
+        payload = json.loads(request.body or '{}')
+        if not isinstance(payload, dict):
+            raise ValueError
+        rename_id = int(payload.get('rename_id') or 0)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return JsonResponse({'status': 'error', 'message': 'A rename is required.'}, status=400)
+    branch = ' '.join(str(payload.get('branch', '')).split())
+
+    with transaction.atomic():
+        rename = ProductRename.objects.select_for_update().filter(pk=rename_id).first()
+        if rename is None:
+            return JsonResponse({'status': 'error', 'message': 'The rename was not found.'}, status=404)
+        latest = ProductRename.objects.filter(product_id=rename.product_id).order_by('-renamed_at', '-id').first()
+        if latest.id != rename.id:
+            return JsonResponse({'status': 'error', 'message': 'A newer rename has replaced this one.'}, status=409)
+        ignored = ignored_rename_branches()
+        waiting = [
+            item for item in rename.branches.filter(confirmed_at__isnull=True)
+            if item.branch.casefold() not in ignored
+            and (not branch or item.branch.casefold() == branch.casefold())
+        ]
+        now = timezone.now()
+        if waiting:
+            ProductRenameBranch.objects.filter(id__in=[item.id for item in waiting]).update(
+                confirmed_at=now,
+                forced_by=request.user.get_username(),
+            )
+            branch_filter = Q(branch__iexact='MAIN')
+            for item in waiting:
+                branch_filter |= Q(branch__iexact=item.branch)
+            # New name on the website for those branches, and a fresh updated_at so the
+            # shared catalog hands the name to them again on their next sync.
+            ProductCatalog.objects.filter(branch_filter, product_id=rename.product_id).update(
+                product_name=rename.new_name,
+                pending_product_name=rename.new_name,
+                updated_at=now,
+            )
+    invalidate_product_catalog_cache()
+    return JsonResponse({
+        'status': 'ok',
+        'rename_id': rename.id,
+        'branches': [item.branch for item in waiting],
+        'renames': product_rename_rows([ProductRename.objects.prefetch_related('branches').get(pk=rename.id)]),
     })
 
 

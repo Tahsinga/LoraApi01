@@ -688,6 +688,40 @@ class ProductRenameTests(TestCase):
 		DeletedProductSighting.objects.create(branch='BranchA', product_id=501, product_name='Old Name', last_seen=timezone.now())
 		self.assertEqual(self.client.get('/api/products/deleted/').json()['still_active'], [])
 
+	def force(self, rename_id, **extra):
+		return self.client.post(
+			'/api/products/renames/force/',
+			data=json.dumps({'rename_id': rename_id, **extra}),
+			content_type='application/json',
+		)
+
+	def test_force_update_marks_waiting_branches_and_resends_the_name(self):
+		self.rename('New Name')
+		self.snapshot('New Name')  # BranchA reports it; BranchB never does
+		rename = ProductRename.objects.get()
+		ProductCatalog.objects.filter(branch='BranchB', product_id=501).update(product_name='Old Name', pending_product_name='')
+		before = ProductCatalog.objects.get(branch='BranchB', product_id=501).updated_at
+
+		response = self.force(rename.id)
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()['branches'], ['BranchB'])
+		states = {item['branch']: (item['state'], item['forced_by']) for item in response.json()['renames'][0]['branches']}
+		self.assertEqual(states, {'BranchA': ('updated', ''), 'BranchB': ('updated', 'product-rename-admin')})
+		branch_b = ProductCatalog.objects.get(branch='BranchB', product_id=501)
+		self.assertEqual(branch_b.product_name, 'New Name')
+		self.assertEqual(branch_b.pending_product_name, 'New Name')
+		self.assertGreater(branch_b.updated_at, before)
+		# Nothing left to force.
+		self.assertEqual(self.force(rename.id).json()['branches'], [])
+
+	def test_force_update_only_for_the_latest_rename(self):
+		self.rename('New Name')
+		self.rename('Newer Name')
+		old = ProductRename.objects.get(new_name='New Name')
+		self.assertEqual(self.force(old.id).status_code, 409)
+		self.assertEqual(self.force(999999).status_code, 404)
+		self.assertEqual(self.force(0).status_code, 404)
+
 	def test_main_catalog_publish_with_old_name_does_not_undo_rename(self):
 		self.rename('New Name')
 
