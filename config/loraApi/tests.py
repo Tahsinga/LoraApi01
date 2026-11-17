@@ -695,7 +695,7 @@ class ProductRenameTests(TestCase):
 			content_type='application/json',
 		)
 
-	def test_force_update_marks_waiting_branches_and_resends_the_name(self):
+	def test_force_update_resends_the_name_without_marking_it_done(self):
 		self.rename('New Name')
 		self.snapshot('New Name')  # BranchA reports it; BranchB never does
 		rename = ProductRename.objects.get()
@@ -706,13 +706,34 @@ class ProductRenameTests(TestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(response.json()['branches'], ['BranchB'])
 		states = {item['branch']: (item['state'], item['forced_by']) for item in response.json()['renames'][0]['branches']}
-		self.assertEqual(states, {'BranchA': ('updated', ''), 'BranchB': ('updated', 'product-rename-admin')})
+		self.assertEqual(states['BranchA'], ('updated', ''))
+		self.assertEqual(states['BranchB'][1], 'product-rename-admin')
+		self.assertNotEqual(states['BranchB'][0], 'updated')
 		branch_b = ProductCatalog.objects.get(branch='BranchB', product_id=501)
 		self.assertEqual(branch_b.product_name, 'New Name')
 		self.assertEqual(branch_b.pending_product_name, 'New Name')
 		self.assertGreater(branch_b.updated_at, before)
-		# Nothing left to force.
+		# The branch picks the name up from the shared catalog on its next sync...
+		feed = self.client.get('/api/products/shared/', {'since': timezone.now().isoformat()}).json()['products']
+		self.assertEqual([(item['product_id'], item['product_name']) for item in feed], [(501, 'New Name')])
+		# ...and shows Updated only once its POS reports it.
+		self.client.post(
+			'/api/stock/snapshot/',
+			data=json.dumps({'branch': 'BranchB', 'products': [{'product_id': 501, 'product_name': 'New Name', 'available_quantity': 4}]}),
+			content_type='application/json',
+		)
+		self.assertEqual(self.rename_status()[1]['BranchB'], 'updated')
 		self.assertEqual(self.force(rename.id).json()['branches'], [])
+
+	def test_shared_catalog_does_not_trust_a_fast_branch_clock(self):
+		self.rename('New Name')
+		# The branch PC runs an hour fast, so its last check claims to be in the future.
+		fast_clock = (timezone.now() + timedelta(hours=1)).isoformat()
+		feed = self.client.get('/api/products/shared/', {'since': fast_clock}).json()['products']
+		self.assertEqual([(item['product_id'], item['product_name']) for item in feed], [(501, 'New Name')])
+		# Older changes are not sent again.
+		ProductCatalog.objects.update(updated_at=timezone.now() - timedelta(hours=1))
+		self.assertEqual(self.client.get('/api/products/shared/', {'since': fast_clock}).json()['products'], [])
 
 	def test_force_update_only_for_the_latest_rename(self):
 		self.rename('New Name')

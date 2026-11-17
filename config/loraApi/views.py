@@ -2690,11 +2690,10 @@ def product_rename_status(request):
 @csrf_exempt
 @retry_on_database_lock
 def force_product_rename(request):
-    """Mark a rename as updated at branches whose POS has not reported it, and send it again.
+    """Send a rename again to the branches whose POS has not reported the new name yet.
 
-    For branches that apply the name but never report it back (older branch apps). The
-    branch rows get the new name on the website, and the name is re-sent through the
-    shared catalog on their next sync.
+    The name goes out again through the shared catalog on each branch's next sync. A
+    branch only shows as updated once its own POS reports the new name back.
     """
     if request.method != 'POST':
         return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
@@ -2723,14 +2722,13 @@ def force_product_rename(request):
         now = timezone.now()
         if waiting:
             ProductRenameBranch.objects.filter(id__in=[item.id for item in waiting]).update(
-                confirmed_at=now,
                 forced_by=request.user.get_username(),
             )
             branch_filter = Q(branch__iexact='MAIN')
             for item in waiting:
                 branch_filter |= Q(branch__iexact=item.branch)
-            # New name on the website for those branches, and a fresh updated_at so the
-            # shared catalog hands the name to them again on their next sync.
+            # The website name for those branches, and a fresh updated_at so the shared
+            # catalog hands the name to them again on their next sync.
             ProductCatalog.objects.filter(branch_filter, product_id=rename.product_id).update(
                 product_name=rename.new_name,
                 pending_product_name=rename.new_name,
@@ -3517,6 +3515,10 @@ def product_sync_inbox(request):
     })
 
 
+# Changes re-sent on every shared catalog request, to cover branch PC clocks that drift.
+SHARED_CATALOG_OVERLAP = timedelta(minutes=10)
+
+
 @csrf_exempt
 @gzip_page
 def shared_product_catalog(request):
@@ -3537,9 +3539,13 @@ def shared_product_catalog(request):
     if not full_snapshot:
         if timezone.is_naive(since):
             since = timezone.make_aware(since, timezone.get_current_timezone())
+        # `since` comes from the branch PC's own clock. A PC running fast would skip
+        # changes (renames, prices) made just before it asked, and never get them. Never
+        # trust a time past ours, and always send what changed in the last few minutes.
+        since = min(since, server_time) - SHARED_CATALOG_OVERLAP
         changed_product_ids = ProductCatalog.objects.filter(
             branch_confirmed=True,
-            updated_at__gte=since - timedelta(seconds=3),
+            updated_at__gte=since,
         ).values_list('product_id', flat=True).distinct()
         products = products.filter(product_id__in=changed_product_ids)
 

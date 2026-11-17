@@ -341,13 +341,11 @@
       const done = product.branches.filter(branch => branch.state === 'updated').length;
       const total = product.branches.length;
       const tags = product.branches.map(branch => {
-        const forced = branch.state === 'updated' && branch.forced_by;
-        const detail = forced
-          ? `Marked updated on the website by ${branch.forced_by} ${formatDate(branch.confirmed_at)}; the POS has not reported it yet`
-          : branch.state === 'updated'
+        const resent = branch.state !== 'updated' && branch.forced_by ? ` · name sent again by ${branch.forced_by}` : '';
+        const detail = branch.state === 'updated'
           ? `Updated ${formatDate(branch.confirmed_at)}`
           : branch.last_seen ? `Last online ${formatDate(branch.last_seen)}` : 'Branch app has not connected yet';
-        return `<span class="tag ${branch.state === 'updated' ? '' : escapeHtml(branch.state)}" title="${escapeHtml(detail)}">${highlight(branch.branch, query)} &middot; ${escapeHtml(forced ? 'Forced' : (STATE_LABEL[branch.state] || branch.state))}<button class="tag-remove" type="button" data-remove-branch="${escapeHtml(branch.branch)}" aria-label="Remove ${escapeHtml(branch.branch)} from renames" title="Remove ${escapeHtml(branch.branch)} from renames">&times;</button></span>`;
+        return `<span class="tag ${branch.state === 'updated' ? '' : escapeHtml(branch.state)}" title="${escapeHtml(detail + resent)}">${highlight(branch.branch, query)} &middot; ${escapeHtml(STATE_LABEL[branch.state] || branch.state)}<button class="tag-remove" type="button" data-remove-branch="${escapeHtml(branch.branch)}" aria-label="Remove ${escapeHtml(branch.branch)} from renames" title="Remove ${escapeHtml(branch.branch)} from renames">&times;</button></span>`;
       }).join('');
       const nameChangedSince = product.current_name && product.current_name !== product.new_name
         ? `<div class="earlier">Renamed on the web to ${highlight(product.new_name, query)}; a POS has since reported this name.</div>` : '';
@@ -360,7 +358,7 @@
       return `<tr>
         <td><div class="product-name">${highlight(product.current_name || product.new_name, query)}</div><div class="name-label">Previous name</div><div class="old-name">${highlight(product.old_name || '–', query)}</div>${earlier}<div class="product-id">ID ${highlight(product.product_id, query)}${product.renameCount > 1 ? ` &middot; renamed ${product.renameCount} times` : ''}</div>${nameChangedSince}</td>
         <td><div class="tags">${tags || '<span class="muted-note">No branches have this product yet.</span>'}</div>${total ? `<div class="progress">Updated at ${done} of ${total} branch${total === 1 ? '' : 'es'}</div><div class="bar"><span style="width:${Math.round(done / total * 100)}%"></span></div>` : ''}</td>
-        <td><span class="transfer-status ${product.state === 'done' ? '' : escapeHtml(product.state)}">${escapeHtml(STATUS_LABEL[product.state])}</span>${done < total && !product.deleted ? `<div style="margin-top:8px"><button class="row-button" type="button" data-force-rename="${escapeHtml(product.id)}" data-force-count="${total - done}" title="Mark the branches still waiting as updated and send the new name to them again">Force update</button></div>` : ''}</td>
+        <td><span class="transfer-status ${product.state === 'done' ? '' : escapeHtml(product.state)}">${escapeHtml(STATUS_LABEL[product.state])}</span>${done < total && !product.deleted ? `<div style="margin-top:8px"><button class="row-button" type="button" data-force-rename="${escapeHtml(product.id)}" data-force-count="${total - done}" title="Send the new name again to the branches that have not updated yet">Force update</button></div>` : ''}</td>
         <td>${highlight(product.renamed_by || '–', query)}</td>
         <td>${escapeHtml(formatDate(product.renamed_at))}</td>
         <td>${popupCell}</td>
@@ -472,14 +470,15 @@
     const force = event.target.closest('[data-force-rename]');
     if (force) {
       const count = Number(force.dataset.forceCount) || 0;
-      if (!window.confirm(`Mark ${count} branch${count === 1 ? '' : 'es'} as updated and send the new name to ${count === 1 ? 'it' : 'them'} again on the next sync?`)) return;
+      if (!window.confirm(`Send the new name again to ${count} branch${count === 1 ? '' : 'es'}? Each one updates on its next sync and shows Updated once its POS has the new name.`)) return;
       force.disabled = true;
       force.textContent = 'Forcing...';
       try {
         const response = await fetch('/api/products/renames/force/', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ rename_id: Number(force.dataset.forceRename) }) });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.message || 'The rename could not be forced.');
+        if (!response.ok) throw new Error(data.message || 'The rename could not be sent again.');
         await loadRenames(true);
+        statusElement.textContent = `New name sent again to ${data.branches.length} branch${data.branches.length === 1 ? '' : 'es'}; they update on their next sync.`;
         if (notices()) notices().refresh();
       } catch (error) {
         force.disabled = false;
