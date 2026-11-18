@@ -2196,7 +2196,7 @@ public sealed class BranchSyncDashboardForm : Form
                                       AND (coid = m.coid OR coid IS NULL)
                                     ORDER BY CASE WHEN coid = m.coid THEN 0 ELSE 1 END
                                 ) AS pm
-                                WHERE (m.TranDate = @reportDate OR m.DateCancelled = @reportDate)
+                                WHERE m.TranDate = @reportDate
                                   AND UPPER(CAST(m.Branch AS nvarchar(100))) = UPPER(@branch)
                                   AND ISNULL(m.IsStockIn, 0) = 0
                             ),
@@ -2207,12 +2207,14 @@ public sealed class BranchSyncDashboardForm : Form
                                 FROM SaleLines
                                 WHERE TranDate = @reportDate
                                 UNION ALL
-                                -- Credit notes (Quantum CancelSale) issued on the report day are
-                                -- subtracted from the cashier and payment method of the original sale.
+                                -- Credit notes (Quantum CancelSale) for sales made on the report day
+                                -- are subtracted from the cashier and payment method of the original
+                                -- sale, whenever the return was done: a return done the next day
+                                -- still comes off this day's report (and not off the next day's).
                                 SELECT InvoiceNumber, Cashier, PaymentMethod, Currency, Rate,
                                     -SaleTotal, -TaxTotal, 1 AS IsReturn
                                 FROM SaleLines
-                                WHERE DateCancelled = @reportDate
+                                WHERE ISNULL(DateCancelled, 0) <> 0
                             )
                                 SELECT
                                 InvoiceNumber,
