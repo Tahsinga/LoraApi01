@@ -17,6 +17,7 @@ from django.core.cache import cache
 # Migration 0043 removes these test branches from renames and deletions on the live
 # site. The tests use BranchA as a normal branch, so clear that once for the test run.
 TEST_BRANCH_MIGRATION = importlib.import_module('loraApi.migrations.0043_remove_test_branches_from_deletions')
+MINI_MARKET_RETURNS_MIGRATION = importlib.import_module('loraApi.migrations.0046_mini_market_returns_to_sale_day')
 
 
 def setUpModule():
@@ -667,6 +668,25 @@ class ProductRenameTests(TestCase):
 		)
 		TEST_BRANCH_MIGRATION.add_test_branches_back(apps, None)
 		self.assertFalse(RenameIgnoredBranch.objects.filter(branch='BranchA').exists())
+
+	def test_mini_market_returns_move_to_the_sale_day(self):
+		from datetime import datetime, timedelta, timezone as utc_zone
+		from django.apps import apps
+		done = datetime(2026, 11, 18, 5, 39, tzinfo=utc_zone.utc)
+		for deletion_id, invoice, branch in [('mm1', '1050573', 'Mini Market'), ('mm2', '1050423', 'MINI MARKET'), ('other', '1050573', 'RUJEKO B'), ('mm3', '999', 'Mini Market')]:
+			DeletionRecord.objects.create(deletion_id=deletion_id, invoice=invoice, branch=branch, status='processed', confirmation_timestamp=done)
+		DeletionRecord.objects.update(timestamp=done)
+		MINI_MARKET_RETURNS_MIGRATION.move_to_sale_day(apps, None)
+		moved = done - timedelta(days=1)
+		for deletion_id in ['mm1', 'mm2']:
+			record = DeletionRecord.objects.get(pk=deletion_id)
+			self.assertEqual((record.timestamp, record.confirmation_timestamp), (moved, moved))
+		for deletion_id in ['other', 'mm3']:
+			self.assertEqual(DeletionRecord.objects.get(pk=deletion_id).confirmation_timestamp, done)
+		MINI_MARKET_RETURNS_MIGRATION.move_to_sale_day(apps, None)
+		self.assertEqual(DeletionRecord.objects.get(pk='mm1').confirmation_timestamp, moved)
+		MINI_MARKET_RETURNS_MIGRATION.move_back_to_return_day(apps, None)
+		self.assertEqual(DeletionRecord.objects.get(pk='mm1').confirmation_timestamp, done)
 
 	def test_removed_branch_is_left_out_of_deletions(self):
 		password = 'ProductRenamePass4182!'
