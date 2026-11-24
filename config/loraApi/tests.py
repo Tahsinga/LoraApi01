@@ -541,6 +541,17 @@ class ProductTaxRateTests(TestCase):
 		again = self.client.post('/api/products/cost-price/copy-branch/', data=json.dumps({'branch': 'BranchA'}), content_type='application/json')
 		self.assertEqual(again.json()['updated_rows'], 0)
 
+	def test_adjust_all_costs_can_skip_zero_costs(self):
+		for branch, product_id, cost in [('BranchA', 621, '0.00'), ('BranchA', 622, '4.00'), ('BranchB', 621, '3.00'), ('BranchB', 622, '1.00')]:
+			ProductCatalog.objects.create(branch=branch, product_id=product_id, product_name=f'P{product_id}', cost_price=cost)
+		response = self.client.post('/api/products/cost-price/copy-branch/', data=json.dumps({'branch': 'BranchA', 'skip_zero': True}), content_type='application/json')
+		self.assertEqual(response.json()['products'], 1)
+		self.assertEqual(str(ProductCatalog.objects.get(branch='BranchB', product_id=621).cost_price), '3.00')
+		self.assertEqual(str(ProductCatalog.objects.get(branch='BranchB', product_id=622).cost_price), '4.00')
+		ProductCatalog.objects.filter(branch='BranchA', product_id=622).update(cost_price=0)
+		only_zero = self.client.post('/api/products/cost-price/copy-branch/', data=json.dumps({'branch': 'BranchA', 'skip_zero': True}), content_type='application/json')
+		self.assertEqual(only_zero.status_code, 400)
+
 	def test_adjust_all_costs_needs_reported_costs(self):
 		ProductCatalog.objects.create(branch='BranchA', product_id=611, product_name='P611')
 		response = self.client.post('/api/products/cost-price/copy-branch/', data=json.dumps({'branch': 'BranchA'}), content_type='application/json')

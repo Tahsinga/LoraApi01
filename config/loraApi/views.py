@@ -2484,18 +2484,23 @@ def copy_branch_cost_prices(request):
     branch = str(payload.get('branch', '')).strip()
     if not branch or branch.casefold() == 'main':
         return JsonResponse({'status': 'error', 'message': 'Select the branch whose cost prices should be used.'}, status=400)
+    skip_zero = bool(payload.get('skip_zero'))
 
     source_rows = ProductCatalog.objects.filter(
         branch__iexact=branch,
         branch_confirmed=True,
         cost_price__isnull=False,
     )
+    if skip_zero:
+        # A zero cost is usually a cost that was never entered; keep the other branches' cost.
+        source_rows = source_rows.exclude(cost_price=0)
     product_count = source_rows.values('product_id').distinct().count()
     if not product_count:
-        return JsonResponse({
-            'status': 'error',
-            'message': f'{branch} has not reported any cost prices yet. It needs Lora 1.44 and one sync first.',
-        }, status=400)
+        message = (
+            f'{branch} has no cost prices above zero to copy.' if skip_zero
+            else f'{branch} has not reported any cost prices yet. It needs Lora 1.44 and one sync first.'
+        )
+        return JsonResponse({'status': 'error', 'message': message}, status=400)
 
     source_cost = Subquery(
         source_rows.filter(product_id=OuterRef('product_id')).order_by('-updated_at').values('cost_price')[:1]
@@ -2531,6 +2536,7 @@ def copy_branch_cost_prices(request):
         'status': 'ok',
         'branch': branch,
         'products': product_count,
+        'skip_zero': skip_zero,
         'updated_rows': len(target_ids),
         'branch_count': branch_count,
     })
