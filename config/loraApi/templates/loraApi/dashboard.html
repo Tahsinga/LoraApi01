@@ -93,6 +93,11 @@
     .badge.sent, .badge.processing { color:#245a82; background:#dcecf8; }
     .badge.printed, .badge.processed { color:#176342; background:#dff2e7; }
     .badge.failed { color:#9c352b; background:#fbe1dd; }
+    .badge.cancelled { color:#6d7b7d; background:#e8eeea; }
+    .row-end { display:flex; align-items:flex-start; gap:6px; }
+    .queue-x { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; min-height:0; margin:0; padding:0; color:#9c352b; background:transparent; border:1px solid #f0c3ba; border-radius:50%; cursor:pointer; font:700 15px/1 Arial,sans-serif; }
+    .queue-x:hover { color:#fff; background:#c0392b; border-color:#c0392b; }
+    .queue-x:disabled { opacity:.4; cursor:wait; }
     .empty { padding:18px 0 4px; color:var(--muted); font:14px Arial,sans-serif; }
     @media (max-width:420px) { .schedule-dialog-inner { padding:14px; } .schedule-branch-row { grid-template-columns:20px minmax(0,1fr) 120px; gap:8px; padding:7px; } .schedule-dialog-actions button { flex:1; } }
     @media (max-width:760px) { header { display:block; padding-top:28px; } .live { gap:5px; margin-top:20px; font-size:9px; letter-spacing:.5px; } .history-link, .logout-button { font-size:9px; letter-spacing:.5px; } main { padding:0 16px 36px; } .workspace { grid-template-columns:1fr; } .panel, .workspace > .panel { padding:16px; } .report-panel { margin-top:14px; padding-top:14px; } .report-panel, .queue { grid-column:auto; grid-row:auto; } form { grid-template-columns:1fr; } .wide { grid-column:auto; } button { grid-column:auto; } }
@@ -202,10 +207,21 @@
         label: `Cancellation ${item.invoice}`, detail: 'Whole invoice', status: item.status,
         timestamp: item.timestamp, completed_at: item.confirmation_timestamp,
       }));
-      const statusLabels = { scheduled: 'Scheduled', pending: 'Queued', processing: 'Sent', printed: 'Printed', processed: 'Completed', failed: 'Failed' };
-      rows.innerHTML = items.length ? items.map(item => `<div class="row"><div><b>${escapeHtml(item.label)}</b><small>${escapeHtml(item.branch)} · ${escapeHtml(item.detail)}${item.scheduled_at ? ` · ${escapeHtml(new Date(item.scheduled_at).toLocaleString())}` : ''}</small></div><span class="badge ${escapeHtml(item.status)}">${escapeHtml(statusLabels[item.status] || item.status)}</span></div>`).join('') : '<div class="empty">No commands are waiting or recently completed.</div>';
+      const statusLabels = { scheduled: 'Scheduled', pending: 'Queued', processing: 'Sent', printed: 'Printed', processed: 'Completed', completed: 'Printed', failed: 'Failed', cancelled: 'Cancelled' };
+      rows.innerHTML = items.length ? items.map(item => `<div class="row"><div><b>${escapeHtml(item.label)}</b><small>${escapeHtml(item.branch)} · ${escapeHtml(item.detail)}${item.scheduled_at ? ` · ${escapeHtml(new Date(item.scheduled_at).toLocaleString())}` : ''}</small></div><div class="row-end"><span class="badge ${escapeHtml(item.status)}">${escapeHtml(statusLabels[item.status] || item.status)}</span>${item.cancellable ? `<button class="queue-x" type="button" data-cancel-type="${escapeHtml(item.type)}" data-cancel-id="${escapeHtml(item.id)}" title="Cancel before the branch prints it" aria-label="Cancel ${escapeHtml(item.label)}">&times;</button>` : ''}</div></div>`).join('') : '<div class="empty">No commands are waiting or recently completed.</div>';
     } catch (error) { rows.innerHTML = '<div class="empty">Queue unavailable. Try again.</div>'; }
   }
+  rows.addEventListener('click', async event => {
+    const button = event.target.closest('[data-cancel-id]');
+    if (!button) return;
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/queue/cancel/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ type:button.dataset.cancelType, id:button.dataset.cancelId }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) { notice.className = 'notice error'; notice.textContent = data.message || 'It could not be cancelled.'; }
+    } catch (error) { notice.className = 'notice error'; notice.textContent = 'It could not be cancelled. Try again.'; }
+    refreshQueue();
+  });
   async function refreshBranches() {
     try {
       const response = await fetch('/api/branches/');

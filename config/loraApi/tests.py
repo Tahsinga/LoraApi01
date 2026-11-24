@@ -3561,3 +3561,40 @@ class BranchRestoreTests(TestCase):
 		on_disk = MAIN_FALLBACK_SQL.read_text(encoding='utf-8')  # read_text normalises line endings
 		self.assertEqual(on_disk, build_main_fallback_sql(), 'regenerate loraApi/sql/restore_branch_from_main.sql')
 		self.assertIn('dbo.BranchProductCatalog', on_disk)
+
+
+class QueueCancelTests(TestCase):
+	def setUp(self):
+		admin = get_user_model().objects.create_superuser(username='queue-cancel-admin', password='QueueCancelPass4182!')
+		self.client.force_login(admin)
+
+	def cancel(self, item_type, item_id):
+		return self.client.post('/api/queue/cancel/', data=json.dumps({'type': item_type, 'id': item_id}), content_type='application/json')
+
+	def test_waiting_items_can_be_cancelled_and_are_not_sent(self):
+		DeletionRecord.objects.create(deletion_id='RET1', branch='BranchA', invoice='1001', status='pending')
+		SalesReportRequest.objects.create(request_id='REP1', branch='BranchA', report_date='2026-11-24', status='pending')
+		InvoiceReprintRequest.objects.create(request_id='PRN1', branch='BranchA', invoice='1002', status='pending')
+		queue = {item['id']: item for item in self.client.get('/api/main-sync/').json()['queue']}
+		self.assertTrue(all(queue[key]['cancellable'] for key in ['RET1', 'REP1', 'PRN1']))
+
+		for item_type, item_id in [('cancellation', 'RET1'), ('sales_report', 'REP1'), ('invoice_reprint', 'PRN1')]:
+			self.assertEqual(self.cancel(item_type, item_id).status_code, 200)
+
+		self.assertEqual(DeletionRecord.objects.get(pk='RET1').status, 'cancelled')
+		self.assertEqual(SalesReportRequest.objects.get(pk='REP1').status, 'cancelled')
+		self.assertEqual(InvoiceReprintRequest.objects.get(pk='PRN1').status, 'cancelled')
+		branch = self.client.get('/api/branch-sync/?branch=BranchA').json()
+		self.assertEqual(branch.get('pending_deletions'), [])
+		self.assertEqual(branch.get('pending_reports'), [])
+		queue = {item['id']: item for item in self.client.get('/api/main-sync/').json()['queue']}
+		self.assertEqual(queue['RET1']['status'], 'cancelled')
+		self.assertFalse(queue['PRN1']['cancellable'])
+
+	def test_items_already_sent_cannot_be_cancelled(self):
+		SalesReportRequest.objects.create(request_id='REP2', branch='BranchA', report_date='2026-11-24', status='processing')
+		response = self.cancel('sales_report', 'REP2')
+		self.assertEqual(response.status_code, 409)
+		self.assertEqual(SalesReportRequest.objects.get(pk='REP2').status, 'processing')
+		self.assertEqual(self.cancel('sales_report', 'missing').status_code, 404)
+		self.assertEqual(self.cancel('other', 'REP2').status_code, 400)

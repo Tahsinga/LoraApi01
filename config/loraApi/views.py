@@ -4420,6 +4420,54 @@ def branch_sync(request):
     }, status=202)
 
 
+QUEUE_CANCELLABLE_STATUSES = ('scheduled', 'pending')
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
+@retry_on_database_lock
+def cancel_queue_item(request):
+    """Cancel a return, sales report or invoice reprint that no branch has picked up yet."""
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+    try:
+        payload = json.loads(request.body or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'status': 'error', 'message': 'Invalid JSON'}, status=400)
+    item_type = str(payload.get('type', '')).strip()
+    item_id = str(payload.get('id', '')).strip()
+    models_by_type = {
+        'cancellation': (DeletionRecord, 'deletion_id'),
+        'sales_report': (SalesReportRequest, 'request_id'),
+        'invoice_reprint': (InvoiceReprintRequest, 'request_id'),
+    }
+    if item_type not in models_by_type or not item_id:
+        return JsonResponse({'status': 'error', 'message': 'Choose a queued item to cancel.'}, status=400)
+
+    model, key = models_by_type[item_type]
+    now = timezone.now()
+    note = f'Cancelled on the website by {request.user.get_username()}'
+    fields = {'status': 'cancelled'}
+    if model is DeletionRecord:
+        fields.update(confirmation_timestamp=now, message=note)
+    else:
+        fields.update(completed_at=now, error_message=note)
+    # Only items still waiting: a branch claims them by moving them to "processing",
+    # so this cannot cancel something a branch is already printing.
+    with transaction.atomic():
+        cancelled = model.objects.filter(**{key: item_id}, status__in=QUEUE_CANCELLABLE_STATUSES).update(**fields)
+    if not cancelled:
+        item = model.objects.filter(**{key: item_id}).first()
+        if item is None:
+            return JsonResponse({'status': 'error', 'message': 'That item was not found.'}, status=404)
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Too late to cancel: the branch has already received it.' if item.status == 'processing'
+            else f'It can no longer be cancelled (it is {item.status}).',
+        }, status=409)
+    return JsonResponse({'status': 'ok', 'type': item_type, 'id': item_id})
+
+
 @csrf_exempt
 def main_sync(request):
     """
@@ -4434,9 +4482,12 @@ def main_sync(request):
         queue_due_sales_reports()
         pending = [record_payload(item) for item in DeletionRecord.objects.filter(status__in=['pending', 'processing'])]
         processed = [record_payload(item) for item in DeletionRecord.objects.filter(status='processed').order_by('-confirmation_timestamp')[:10]]
-        failed = [record_payload(item) for item in DeletionRecord.objects.filter(status='failed').order_by('-confirmation_timestamp')[:10]]
+        failed = [record_payload(item) for item in DeletionRecord.objects.filter(status__in=['failed', 'cancelled']).order_by('-confirmation_timestamp')[:10]]
         pending_reports = [report_payload(item) for item in SalesReportRequest.objects.filter(status__in=['scheduled', 'pending', 'processing']).order_by('-requested_at')[:20]]
-        completed_reports = [report_payload(item) for item in SalesReportRequest.objects.filter(status__in=['printed', 'failed']).order_by('-completed_at')[:20]]
+        completed_reports = [report_payload(item) for item in SalesReportRequest.objects.filter(status__in=['printed', 'failed', 'cancelled']).order_by('-completed_at')[:20]]
+        reprints = list(InvoiceReprintRequest.objects.filter(status__in=['pending', 'processing']).order_by('-requested_at')[:20]) + list(
+            InvoiceReprintRequest.objects.filter(status__in=['completed', 'failed', 'cancelled']).order_by('-completed_at')[:10]
+        )
         queue = [
             {
                 'type': 'cancellation',
@@ -4462,7 +4513,21 @@ def main_sync(request):
                 'completed_at': item['completed_at'],
             }
             for item in pending_reports + completed_reports
+        ] + [
+            {
+                'type': 'invoice_reprint',
+                'id': item.request_id,
+                'branch': item.branch,
+                'label': f'Reprint {item.invoice}',
+                'detail': 'Invoice reprint',
+                'status': item.status,
+                'timestamp': item.requested_at.timestamp(),
+                'completed_at': item.completed_at.timestamp() if item.completed_at else None,
+            }
+            for item in reprints
         ]
+        for item in queue:
+            item['cancellable'] = item['status'] in QUEUE_CANCELLABLE_STATUSES
         queue.sort(key=lambda item: item['timestamp'], reverse=True)
 
         response = JsonResponse({
