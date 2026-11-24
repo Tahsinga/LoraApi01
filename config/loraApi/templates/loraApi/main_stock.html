@@ -102,7 +102,7 @@
     .branch-product-form-wrap .transfer-form { grid-template-columns:repeat(2,minmax(0,1fr)); }
     .branch-product-form-wrap .transfer-form button { grid-column:1/-1; }
     .branch-price-section { margin-top:0; }
-    .branch-price-form { grid-template-columns:minmax(0,1.4fr) minmax(130px,.7fr) minmax(0,1.2fr) auto; align-items:end; gap:12px; margin:0; padding:0; border:0; }
+    .branch-price-form { grid-template-columns:minmax(0,1.4fr) repeat(4, minmax(110px,.7fr)) auto; align-items:end; gap:12px; margin:0; padding:0; border:0; }
     .branch-price-form input { height:40px; padding:8px 11px; }
     .branch-price-form button { grid-column:auto; margin:0; padding:10px 14px; white-space:nowrap; }
     .product-list { display:grid; gap:8px; max-height:360px; overflow:auto; margin-top:14px; }
@@ -151,9 +151,9 @@
     .stock-table td:last-child .delete-product-button { margin-left:4px; }
     .stock-table .delete-product-button { margin-left:6px; color:#fff; background:#9c352b; }
     .stock-table .delete-product-button:hover { background:#76271f; }
-    .stock-table .tax-rate-form, .stock-table .cost-price-form { display:flex; align-items:center; gap:6px; margin:0; }
-    .stock-table .tax-rate-form input, .stock-table .cost-price-form input { width:86px; height:34px; padding:6px 8px; }
-    .stock-table .tax-rate-form button, .stock-table .cost-price-form button { width:auto; margin:0; padding:8px 10px; background:var(--teal); white-space:nowrap; }
+    .stock-table .tax-rate-form { display:flex; align-items:center; gap:6px; margin:0; }
+    .stock-table .tax-rate-form input { width:86px; height:34px; padding:6px 8px; }
+    .stock-table .tax-rate-form button { width:auto; margin:0; padding:8px 10px; background:var(--teal); white-space:nowrap; }
     .product-delete-dialog { width:min(440px, calc(100% - 32px)); padding:24px; color:var(--ink); background:var(--white); border:1px solid var(--line); box-shadow:0 18px 60px rgba(0,0,0,.24); }
     .product-delete-dialog::backdrop { background:rgba(15,29,28,.52); }
     .product-delete-dialog form { grid-template-columns:1fr; gap:12px; margin:0; }
@@ -369,13 +369,15 @@
           <div id="branch-product-notice" class="notice" role="status"></div>
         </div>
         <section class="transfer-section branch-price-section">
-          <div class="transfer-section-heading"><h2>Update branch price</h2><p class="sub">Select a branch product and enter its new selling price.</p></div>
+          <div class="transfer-section-heading"><h2>Update branch price</h2><p class="sub">Select a branch product and enter its new cost price or selling price. The cost price is saved the same at all branches.</p></div>
           <form id="branch-price-form" class="transfer-form branch-price-form">
             <label class="product-picker">Product<input id="branch-price-search" type="search" autocomplete="off" required placeholder="Type to filter branch products"><datalist id="branch-price-products"></datalist><div id="branch-price-product-options" class="product-picker-options" role="listbox"></div></label>
             <input id="branch-price-product" type="hidden"><input id="branch-price-name" type="hidden">
+            <label>Current cost price<input id="branch-current-cost" type="text" readonly placeholder="Select a branch product"></label>
+            <label>New cost price<input id="branch-cost-input" type="number" min="0" step="0.01" placeholder="Same for all branches"></label>
             <label>Current branch price<input id="branch-current-price" type="text" readonly placeholder="Select a branch product"></label>
-            <label>New branch price<input id="branch-price-input" type="number" min="0" step="0.01" required placeholder="Current price appears after selecting a product"></label>
-            <button id="branch-price-submit" type="submit">Save branch price</button>
+            <label>New branch price<input id="branch-price-input" type="number" min="0" step="0.01" placeholder="Current price appears after selecting a product"></label>
+            <button id="branch-price-submit" type="submit">Save prices</button>
           </form>
           <div id="branch-price-notice" class="notice" role="status"></div>
         </section>
@@ -559,6 +561,8 @@
   const branchPriceProducts = document.querySelector('#branch-price-products');
   const branchCurrentPrice = document.querySelector('#branch-current-price');
   const branchPriceInput = document.querySelector('#branch-price-input');
+  const branchCurrentCost = document.querySelector('#branch-current-cost');
+  const branchCostInput = document.querySelector('#branch-cost-input');
   const branchPriceSubmit = document.querySelector('#branch-price-submit');
   const branchPriceNotice = document.querySelector('#branch-price-notice');
   let branchCatalogProducts = [];
@@ -605,27 +609,37 @@
     const sending = activeTransfer ? `<div class="transfer-queue-item"><div><div class="transfer-queue-product">${escapeHtml(activeTransfer.product_name)}</div><div class="transfer-queue-detail">${escapeHtml(activeTransfer.quantity)} to ${escapeHtml(activeTransfer.branch)}</div></div><span class="transfer-queue-state sending">Sending</span></div>` : '';
     transferQueueList.innerHTML = sending + waiting;
   }
-  function setBranchPriceFields(price) {
+  function setBranchPriceFields(price, cost) {
     const numericPrice = Number(price);
     const value = Number.isFinite(numericPrice) && numericPrice === 0 ? '' : (price ?? '');
     branchCurrentPrice.value = value;
     branchPriceInput.value = value;
     branchPriceInput.placeholder = value ? `Current: ${value}` : 'Enter selling price';
+    const costValue = cost ?? '';
+    branchCurrentCost.value = costValue;
+    branchCostInput.value = costValue;
+    branchCostInput.placeholder = costValue ? `Current: ${costValue}` : 'Same for all branches';
+  }
+  function clearBranchCostFields(placeholder = 'Same for all branches') {
+    branchCurrentCost.value = '';
+    branchCostInput.value = '';
+    branchCostInput.placeholder = placeholder;
   }
   async function loadSelectedBranchPrice(productId, productName) {
     const localProduct = branchCatalogProducts.find(item => String(item.product_id) === String(productId) || String(item.product_name).trim().toLowerCase() === String(productName).trim().toLowerCase());
-    if (localProduct) setBranchPriceFields(localProduct.selling_price);
+    if (localProduct) setBranchPriceFields(localProduct.selling_price, localProduct.cost_price);
     else {
       branchCurrentPrice.value = '';
       branchPriceInput.value = '';
       branchPriceInput.placeholder = 'Loading branch price...';
+      clearBranchCostFields('Loading cost price...');
     }
     if (!selectedBranch.value) return;
     try {
       const response = await fetch(`/api/products/?q=${encodeURIComponent(productId)}&branch=${encodeURIComponent(selectedBranch.value)}&_=${Date.now()}`, { cache: 'no-store' });
       const data = await response.json();
       const branchProduct = (data.products || []).find(item => String(item.product_id) === String(productId) || String(item.product_name).trim().toLowerCase() === String(productName).trim().toLowerCase());
-      if (branchProduct) setBranchPriceFields(branchProduct.selling_price);
+      if (branchProduct) setBranchPriceFields(branchProduct.selling_price, branchProduct.cost_price);
     } catch (error) {
       branchPriceInput.placeholder = 'Branch price unavailable';
     }
@@ -687,7 +701,7 @@
       });
     }
     branchProducts.innerHTML = products.length
-      ? `<table class="stock-table"><thead><tr><th>Product</th><th>Cost price</th><th>Selling price</th><th>Tax rate</th><th>Branch<br>balance</th><th>Movement<br>balance</th><th>Sent</th><th>Sold</th><th>Actions</th></tr></thead><tbody>${products.map(product => { const productId = escapeHtml(product.product_id); const isNegative = Number(product.available_quantity) < 0; const isNegativeMovement = Number(product.movement_balance) < 0; const movementMismatch = Number(product.available_quantity) !== Number(product.movement_balance); const duplicateRow = highlightDuplicates && isDuplicateName(product); const lowPriceRow = highlightLowPrices && isLowPrice(product); return `<tr class="${isNegative || isNegativeMovement ? 'negative-stock' : ''}${movementMismatch ? ' movement-mismatch' : ''}${duplicateRow ? ' duplicate-name' : ''}${lowPriceRow ? ' low-price' : ''}" data-product-id="${productId}"><td class="product-name">${escapeHtml(product.product_name)}${duplicateRow ? '<span class="highlight-label duplicate">Same name</span>' : ''}${lowPriceRow ? '<span class="highlight-label low-price">Low price</span>' : ''}</td><td><form class="cost-price-form" data-product-cost-price="${productId}"><input type="number" min="0" step="0.01" required value="${escapeHtml(product.cost_price ?? '')}" placeholder="0.00" aria-label="Cost price for ${escapeHtml(product.product_name)}"><button type="submit" title="Save this cost price at all branches">Save cost</button></form></td><td>${escapeHtml(product.selling_price)}</td><td><form class="tax-rate-form" data-product-tax-rate="${productId}"><input type="number" min="0" max="100" step="0.01" value="${escapeHtml(product.tax_rate ?? 0)}" aria-label="Tax rate percentage for ${escapeHtml(product.product_name)}"><button type="submit">Save tax</button></form></td><td><strong>${escapeHtml(product.available_quantity)}</strong>${isNegative ? '<span class="negative-stock-label">Negative stock</span>' : ''}</td><td><strong>${escapeHtml(product.movement_balance)}</strong>${isNegativeMovement ? '<span class="negative-stock-label">Negative movement</span>' : ''}</td><td>${escapeHtml(product.sent_quantity)}</td><td>${escapeHtml(product.sold_quantity)}</td><td><button type="button" data-product-rename="${productId}">Rename</button><button type="button" data-product-movement="${productId}">Movement</button><button type="button" data-product-select="${productId}">Select</button><button type="button" class="delete-product-button" data-product-delete="${productId}" aria-label="Delete ${escapeHtml(product.product_name)} from all branches">Delete from all branches</button></td></tr>`; }).join('')}</tbody></table>`
+      ? `<table class="stock-table"><thead><tr><th>Product</th><th>Cost price</th><th>Selling price</th><th>Tax rate</th><th>Branch<br>balance</th><th>Movement<br>balance</th><th>Sent</th><th>Sold</th><th>Actions</th></tr></thead><tbody>${products.map(product => { const productId = escapeHtml(product.product_id); const isNegative = Number(product.available_quantity) < 0; const isNegativeMovement = Number(product.movement_balance) < 0; const movementMismatch = Number(product.available_quantity) !== Number(product.movement_balance); const duplicateRow = highlightDuplicates && isDuplicateName(product); const lowPriceRow = highlightLowPrices && isLowPrice(product); return `<tr class="${isNegative || isNegativeMovement ? 'negative-stock' : ''}${movementMismatch ? ' movement-mismatch' : ''}${duplicateRow ? ' duplicate-name' : ''}${lowPriceRow ? ' low-price' : ''}" data-product-id="${productId}"><td class="product-name">${escapeHtml(product.product_name)}${duplicateRow ? '<span class="highlight-label duplicate">Same name</span>' : ''}${lowPriceRow ? '<span class="highlight-label low-price">Low price</span>' : ''}</td><td>${escapeHtml(product.cost_price ?? '')}</td><td>${escapeHtml(product.selling_price)}</td><td><form class="tax-rate-form" data-product-tax-rate="${productId}"><input type="number" min="0" max="100" step="0.01" value="${escapeHtml(product.tax_rate ?? 0)}" aria-label="Tax rate percentage for ${escapeHtml(product.product_name)}"><button type="submit">Save tax</button></form></td><td><strong>${escapeHtml(product.available_quantity)}</strong>${isNegative ? '<span class="negative-stock-label">Negative stock</span>' : ''}</td><td><strong>${escapeHtml(product.movement_balance)}</strong>${isNegativeMovement ? '<span class="negative-stock-label">Negative movement</span>' : ''}</td><td>${escapeHtml(product.sent_quantity)}</td><td>${escapeHtml(product.sold_quantity)}</td><td><button type="button" data-product-rename="${productId}">Rename</button><button type="button" data-product-movement="${productId}">Movement</button><button type="button" data-product-select="${productId}">Select</button><button type="button" class="delete-product-button" data-product-delete="${productId}" aria-label="Delete ${escapeHtml(product.product_name)} from all branches">Delete from all branches</button></td></tr>`; }).join('')}</tbody></table>`
       : '<p class="empty">No products match your search.</p>';
   }
   function renderProductMovementHistory(movements) {
@@ -1000,29 +1014,6 @@
     }
   });
   document.querySelector('#stocktake-close').addEventListener('click', () => branchStocktakeDialog.close());
-  branchProducts.addEventListener('submit', async event => {
-    const costForm = event.target.closest('[data-product-cost-price]');
-    if (!costForm) return;
-    event.preventDefault();
-    const productId = costForm.dataset.productCostPrice;
-    const costInput = costForm.querySelector('input');
-    const saveButton = costForm.querySelector('button');
-    saveButton.disabled = true;
-    productCatalogStatus.textContent = 'Saving cost price for all branches...';
-    try {
-      const response = await fetch('/api/products/cost-price/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch:selectedBranch.value, product_id:productId, cost_price:costInput.value }) });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || 'Cost price could not be saved.');
-      const product = branchCatalogProducts.find(item => String(item.product_id) === productId);
-      if (product) product.cost_price = data.cost_price;
-      const branchCount = Number(data.branch_count) || 0;
-      productCatalogStatus.textContent = `${data.product_name} cost price saved at ${data.cost_price} for ${branchCount} branch${branchCount === 1 ? '' : 'es'}. Each branch applies it on its next sync.`;
-      renderBranchProducts();
-    } catch (error) {
-      productCatalogStatus.textContent = error.message;
-      saveButton.disabled = false;
-    }
-  });
   branchProducts.addEventListener('submit', async event => {
     const taxForm = event.target.closest('[data-product-tax-rate]');
     if (!taxForm) return;
@@ -1435,6 +1426,7 @@
     branchCurrentPrice.value = '';
     branchPriceInput.value = '';
     branchPriceInput.placeholder = 'Current price appears after selecting a product';
+    clearBranchCostFields();
     branchProductSearch.value = '';
     activityBranch.value = selectedBranch.value;
     updateTransferHistoryLink();
@@ -1599,11 +1591,31 @@
     try {
       if (!selectedBranch.value) throw new Error('Select a connected branch first.');
       if (!branchPriceProduct.value || !branchPriceName.value) throw new Error('Select a branch product from the product list first.');
-      const response = await fetch('/api/stock/prices/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch:selectedBranch.value, product_id:branchPriceProduct.value, product_name:branchPriceName.value, selling_price:branchPriceInput.value }) });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || 'Branch price update could not be queued.');
-      const branchCount = data.branch_count ?? data.branches?.length ?? 1;
-      branchPriceNotice.className = 'notice ok'; branchPriceNotice.textContent = `${data.product_name} price queued for ${branchCount} branch${branchCount === 1 ? '' : 'es'}. Each branch will apply it on its next sync.`;
+      const costValue = branchCostInput.value.trim();
+      const priceValue = branchPriceInput.value.trim();
+      const costChanged = costValue !== '' && (branchCurrentCost.value === '' || Number(costValue) !== Number(branchCurrentCost.value));
+      const priceChanged = priceValue !== '' && Number(priceValue) !== Number(branchCurrentPrice.value || 0);
+      const sendPrice = priceChanged || (!costChanged && priceValue !== '');
+      if (!costChanged && !sendPrice) throw new Error('Enter a new cost price or selling price.');
+      const messages = [];
+      if (costChanged) {
+        const response = await fetch('/api/products/cost-price/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch:selectedBranch.value, product_id:branchPriceProduct.value, cost_price:costValue }) });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.message || 'Cost price could not be saved.');
+        const costBranches = Number(data.branch_count) || 0;
+        branchCatalogProducts.filter(item => String(item.product_id) === String(data.product_id)).forEach(item => { item.cost_price = data.cost_price; });
+        branchCurrentCost.value = data.cost_price; branchCostInput.value = data.cost_price;
+        messages.push(`Cost price ${data.cost_price} saved for ${costBranches} branch${costBranches === 1 ? '' : 'es'}.`);
+        renderBranchProducts();
+      }
+      if (sendPrice) {
+        const response = await fetch('/api/stock/prices/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch:selectedBranch.value, product_id:branchPriceProduct.value, product_name:branchPriceName.value, selling_price:priceValue }) });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error([...messages, data.message || 'Branch price update could not be queued.'].join(' '));
+        const branchCount = data.branch_count ?? data.branches?.length ?? 1;
+        messages.push(`Selling price queued for ${branchCount} branch${branchCount === 1 ? '' : 'es'}.`);
+      }
+      branchPriceNotice.className = 'notice ok'; branchPriceNotice.textContent = `${branchPriceName.value}: ${messages.join(' ')} Each branch will apply it on its next sync.`;
     } catch (error) { branchPriceNotice.className = 'notice error'; branchPriceNotice.textContent = error.message; }
     finally { branchPriceSubmit.disabled = false; }
   });
