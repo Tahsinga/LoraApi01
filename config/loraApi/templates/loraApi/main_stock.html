@@ -50,6 +50,15 @@
     .activity-date-label { flex-direction:row; align-items:center; gap:8px; white-space:nowrap; }
     .activity-date-label input { width:auto; min-width:145px; }
     .catalog-status { color:var(--muted); font:11px Arial,sans-serif; }
+    .products-heading { display:grid; gap:14px; margin-bottom:18px; }
+    .products-title { display:flex; align-items:baseline; justify-content:space-between; gap:8px 16px; flex-wrap:wrap; }
+    .products-title h2 { margin:0; }
+    .products-toolbar { display:grid; gap:0; background:#f8faf8; border:1px solid var(--line); }
+    .toolbar-row { display:grid; grid-template-columns:110px minmax(0,1fr); align-items:center; gap:14px; padding:10px 14px; }
+    .toolbar-row + .toolbar-row { border-top:1px solid var(--line); }
+    .toolbar-label { color:var(--muted); font:700 10px Arial,sans-serif; letter-spacing:1.5px; text-transform:uppercase; }
+    .toolbar-items { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .products-toolbar .highlight-tools { flex-wrap:wrap; }
     .movement-history-link { display:inline-block; padding:8px 11px; color:#fff; background:var(--teal); border-radius:2px; font:700 10px Arial,sans-serif; letter-spacing:.5px; text-decoration:none; text-transform:uppercase; }
     .movement-history-link:hover { color:#fff; background:var(--teal-dark); }
     .refresh-stock-button { width:auto; margin:0; padding:9px 12px; background:var(--teal); }
@@ -293,6 +302,8 @@
       .browser-heading { display:block; }
       .browser-actions { display:grid; grid-template-columns:1fr; gap:10px; justify-content:stretch; }
       .highlight-tools { flex-wrap:wrap; }
+      .toolbar-row { grid-template-columns:1fr; gap:8px; padding:12px; }
+      .toolbar-items > * { width:100%; }
       .highlight-chip, .low-price-limit { height:44px; min-height:44px; }
       .price-chip-group { flex:1; }
       .price-chip-group .highlight-chip { flex:1; justify-content:center; }
@@ -392,7 +403,7 @@
       </div>
       </div>
       <div id="products-panel" class="panel panel-wide product-browser branch-data-card" data-branch-loading-card>
-        <div class="browser-heading"><div><h2>Branch products</h2></div><div class="browser-actions"><div class="highlight-tools" role="group" aria-label="Highlight products"><button id="highlight-duplicates" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products that share a name"><span class="chip-dot" aria-hidden="true"></span>Same names<span class="chip-count" data-chip-count>0</span></button><div class="price-chip-group"><button id="highlight-low-prices" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products priced at or under the limit"><span class="chip-dot" aria-hidden="true"></span>Low prices<span class="chip-count" data-chip-count>0</span></button><label class="low-price-limit">&le;<input id="low-price-limit" type="number" min="0" step="0.01" value="0.50" aria-label="Low price limit"></label></div><button id="highlight-cost-above" class="highlight-chip" type="button" aria-pressed="false" title="Products whose cost price is more than the selling price are highlighted; press to list them first"><span class="chip-dot" aria-hidden="true"></span>Cost above price<span class="chip-count" data-chip-count>0</span></button></div><button id="adjust-all-costs" class="adjust-costs-button" type="button" disabled title="Use this branch's cost prices at all the other branches">Adjust all cost prices</button><button id="rename-status-open" class="rename-status-button refresh-stock-button" type="button" title="See which branches have received renamed products">Renames</button><label class="activity-date-label">Movement date<input id="product-movement-date" type="date"></label><span id="product-catalog-status" class="catalog-status">Select a branch to load products.</span></div></div>
+        <div class="products-heading"><div class="products-title"><h2>Branch products</h2><span id="product-catalog-status" class="catalog-status">Select a branch to load products.</span></div><div class="products-toolbar"><div class="toolbar-row" role="group" aria-label="Highlight products"><span class="toolbar-label">Highlight</span><div class="highlight-tools"><button id="highlight-duplicates" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products that share a name"><span class="chip-dot" aria-hidden="true"></span>Same names<span class="chip-count" data-chip-count>0</span></button><div class="price-chip-group"><button id="highlight-low-prices" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products priced at or under the limit"><span class="chip-dot" aria-hidden="true"></span>Low prices<span class="chip-count" data-chip-count>0</span></button><label class="low-price-limit">&le;<input id="low-price-limit" type="number" min="0" step="0.01" value="0.50" aria-label="Low price limit"></label></div><button id="highlight-cost-above" class="highlight-chip" type="button" aria-pressed="false" title="Products whose cost price is more than the selling price are highlighted; press to list them first"><span class="chip-dot" aria-hidden="true"></span>Cost above price<span class="chip-count" data-chip-count>0</span></button></div></div><div class="toolbar-row" role="group" aria-label="Cost prices"><span class="toolbar-label">Cost prices</span><div class="toolbar-items"><button id="adjust-all-costs" class="adjust-costs-button" type="button" disabled title="Use this branch's cost prices at all the other branches">Adjust all cost prices</button></div></div><div class="toolbar-row" role="group" aria-label="View"><span class="toolbar-label">View</span><div class="toolbar-items"><label class="activity-date-label">Movement date<input id="product-movement-date" type="date"></label><button id="rename-status-open" class="rename-status-button refresh-stock-button" type="button" title="See which branches have received renamed products">Renames</button></div></div></div></div>
         <label>Search products<input id="branch-product-search" type="search" placeholder="Search products by name, code, or barcode" autocomplete="off"></label>
         <div id="branch-products" class="stock-table-wrap"><p class="empty">Select a branch to see its products.</p></div>
       </div>
