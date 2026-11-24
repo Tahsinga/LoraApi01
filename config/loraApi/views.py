@@ -274,6 +274,23 @@ def names_match(first, second):
     return ' '.join(str(first or '').split()).casefold() == ' '.join(str(second or '').split()).casefold()
 
 
+def pos_cost_price_from_snapshot(item):
+    """Optional POS cost price on a stock snapshot item; None when missing or invalid.
+
+    Builds before POSViewer 1.44 do not send it. Never raises, so a bad value cannot
+    reject the whole stock sync.
+    """
+    if 'cost_price' not in item:
+        return None
+    try:
+        cost_price = Decimal(str(item.get('cost_price'))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    except (TypeError, ValueError, InvalidOperation):
+        return None
+    if cost_price < 0 or cost_price >= Decimal('10000000000000000'):
+        return None
+    return cost_price
+
+
 def pos_tax_rate_from_snapshot(item):
     """Optional POS tax rate on a stock snapshot item; None when missing or invalid.
 
@@ -390,6 +407,7 @@ def product_payload(product):
         'available_quantity': str(product.available_quantity),
         'selling_price': str(product.selling_price),
         'tax_rate': str(product.tax_rate),
+        'cost_price': str(product.cost_price) if product.cost_price is not None else '',
     }
 
 
@@ -2164,6 +2182,7 @@ def publish_branch_stock_snapshot(request):
                 'pos_sold_quantity': sold_quantity,
                 'pos_received_quantity': received_quantity,
                 'tax_rate': pos_tax_rate_from_snapshot(item),
+                'cost_price': pos_cost_price_from_snapshot(item),
             })
     except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
         return JsonResponse({'status': 'error', 'message': 'Branch and valid product stock snapshots are required.'}, status=400)
@@ -2223,6 +2242,7 @@ def publish_branch_stock_snapshot(request):
                     available_quantity=Decimal('0'),
                     branch_confirmed=True,
                     tax_rate=snapshot['tax_rate'] or Decimal('0'),
+                    cost_price=snapshot['cost_price'],
                 )
             previous_movement_date = product.pos_movement_date
             previous_sold_quantity = abs(product.pos_sold_quantity) if product.pos_sold_quantity is not None else Decimal('0')
@@ -2267,6 +2287,15 @@ def publish_branch_stock_snapshot(request):
             ):
                 product.tax_rate = snapshot['tax_rate']
                 changed_fields.append('tax_rate')
+            if snapshot['cost_price'] is not None:
+                if product.pending_cost_price is not None:
+                    # A cost set on the website wins until the POS reports it back.
+                    if snapshot['cost_price'] == product.pending_cost_price:
+                        product.pending_cost_price = None
+                        changed_fields.append('pending_cost_price')
+                elif product.cost_price != snapshot['cost_price']:
+                    product.cost_price = snapshot['cost_price']
+                    changed_fields.append('cost_price')
             if quantity_changed:
                 product.available_quantity = snapshot['available_quantity']
                 changed_fields.append('available_quantity')
@@ -2438,6 +2467,55 @@ def request_branch_price_update(request):
         'product_name': catalog.product_name,
         'selling_price': str(selling_price),
     }, status=202)
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
+@retry_on_database_lock
+def update_product_cost_price(request):
+    """Save one cost price for a product at every branch; each POS applies it on sync."""
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+
+    try:
+        payload = json.loads(request.body or '{}')
+        branch = str(payload.get('branch', '')).strip()
+        product_id = int(payload.get('product_id'))
+        cost_price = Decimal(str(payload.get('cost_price')).strip()).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
+        return JsonResponse({'status': 'error', 'message': 'Branch, product, and a valid cost price are required.'}, status=400)
+
+    if not branch or branch.casefold() == 'main' or product_id <= 0 or not cost_price.is_finite() or cost_price < 0 or cost_price >= Decimal('10000000000000000'):
+        return JsonResponse({'status': 'error', 'message': 'Select a branch product and enter a cost price of 0 or more.'}, status=400)
+
+    catalog = ProductCatalog.objects.filter(
+        branch__iexact=branch,
+        product_id=product_id,
+        branch_confirmed=True,
+    ).first()
+    if catalog is None:
+        return JsonResponse({'status': 'error', 'message': 'The product was not found for the selected branch.'}, status=404)
+
+    now = timezone.now()
+    with transaction.atomic():
+        branch_count = ProductCatalog.objects.filter(
+            product_id=product_id,
+            branch_confirmed=True,
+        ).exclude(branch__iexact='MAIN').update(cost_price=cost_price, pending_cost_price=cost_price, updated_at=now)
+        ProductCatalog.objects.filter(branch__iexact='MAIN', product_id=product_id).update(
+            cost_price=cost_price,
+            pending_cost_price=cost_price,
+            updated_at=now,
+        )
+
+    invalidate_product_catalog_cache()
+    return JsonResponse({
+        'status': 'ok',
+        'product_id': product_id,
+        'product_name': catalog.product_name,
+        'cost_price': str(cost_price),
+        'branch_count': branch_count,
+    })
 
 
 @login_required(login_url='/login/')
@@ -3553,7 +3631,8 @@ def shared_product_catalog(request):
 
     shared_products = {}
     products = products.only(
-        'branch', 'product_id', 'product_name', 'pending_product_name', 'product_code', 'barcode', 'selling_price', 'tax_rate', 'updated_at',
+        'branch', 'product_id', 'product_name', 'pending_product_name', 'product_code', 'barcode', 'selling_price', 'tax_rate',
+        'pending_cost_price', 'updated_at',
     )
     renamed = set()
     for product in products.iterator(chunk_size=2000):
@@ -3570,6 +3649,10 @@ def shared_product_catalog(request):
         if product.pending_product_name and product.product_id not in renamed:
             entry['product_name'] = product.pending_product_name
             renamed.add(product.product_id)
+        # Cost is only sent while a cost saved on the website is waiting, so a branch's
+        # own cost is never replaced by another branch's.
+        if product.pending_cost_price is not None and 'cost_price' not in entry:
+            entry['cost_price'] = str(product.pending_cost_price)
 
     return JsonResponse({
         'status': 'ok',

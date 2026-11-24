@@ -150,6 +150,11 @@ class ProductCatalog(models.Model):
 	pending_price_update = models.BooleanField(default=False)
 	pending_selling_price = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
 	tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+	# Cost price (Quantum Products.Cost); empty until the branch POS reports it.
+	cost_price = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+	# Cost set on the website that the branch POS has not reported back yet; while it
+	# is set, a POS snapshot with the old cost must not overwrite the web edit.
+	pending_cost_price = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
 	# Name set on the website that the branch POS has not reported back yet; while it is
 	# set, a POS snapshot with the old name must not overwrite the web edit.
 	pending_product_name = models.CharField(max_length=250, blank=True, default='')

@@ -23,7 +23,7 @@ public sealed class BranchSyncDashboardForm : Form
     private readonly Button _backButton = new();
     private readonly System.Windows.Forms.Timer _autoPollTimer = new();
     private readonly SemaphoreSlim _syncGate = new(1, 1);
-    private readonly Dictionary<int, (decimal Balance, decimal Sold, decimal Received, string Date, string Name)> _publishedStockStates = new();
+    private readonly Dictionary<int, (decimal Balance, decimal Sold, decimal Received, string Date, string Name, decimal Cost)> _publishedStockStates = new();
     private DateTimeOffset? _sharedProductCatalogSince;
     private string? _publishedStockSnapshotBranch;
 
@@ -391,6 +391,7 @@ public sealed class BranchSyncDashboardForm : Form
             const string query = @"
                 SELECT p.ProductID, p.ProductDesc, p.ProductCode, p.BarCode, p.SellingPrice,
                     COALESCE(p.TaxRate, 0) AS TaxRate,
+                    COALESCE(p.Cost, 0) AS Cost,
                     COALESCE(branch_stock.AvailableQuantity, 0) AS AvailableQuantity,
                     COALESCE(daily_movements.SoldQuantity, 0) AS SoldQuantity,
                     COALESCE(daily_movements.ReceivedQuantity, 0) AS ReceivedQuantity
@@ -426,7 +427,7 @@ public sealed class BranchSyncDashboardForm : Form
             command.Parameters.AddWithValue("@movementDate", movementDateNumber);
 
             var products = new List<object>();
-            var changedStates = new Dictionary<int, (decimal Balance, decimal Sold, decimal Received, string Date, string Name)>();
+            var changedStates = new Dictionary<int, (decimal Balance, decimal Sold, decimal Received, string Date, string Name, decimal Cost)>();
             using (var reader = await command.ExecuteReaderAsync())
             {
                 while (await reader.ReadAsync())
@@ -439,7 +440,9 @@ public sealed class BranchSyncDashboardForm : Form
                     // on the next sync even when the stock has not changed; the website uses that report
                     // to show the rename as updated at this branch.
                     var productName = reader["ProductDesc"]?.ToString()?.Trim() ?? string.Empty;
-                    var currentState = (availableQuantity, soldQuantity, receivedQuantity, movementDateText, productName);
+                    // Cost is in the state too, so a cost saved on the website is reported back once applied.
+                    var costPrice = Math.Round(Convert.ToDecimal(reader["Cost"], CultureInfo.InvariantCulture), 2, MidpointRounding.AwayFromZero);
+                    var currentState = (availableQuantity, soldQuantity, receivedQuantity, movementDateText, productName, costPrice);
                     if (_publishedStockStates.TryGetValue(productId, out var previousState)
                         && previousState == currentState)
                     {
@@ -457,6 +460,7 @@ public sealed class BranchSyncDashboardForm : Form
                         sold_quantity = soldQuantity,
                         received_quantity = receivedQuantity,
                         tax_rate = Convert.ToDecimal(reader["TaxRate"], CultureInfo.InvariantCulture),
+                        cost_price = costPrice,
                     });
                     changedStates[productId] = currentState;
                 }
@@ -562,7 +566,8 @@ public sealed class BranchSyncDashboardForm : Form
                 {
                     const string updateProductSql = @"
                         UPDATE [dbo].[Products]
-                        SET ProductDesc = @productName, BarCode = @barcode, SellingPrice = @sellingPrice, TaxRate = @taxRate
+                        SET ProductDesc = @productName, BarCode = @barcode, SellingPrice = @sellingPrice, TaxRate = @taxRate,
+                            Cost = COALESCE(@costPrice, Cost)
                         WHERE ProductID = @productId;";
                     using (var productCommand = new SqlCommand(updateProductSql, connection))
                     {
@@ -571,6 +576,10 @@ public sealed class BranchSyncDashboardForm : Form
                         productCommand.Parameters.AddWithValue("@barcode", product.barcode ?? string.Empty);
                         productCommand.Parameters.AddWithValue("@sellingPrice", product.selling_price);
                         productCommand.Parameters.AddWithValue("@taxRate", product.tax_rate);
+                        // Only sent while a cost saved on the website is waiting; otherwise keep this branch's cost.
+                        productCommand.Parameters.Add("@costPrice", SqlDbType.Decimal).Value = product.cost_price.HasValue ? product.cost_price.Value : DBNull.Value;
+                        productCommand.Parameters["@costPrice"].Precision = 18;
+                        productCommand.Parameters["@costPrice"].Scale = 2;
                         updated += await productCommand.ExecuteNonQueryAsync();
                     }
 
@@ -608,7 +617,8 @@ public sealed class BranchSyncDashboardForm : Form
                         checked(product.product_id + 1).ToString(CultureInfo.InvariantCulture),
                         product.barcode ?? string.Empty,
                         product.selling_price,
-                        product.tax_rate);
+                        product.tax_rate,
+                        product.cost_price ?? 0m);
 
                     const string insertBalanceSql = @"
                         IF NOT EXISTS (
@@ -668,6 +678,7 @@ public sealed class BranchSyncDashboardForm : Form
         public string? barcode { get; set; }
         public decimal selling_price { get; set; }
         public decimal tax_rate { get; set; }
+        public decimal? cost_price { get; set; }
     }
 
     private static async Task<int> InsertPosProductAsync(
@@ -678,7 +689,8 @@ public sealed class BranchSyncDashboardForm : Form
         string productCode,
         string barcode,
         decimal sellingPrice,
-        decimal taxRate)
+        decimal taxRate,
+        decimal costPrice = 0m)
     {
         const string insertProductSql = @"
             INSERT INTO [dbo].[Products](
@@ -691,7 +703,7 @@ public sealed class BranchSyncDashboardForm : Form
             )
             OUTPUT INSERTED.ProductID
             VALUES (
-                @productId, 1, @productName, 0, @sellingPrice, 0, 0,
+                @productId, 1, @productName, @costPrice, @sellingPrice, 0, 0,
                 0, 0, @doneBy, CONVERT(varchar(50), GETDATE(), 112), @productCode, @barcode, 1,
                 @taxRate, 0, 'EA', '0', 1, '', @coid, NULL,
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
@@ -717,6 +729,7 @@ public sealed class BranchSyncDashboardForm : Form
             productCommand.Parameters.AddWithValue("@productCode", uniqueProductCode);
             productCommand.Parameters.AddWithValue("@barcode", barcode);
             productCommand.Parameters.AddWithValue("@sellingPrice", sellingPrice);
+            productCommand.Parameters.AddWithValue("@costPrice", costPrice);
             productCommand.Parameters.AddWithValue("@taxRate", taxRate);
             productCommand.Parameters.AddWithValue("@doneBy", Environment.UserName);
             productCommand.Parameters.AddWithValue("@coid", BranchCompanyId);

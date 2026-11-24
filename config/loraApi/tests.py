@@ -446,6 +446,73 @@ class ProductTaxRateTests(TestCase):
 		shared = next(item for item in self.client.get('/api/products/shared/').json()['products'] if item['product_id'] == 401)
 		self.assertEqual(shared['tax_rate'], '7.50')
 
+	def _save_cost(self, cost_price, branch='BranchA', product_id=501):
+		return self.client.post(
+			'/api/products/cost-price/',
+			data=json.dumps({'branch': branch, 'product_id': product_id, 'cost_price': cost_price}),
+			content_type='application/json',
+		)
+
+	def _snapshot_cost(self, branch, cost_price):
+		return self.client.post(
+			'/api/stock/snapshot/',
+			data=json.dumps({'branch': branch, 'products': [{
+				'product_id': 501, 'product_name': 'Cost Product', 'available_quantity': 5, 'cost_price': cost_price,
+			}]}),
+			content_type='application/json',
+		)
+
+	def _shared_cost(self):
+		shared = next(item for item in self.client.get('/api/products/shared/').json()['products'] if item['product_id'] == 501)
+		return shared.get('cost_price')
+
+	def test_cost_price_is_saved_for_every_branch_and_sent_to_pos(self):
+		for branch, cost in [('BranchA', '2.00'), ('BranchB', '3.00'), ('MAIN', '2.50')]:
+			ProductCatalog.objects.create(branch=branch, product_id=501, product_name='Cost Product', available_quantity=5, cost_price=cost)
+		ProductCatalog.objects.create(branch='BranchPending', product_id=501, product_name='Cost Product', branch_confirmed=False)
+		self.assertIsNone(self._shared_cost())
+
+		response = self._save_cost('4.255')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()['cost_price'], '4.26')
+		self.assertEqual(response.json()['branch_count'], 2)
+		for branch in ['BranchA', 'BranchB', 'MAIN']:
+			product = ProductCatalog.objects.get(branch=branch, product_id=501)
+			self.assertEqual((str(product.cost_price), str(product.pending_cost_price)), ('4.26', '4.26'))
+		self.assertIsNone(ProductCatalog.objects.get(branch='BranchPending', product_id=501).cost_price)
+		self.assertEqual(self._shared_cost(), '4.26')
+
+	def test_branch_with_old_cost_does_not_undo_the_web_cost(self):
+		ProductCatalog.objects.create(branch='BranchA', product_id=501, product_name='Cost Product', available_quantity=5, cost_price='2.00')
+		self._save_cost('4.00')
+		self._snapshot_cost('BranchA', '2.00')
+		product = ProductCatalog.objects.get(branch='BranchA', product_id=501)
+		self.assertEqual((str(product.cost_price), str(product.pending_cost_price)), ('4.00', '4.00'))
+
+		self._snapshot_cost('BranchA', '4')
+		product = ProductCatalog.objects.get(branch='BranchA', product_id=501)
+		self.assertEqual(str(product.cost_price), '4.00')
+		self.assertIsNone(product.pending_cost_price)
+
+	def test_pos_reports_its_cost_when_none_is_waiting(self):
+		self._snapshot_cost('BranchA', '1.5')
+		self.assertEqual(str(ProductCatalog.objects.get(branch='BranchA', product_id=501).cost_price), '1.50')
+		self._snapshot_cost('BranchA', '1.75')
+		self.assertEqual(str(ProductCatalog.objects.get(branch='BranchA', product_id=501).cost_price), '1.75')
+		self._snapshot_cost('BranchA', 'bad')
+		self.assertEqual(str(ProductCatalog.objects.get(branch='BranchA', product_id=501).cost_price), '1.75')
+		self.assertIsNone(self._shared_cost())
+
+	def test_cost_price_rejects_negative_and_main(self):
+		ProductCatalog.objects.create(branch='BranchA', product_id=501, product_name='Cost Product')
+		ProductCatalog.objects.create(branch='MAIN', product_id=501, product_name='Cost Product')
+		self.assertEqual(self._save_cost('-1').status_code, 400)
+		self.assertEqual(self._save_cost('abc').status_code, 400)
+		self.assertEqual(self._save_cost('NaN').status_code, 400)
+		self.assertEqual(self._save_cost('1', branch='MAIN').status_code, 400)
+		self.assertIsNone(ProductCatalog.objects.get(branch='BranchA', product_id=501).cost_price)
+
 	def test_tax_rate_rejects_values_over_one_hundred(self):
 		ProductCatalog.objects.create(branch='BranchA', product_id=402, product_name='Tax Product')
 		response = self.client.post(
