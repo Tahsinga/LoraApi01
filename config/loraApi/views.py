@@ -2472,6 +2472,73 @@ def request_branch_price_update(request):
 @login_required(login_url='/login/')
 @csrf_exempt
 @retry_on_database_lock
+def copy_branch_cost_prices(request):
+    """Use one branch's cost prices for every product at all the other branches."""
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+
+    try:
+        payload = json.loads(request.body or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'status': 'error', 'message': 'Invalid JSON'}, status=400)
+    branch = str(payload.get('branch', '')).strip()
+    if not branch or branch.casefold() == 'main':
+        return JsonResponse({'status': 'error', 'message': 'Select the branch whose cost prices should be used.'}, status=400)
+
+    source_rows = ProductCatalog.objects.filter(
+        branch__iexact=branch,
+        branch_confirmed=True,
+        cost_price__isnull=False,
+    )
+    product_count = source_rows.values('product_id').distinct().count()
+    if not product_count:
+        return JsonResponse({
+            'status': 'error',
+            'message': f'{branch} has not reported any cost prices yet. It needs Lora 1.44 and one sync first.',
+        }, status=400)
+
+    source_cost = Subquery(
+        source_rows.filter(product_id=OuterRef('product_id')).order_by('-updated_at').values('cost_price')[:1]
+    )
+    now = timezone.now()
+    with transaction.atomic():
+        # Rows at the other branches (and MAIN) whose cost differs from the chosen branch's,
+        # or is still waiting for a different cost to be applied.
+        target_ids = list(
+            ProductCatalog.objects.filter(
+                Q(branch_confirmed=True) | Q(branch__iexact='MAIN'),
+                product_id__in=source_rows.values('product_id'),
+            ).exclude(
+                branch__iexact=branch,
+            ).annotate(
+                source_cost=source_cost,
+            ).exclude(
+                Q(cost_price=F('source_cost')) & (Q(pending_cost_price__isnull=True) | Q(pending_cost_price=F('source_cost'))),
+            ).values_list('pk', flat=True)
+        )
+        for index in range(0, len(target_ids), 500):
+            ProductCatalog.objects.filter(pk__in=target_ids[index:index + 500]).update(
+                cost_price=source_cost,
+                pending_cost_price=source_cost,
+                updated_at=now,
+            )
+        branch_count = ProductCatalog.objects.filter(
+            pk__in=target_ids,
+        ).exclude(branch__iexact='MAIN').values('branch').distinct().count() if target_ids else 0
+
+    invalidate_product_catalog_cache()
+    return JsonResponse({
+        'status': 'ok',
+        'branch': branch,
+        'products': product_count,
+        'updated_rows': len(target_ids),
+        'branch_count': branch_count,
+    })
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
+@retry_on_database_lock
 def update_product_cost_price(request):
     """Save one cost price for a product at every branch; each POS applies it on sync."""
     if request.method != 'POST':

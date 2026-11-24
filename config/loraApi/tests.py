@@ -513,6 +513,40 @@ class ProductTaxRateTests(TestCase):
 		self.assertEqual(self._save_cost('1', branch='MAIN').status_code, 400)
 		self.assertIsNone(ProductCatalog.objects.get(branch='BranchA', product_id=501).cost_price)
 
+	def test_adjust_all_costs_uses_the_chosen_branch(self):
+		rows = [
+			('BranchA', 601, '2.00', True), ('BranchA', 602, '5.00', True), ('BranchA', 603, None, True),
+			('BranchB', 601, '3.00', True), ('BranchB', 602, '5.00', True), ('BranchB', 603, '9.00', True),
+			('BranchC', 601, None, True), ('MAIN', 601, '1.00', True), ('BranchPending', 601, '7.00', False),
+		]
+		for branch, product_id, cost, confirmed in rows:
+			ProductCatalog.objects.create(branch=branch, product_id=product_id, product_name=f'P{product_id}', cost_price=cost, branch_confirmed=confirmed)
+
+		response = self.client.post('/api/products/cost-price/copy-branch/', data=json.dumps({'branch': 'brancha'}), content_type='application/json')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()['products'], 2)
+		self.assertEqual(response.json()['updated_rows'], 3)
+		self.assertEqual(response.json()['branch_count'], 2)
+		cost = lambda branch, product_id: ProductCatalog.objects.get(branch=branch, product_id=product_id)
+		for branch in ['BranchB', 'BranchC', 'MAIN']:
+			self.assertEqual((str(cost(branch, 601).cost_price), str(cost(branch, 601).pending_cost_price)), ('2.00', '2.00'))
+		self.assertIsNone(cost('BranchB', 602).pending_cost_price)
+		self.assertEqual(str(cost('BranchB', 603).cost_price), '9.00')
+		self.assertEqual(str(cost('BranchPending', 601).cost_price), '7.00')
+		self.assertIsNone(cost('BranchA', 601).pending_cost_price)
+		shared = {item['product_id']: item.get('cost_price') for item in self.client.get('/api/products/shared/').json()['products']}
+		self.assertEqual(shared[601], '2.00')
+
+		again = self.client.post('/api/products/cost-price/copy-branch/', data=json.dumps({'branch': 'BranchA'}), content_type='application/json')
+		self.assertEqual(again.json()['updated_rows'], 0)
+
+	def test_adjust_all_costs_needs_reported_costs(self):
+		ProductCatalog.objects.create(branch='BranchA', product_id=611, product_name='P611')
+		response = self.client.post('/api/products/cost-price/copy-branch/', data=json.dumps({'branch': 'BranchA'}), content_type='application/json')
+		self.assertEqual(response.status_code, 400)
+		self.assertEqual(self.client.post('/api/products/cost-price/copy-branch/', data=json.dumps({'branch': 'MAIN'}), content_type='application/json').status_code, 400)
+
 	def test_tax_rate_rejects_values_over_one_hundred(self):
 		ProductCatalog.objects.create(branch='BranchA', product_id=402, product_name='Tax Product')
 		response = self.client.post(

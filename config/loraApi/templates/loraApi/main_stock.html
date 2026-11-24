@@ -184,6 +184,9 @@
     .rename-branch.replaced { color:var(--muted); background:#e8eeea; }
     .rename-legend { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 12px; }
     .rename-status-button { width:auto; grid-column:auto; margin:0; padding:9px 12px; }
+    .adjust-costs-button { width:auto; grid-column:auto; margin:0; padding:9px 12px; background:#b8641a; }
+    .adjust-costs-button:hover { background:#9a5214; }
+    .adjust-costs-button:disabled { background:#c9b8a6; cursor:not-allowed; }
     .product-movement-header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:14px; }
     .product-movement-header h2, .product-movement-header p { margin:0; }
     .product-movement-header .sub { margin-top:5px; }
@@ -389,7 +392,7 @@
       </div>
       </div>
       <div id="products-panel" class="panel panel-wide product-browser branch-data-card" data-branch-loading-card>
-        <div class="browser-heading"><div><h2>Branch products</h2></div><div class="browser-actions"><div class="highlight-tools" role="group" aria-label="Highlight products"><button id="highlight-duplicates" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products that share a name"><span class="chip-dot" aria-hidden="true"></span>Same names<span class="chip-count" data-chip-count>0</span></button><div class="price-chip-group"><button id="highlight-low-prices" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products priced at or under the limit"><span class="chip-dot" aria-hidden="true"></span>Low prices<span class="chip-count" data-chip-count>0</span></button><label class="low-price-limit">&le;<input id="low-price-limit" type="number" min="0" step="0.01" value="0.50" aria-label="Low price limit"></label></div><button id="highlight-cost-above" class="highlight-chip" type="button" aria-pressed="false" title="Products whose cost price is more than the selling price are highlighted; press to list them first"><span class="chip-dot" aria-hidden="true"></span>Cost above price<span class="chip-count" data-chip-count>0</span></button></div><button id="rename-status-open" class="rename-status-button refresh-stock-button" type="button" title="See which branches have received renamed products">Renames</button><label class="activity-date-label">Movement date<input id="product-movement-date" type="date"></label><span id="product-catalog-status" class="catalog-status">Select a branch to load products.</span></div></div>
+        <div class="browser-heading"><div><h2>Branch products</h2></div><div class="browser-actions"><div class="highlight-tools" role="group" aria-label="Highlight products"><button id="highlight-duplicates" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products that share a name"><span class="chip-dot" aria-hidden="true"></span>Same names<span class="chip-count" data-chip-count>0</span></button><div class="price-chip-group"><button id="highlight-low-prices" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products priced at or under the limit"><span class="chip-dot" aria-hidden="true"></span>Low prices<span class="chip-count" data-chip-count>0</span></button><label class="low-price-limit">&le;<input id="low-price-limit" type="number" min="0" step="0.01" value="0.50" aria-label="Low price limit"></label></div><button id="highlight-cost-above" class="highlight-chip" type="button" aria-pressed="false" title="Products whose cost price is more than the selling price are highlighted; press to list them first"><span class="chip-dot" aria-hidden="true"></span>Cost above price<span class="chip-count" data-chip-count>0</span></button></div><button id="adjust-all-costs" class="adjust-costs-button" type="button" disabled title="Use this branch's cost prices at all the other branches">Adjust all cost prices</button><button id="rename-status-open" class="rename-status-button refresh-stock-button" type="button" title="See which branches have received renamed products">Renames</button><label class="activity-date-label">Movement date<input id="product-movement-date" type="date"></label><span id="product-catalog-status" class="catalog-status">Select a branch to load products.</span></div></div>
         <label>Search products<input id="branch-product-search" type="search" placeholder="Search products by name, code, or barcode" autocomplete="off"></label>
         <div id="branch-products" class="stock-table-wrap"><p class="empty">Select a branch to see its products.</p></div>
       </div>
@@ -476,6 +479,7 @@
   const highlightLowPricesButton = document.querySelector('#highlight-low-prices');
   const lowPriceLimitInput = document.querySelector('#low-price-limit');
   const highlightCostAboveButton = document.querySelector('#highlight-cost-above');
+  const adjustAllCostsButton = document.querySelector('#adjust-all-costs');
   let highlightDuplicates = false;
   let highlightLowPrices = false;
   let highlightCostAbove = false;
@@ -706,6 +710,7 @@
       branchCatalogProducts.filter(isLowPrice).length,
       branchCatalogProducts.filter(isCostAbovePrice).length,
     );
+    adjustAllCostsButton.disabled = !selectedBranch.value || !branchCatalogProducts.some(product => product.cost_price !== '' && product.cost_price != null);
     let products = branchCatalogProducts.filter(product => [product.product_name, product.product_code, product.barcode, product.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
     if (highlightDuplicates) {
       // Put products that share a name next to each other so they are easy to compare.
@@ -1414,6 +1419,27 @@
     renderBranchProducts();
   });
   lowPriceLimitInput.addEventListener('input', renderBranchProducts);
+  adjustAllCostsButton.addEventListener('click', async () => {
+    const branch = selectedBranch.value;
+    if (!branch) return;
+    const withCost = branchCatalogProducts.filter(product => product.cost_price !== '' && product.cost_price != null).length;
+    if (!confirm(`Use the cost prices from ${branch} at ALL the other branches?\n\n${withCost.toLocaleString()} product${withCost === 1 ? '' : 's'} at ${branch} have a cost price. Their cost at every other branch will be replaced with ${branch}'s cost. Products ${branch} has no cost for are left alone.`)) return;
+    adjustAllCostsButton.disabled = true;
+    productCatalogStatus.textContent = `Copying cost prices from ${branch} to all branches...`;
+    try {
+      const response = await fetch('/api/products/cost-price/copy-branch/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'Cost prices could not be copied.');
+      const branchCount = Number(data.branch_count) || 0;
+      productCatalogStatus.textContent = Number(data.updated_rows)
+        ? `Cost prices from ${data.branch} saved for ${branchCount} other branch${branchCount === 1 ? '' : 'es'} (${Number(data.updated_rows).toLocaleString()} product rows changed). Each branch applies them on its next sync.`
+        : `All branches already have the same cost prices as ${data.branch}.`;
+    } catch (error) {
+      productCatalogStatus.textContent = error.message;
+    } finally {
+      adjustAllCostsButton.disabled = false;
+    }
+  });
   highlightCostAboveButton.addEventListener('click', () => {
     highlightCostAbove = !highlightCostAbove;
     renderBranchProducts();
