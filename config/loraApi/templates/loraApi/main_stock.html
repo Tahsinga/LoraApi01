@@ -201,6 +201,24 @@
     .adjust-costs-button:hover { background:#9a5214; }
     .adjust-costs-button:disabled { background:#c9b8a6; cursor:not-allowed; }
     .adjust-costs-dialog { width:min(520px, calc(100% - 28px)); }
+    .cost-progress-dialog { width:min(640px, calc(100% - 28px)); }
+    .cost-progress-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:14px; }
+    .cost-progress-head h2, .cost-progress-head p { margin:0; }
+    .cost-progress-head p { margin-top:4px; }
+    .cost-progress-head button { width:auto; margin:0; padding:9px 12px; }
+    .cost-progress-bar { height:8px; margin-bottom:14px; background:#e8eeea; }
+    .cost-progress-bar span { display:block; width:0; height:100%; background:var(--teal); transition:width .4s; }
+    .cost-progress-list { display:grid; max-height:55vh; overflow-y:auto; border:1px solid var(--line); }
+    .cost-progress-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; padding:10px 14px; }
+    .cost-progress-row + .cost-progress-row { border-top:1px solid var(--line); }
+    .cost-progress-row strong { font:15px Georgia,serif; }
+    .cost-progress-row small { display:block; margin-top:2px; color:var(--muted); font:12px Arial,sans-serif; }
+    .cost-state { padding:4px 9px; font:700 10px Arial,sans-serif; letter-spacing:1px; text-transform:uppercase; white-space:nowrap; }
+    .cost-state.done { color:#0b5b37; background:#d4f0e1; }
+    .cost-state.updating { color:#075d5a; background:#d9efeb; }
+    .cost-state.offline { color:#6d7b7d; background:#e8eeea; }
+    .cost-state.needs_update { color:#8a2a12; background:#fdd9b5; }
+    .cost-progress-note { margin:12px 0 0; }
     .adjust-costs-stats { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); border:1px solid var(--line); }
     .adjust-costs-stats div { display:grid; gap:4px; padding:10px 12px; }
     .adjust-costs-stats div + div { border-left:1px solid var(--line); }
@@ -419,7 +437,7 @@
       </div>
       </div>
       <div id="products-panel" class="panel panel-wide product-browser branch-data-card" data-branch-loading-card>
-        <div class="products-heading"><div class="products-title"><h2>Branch products</h2><span id="product-catalog-status" class="catalog-status">Select a branch to load products.</span></div><div class="products-toolbar"><div class="toolbar-row" role="group" aria-label="Highlight products"><span class="toolbar-label">Highlight</span><div class="highlight-tools"><button id="highlight-duplicates" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products that share a name"><span class="chip-dot" aria-hidden="true"></span>Same names<span class="chip-count" data-chip-count>0</span></button><div class="price-chip-group"><button id="highlight-low-prices" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products priced at or under the limit"><span class="chip-dot" aria-hidden="true"></span>Low prices<span class="chip-count" data-chip-count>0</span></button><label class="low-price-limit">&le;<input id="low-price-limit" type="number" min="0" step="0.01" value="0.50" aria-label="Low price limit"></label></div><button id="highlight-cost-above" class="highlight-chip" type="button" aria-pressed="false" title="Products whose cost price is more than the selling price are highlighted; press to list them first"><span class="chip-dot" aria-hidden="true"></span>Cost above price<span class="chip-count" data-chip-count>0</span></button><button id="highlight-zero-cost" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products whose cost price is 0.00"><span class="chip-dot" aria-hidden="true"></span>Zero cost<span class="chip-count" data-chip-count>0</span></button></div></div><div class="toolbar-row" role="group" aria-label="Cost prices"><span class="toolbar-label">Cost prices</span><div class="toolbar-items"><button id="adjust-all-costs" class="adjust-costs-button" type="button" disabled title="Use this branch's cost prices at all the other branches">Adjust all cost prices</button></div></div><div class="toolbar-row" role="group" aria-label="View"><span class="toolbar-label">View</span><div class="toolbar-items"><label class="activity-date-label">Movement date<input id="product-movement-date" type="date"></label><button id="rename-status-open" class="rename-status-button refresh-stock-button" type="button" title="See which branches have received renamed products">Renames</button></div></div></div></div>
+        <div class="products-heading"><div class="products-title"><h2>Branch products</h2><span id="product-catalog-status" class="catalog-status">Select a branch to load products.</span></div><div class="products-toolbar"><div class="toolbar-row" role="group" aria-label="Highlight products"><span class="toolbar-label">Highlight</span><div class="highlight-tools"><button id="highlight-duplicates" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products that share a name"><span class="chip-dot" aria-hidden="true"></span>Same names<span class="chip-count" data-chip-count>0</span></button><div class="price-chip-group"><button id="highlight-low-prices" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products priced at or under the limit"><span class="chip-dot" aria-hidden="true"></span>Low prices<span class="chip-count" data-chip-count>0</span></button><label class="low-price-limit">&le;<input id="low-price-limit" type="number" min="0" step="0.01" value="0.50" aria-label="Low price limit"></label></div><button id="highlight-cost-above" class="highlight-chip" type="button" aria-pressed="false" title="Products whose cost price is more than the selling price are highlighted; press to list them first"><span class="chip-dot" aria-hidden="true"></span>Cost above price<span class="chip-count" data-chip-count>0</span></button><button id="highlight-zero-cost" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products whose cost price is 0.00"><span class="chip-dot" aria-hidden="true"></span>Zero cost<span class="chip-count" data-chip-count>0</span></button></div></div><div class="toolbar-row" role="group" aria-label="Cost prices"><span class="toolbar-label">Cost prices</span><div class="toolbar-items"><button id="cost-progress-open" class="rename-status-button refresh-stock-button" type="button" title="See which branches have applied the new cost prices">Cost updates</button><button id="adjust-all-costs" class="adjust-costs-button" type="button" disabled title="Use this branch's cost prices at all the other branches">Adjust all cost prices</button></div></div><div class="toolbar-row" role="group" aria-label="View"><span class="toolbar-label">View</span><div class="toolbar-items"><label class="activity-date-label">Movement date<input id="product-movement-date" type="date"></label><button id="rename-status-open" class="rename-status-button refresh-stock-button" type="button" title="See which branches have received renamed products">Renames</button></div></div></div></div>
         <label>Search products<input id="branch-product-search" type="search" placeholder="Search products by name, code, or barcode" autocomplete="off"></label>
         <div id="branch-products" class="stock-table-wrap"><p class="empty">Select a branch to see its products.</p></div>
       </div>
@@ -432,6 +450,12 @@
         <div id="stock-transfers" class="stock-table-wrap"><p class="empty">Loading transfer log...</p></div>
       </div>
     </section>
+    <dialog id="cost-progress-dialog" class="product-movement-dialog cost-progress-dialog" aria-labelledby="cost-progress-title">
+      <div class="cost-progress-head"><div><h2 id="cost-progress-title">Cost price updates</h2><p id="cost-progress-summary" class="sub">Loading branches...</p></div><button id="cost-progress-close" class="product-delete-cancel" type="button">Close</button></div>
+      <div class="cost-progress-bar" aria-hidden="true"><span id="cost-progress-fill"></span></div>
+      <div id="cost-progress-list" class="cost-progress-list"></div>
+      <p class="sub cost-progress-note">A branch is done once its POS has written the new cost prices into Quantum and reported them back. Updates every 5 seconds while this is open.</p>
+    </dialog>
     <dialog id="adjust-costs-dialog" class="movement-adjustment-dialog adjust-costs-dialog" aria-labelledby="adjust-costs-title">
       <form id="adjust-costs-form">
         <h2 id="adjust-costs-title">Adjust all cost prices</h2>
@@ -1499,6 +1523,41 @@
     adjustCostsDialog.showModal();
   });
   adjustCostsSkipZero.addEventListener('change', updateAdjustCostsSummary);
+  const costProgressDialog = document.querySelector('#cost-progress-dialog');
+  let costProgressTimer = null;
+  const costStateLabels = { done:'Done', updating:'Updating', offline:'Offline', needs_update:'Needs Lora 1.44' };
+  async function loadCostProgress() {
+    try {
+      const response = await fetch(`/api/products/cost-price/progress/?_=${Date.now()}`, { cache:'no-store' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Progress could not be loaded.');
+      const branches = data.branches || [];
+      const done = branches.filter(item => item.state === 'done').length;
+      document.querySelector('#cost-progress-summary').textContent = branches.length
+        ? `${done} of ${branches.length} branch${branches.length === 1 ? '' : 'es'} done` + (data.waiting ? ` · ${Number(data.waiting).toLocaleString()} cost price${data.waiting === 1 ? '' : 's'} still to apply` : '')
+        : 'No branches found.';
+      document.querySelector('#cost-progress-fill').style.width = branches.length ? `${Math.round(done / branches.length * 100)}%` : '0%';
+      document.querySelector('#cost-progress-list').innerHTML = branches.map(item => {
+        const left = Number(item.waiting) || 0;
+        const detail = item.state === 'done' ? 'All cost prices applied'
+          : item.state === 'needs_update' ? `${left.toLocaleString()} waiting · install Lora 1.44 at this branch`
+          : item.state === 'offline' ? `${left.toLocaleString()} waiting · applies when the branch comes online`
+          : `${left.toLocaleString()} left to apply`;
+        return `<div class="cost-progress-row"><div><strong>${escapeHtml(item.branch)}</strong><small>${escapeHtml(detail)}</small></div><span class="cost-state ${escapeHtml(item.state)}">${escapeHtml(costStateLabels[item.state] || item.state)}</span></div>`;
+      }).join('');
+    } catch (error) {
+      document.querySelector('#cost-progress-summary').textContent = error.message;
+    }
+  }
+  function openCostProgress() {
+    if (!costProgressDialog.open) costProgressDialog.showModal();
+    loadCostProgress();
+    clearInterval(costProgressTimer);
+    costProgressTimer = setInterval(loadCostProgress, 5000);
+  }
+  costProgressDialog.addEventListener('close', () => { clearInterval(costProgressTimer); costProgressTimer = null; });
+  document.querySelector('#cost-progress-close').addEventListener('click', () => costProgressDialog.close());
+  document.querySelector('#cost-progress-open').addEventListener('click', openCostProgress);
   document.querySelector('#adjust-costs-cancel').addEventListener('click', () => adjustCostsDialog.close());
   adjustCostsForm.addEventListener('submit', async event => {
     event.preventDefault();
@@ -1518,6 +1577,10 @@
       adjustCostsStatus.className = 'notice ok';
       adjustCostsStatus.textContent = message;
       productCatalogStatus.textContent = message;
+      if (Number(data.updated_rows)) {
+        adjustCostsDialog.close();
+        openCostProgress();
+      }
     } catch (error) {
       adjustCostsStatus.className = 'notice error';
       adjustCostsStatus.textContent = error.message;
@@ -1742,7 +1805,7 @@
         const costBranches = Number(data.branch_count) || 0;
         branchCatalogProducts.filter(item => String(item.product_id) === String(data.product_id)).forEach(item => { item.cost_price = data.cost_price; });
         branchCurrentCost.value = data.cost_price; branchCostInput.value = data.cost_price;
-        messages.push(`Cost price ${data.cost_price} saved for ${costBranches} branch${costBranches === 1 ? '' : 'es'}.`);
+        messages.push(`Cost price ${data.cost_price} saved for ${costBranches} branch${costBranches === 1 ? '' : 'es'} (see Cost updates for progress).`);
         renderBranchProducts();
       }
       if (sendPrice) {

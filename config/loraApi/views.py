@@ -2471,6 +2471,65 @@ def request_branch_price_update(request):
 
 @login_required(login_url='/login/')
 @csrf_exempt
+def cost_price_progress(request):
+    """Per branch: how many web-saved cost prices its POS has not reported back yet."""
+    if request.method != 'GET':
+        return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
+
+    now = timezone.now()
+    ignored = ignored_rename_branches()
+    last_seen = {item.branch.casefold(): item.last_seen for item in BranchHeartbeat.objects.only('branch', 'last_seen')}
+    rows = (
+        ProductCatalog.objects.filter(branch_confirmed=True)
+        .exclude(branch__iexact='MAIN')
+        .values('branch')
+        .annotate(
+            waiting=Count('pk', filter=Q(pending_cost_price__isnull=False)),
+            # A cost that is set and not waiting was reported by the POS, so it runs Lora 1.44+.
+            reported=Count('pk', filter=Q(cost_price__isnull=False, pending_cost_price__isnull=True)),
+        )
+    )
+    branches = {}
+    for row in rows:
+        key = row['branch'].casefold()
+        if key in ignored:
+            continue
+        entry = branches.setdefault(key, {'branch': row['branch'], 'waiting': 0, 'reported': 0})
+        entry['waiting'] += row['waiting']
+        entry['reported'] += row['reported']
+
+    result = []
+    for key, entry in branches.items():
+        seen = last_seen.get(key)
+        online = bool(seen and seen >= now - timedelta(seconds=BRANCH_ONLINE_SECONDS))
+        if not entry['waiting']:
+            state = 'done'
+        elif not entry['reported']:
+            state = 'needs_update'
+        elif not online:
+            state = 'offline'
+        else:
+            state = 'updating'
+        result.append({
+            'branch': entry['branch'],
+            'waiting': entry['waiting'],
+            'state': state,
+            'online': online,
+            'last_seen': seen.isoformat() if seen else None,
+        })
+    order = {'updating': 0, 'offline': 1, 'needs_update': 2, 'done': 3}
+    result.sort(key=lambda item: (order[item['state']], item['branch'].casefold()))
+    return JsonResponse({
+        'status': 'ok',
+        'server_time': now.isoformat(),
+        'waiting': sum(item['waiting'] for item in result),
+        'done': sum(1 for item in result if item['state'] == 'done'),
+        'branches': result,
+    })
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
 @retry_on_database_lock
 def copy_branch_cost_prices(request):
     """Use one branch's cost prices for every product at all the other branches."""

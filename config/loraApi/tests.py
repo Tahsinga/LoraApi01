@@ -552,6 +552,29 @@ class ProductTaxRateTests(TestCase):
 		only_zero = self.client.post('/api/products/cost-price/copy-branch/', data=json.dumps({'branch': 'BranchA', 'skip_zero': True}), content_type='application/json')
 		self.assertEqual(only_zero.status_code, 400)
 
+	def test_cost_progress_shows_each_branch(self):
+		from django.utils import timezone
+		BranchHeartbeat.objects.create(branch='BranchA', last_seen=timezone.now())
+		BranchHeartbeat.objects.create(branch='BranchB', last_seen=timezone.now() - timedelta(hours=2))
+		for branch, product_id, cost in [('BranchA', 631, '2.00'), ('BranchA', 632, '2.00'), ('BranchB', 631, '1.00'), ('BranchC', 631, None), ('BranchD', 631, '3.00')]:
+			ProductCatalog.objects.create(branch=branch, product_id=product_id, product_name=f'P{product_id}', cost_price=cost)
+		ProductCatalog.objects.filter(branch__in=['BranchA', 'BranchB', 'BranchC'], product_id=631).update(cost_price='5.00', pending_cost_price='5.00')
+
+		data = self.client.get('/api/products/cost-price/progress/').json()
+
+		states = {item['branch']: (item['state'], item['waiting']) for item in data['branches']}
+		self.assertEqual(states['BranchA'], ('updating', 1))
+		self.assertEqual(states['BranchB'], ('needs_update', 1))
+		self.assertEqual(states['BranchC'], ('needs_update', 1))
+		self.assertEqual(states['BranchD'], ('done', 0))
+		self.client.post(
+			'/api/stock/snapshot/',
+			data=json.dumps({'branch': 'BranchA', 'products': [{'product_id': 631, 'product_name': 'P631', 'available_quantity': 0, 'cost_price': '5'}]}),
+			content_type='application/json',
+		)
+		states = {item['branch']: item['state'] for item in self.client.get('/api/products/cost-price/progress/').json()['branches']}
+		self.assertEqual(states['BranchA'], 'done')
+
 	def test_adjust_all_costs_needs_reported_costs(self):
 		ProductCatalog.objects.create(branch='BranchA', product_id=611, product_name='P611')
 		response = self.client.post('/api/products/cost-price/copy-branch/', data=json.dumps({'branch': 'BranchA'}), content_type='application/json')
