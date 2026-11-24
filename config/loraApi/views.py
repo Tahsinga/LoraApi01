@@ -2292,7 +2292,8 @@ def publish_branch_stock_snapshot(request):
                     # A cost set on the website wins until the POS reports it back.
                     if snapshot['cost_price'] == product.pending_cost_price:
                         product.pending_cost_price = None
-                        changed_fields.append('pending_cost_price')
+                        product.previous_cost_price = None
+                        changed_fields.extend(['pending_cost_price', 'previous_cost_price'])
                 elif product.cost_price != snapshot['cost_price']:
                     product.cost_price = snapshot['cost_price']
                     changed_fields.append('cost_price')
@@ -2471,6 +2472,32 @@ def request_branch_price_update(request):
 
 @login_required(login_url='/login/')
 @csrf_exempt
+@retry_on_database_lock
+def cancel_cost_price_updates(request):
+    """Stop cost prices that branches have not applied yet; the website goes back to their old cost."""
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+    try:
+        payload = json.loads(request.body or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'status': 'error', 'message': 'Invalid JSON'}, status=400)
+    branch = str(payload.get('branch', '') or '').strip()
+
+    waiting = ProductCatalog.objects.filter(pending_cost_price__isnull=False)
+    if branch:
+        waiting = waiting.filter(branch__iexact=branch)
+    with transaction.atomic():
+        cancelled = waiting.update(
+            cost_price=F('previous_cost_price'),
+            pending_cost_price=None,
+            previous_cost_price=None,
+        )
+    invalidate_product_catalog_cache()
+    return JsonResponse({'status': 'ok', 'branch': branch, 'cancelled': cancelled})
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
 def cost_price_progress(request):
     """Per branch: how many web-saved cost prices its POS has not reported back yet."""
     if request.method != 'GET':
@@ -2582,6 +2609,10 @@ def copy_branch_cost_prices(request):
         )
         for index in range(0, len(target_ids), 500):
             ProductCatalog.objects.filter(pk__in=target_ids[index:index + 500]).update(
+                previous_cost_price=Case(
+                    When(pending_cost_price__isnull=True, then=F('cost_price')),
+                    default=F('previous_cost_price'),
+                ),
                 cost_price=source_cost,
                 pending_cost_price=source_cost,
                 updated_at=now,
@@ -2633,8 +2664,20 @@ def update_product_cost_price(request):
         branch_count = ProductCatalog.objects.filter(
             product_id=product_id,
             branch_confirmed=True,
-        ).exclude(branch__iexact='MAIN').update(cost_price=cost_price, pending_cost_price=cost_price, updated_at=now)
+        ).exclude(branch__iexact='MAIN').update(
+            previous_cost_price=Case(
+                When(pending_cost_price__isnull=True, then=F('cost_price')),
+                default=F('previous_cost_price'),
+            ),
+            cost_price=cost_price,
+            pending_cost_price=cost_price,
+            updated_at=now,
+        )
         ProductCatalog.objects.filter(branch__iexact='MAIN', product_id=product_id).update(
+            previous_cost_price=Case(
+                When(pending_cost_price__isnull=True, then=F('cost_price')),
+                default=F('previous_cost_price'),
+            ),
             cost_price=cost_price,
             pending_cost_price=cost_price,
             updated_at=now,

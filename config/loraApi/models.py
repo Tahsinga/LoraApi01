@@ -155,6 +155,8 @@ class ProductCatalog(models.Model):
 	# Cost set on the website that the branch POS has not reported back yet; while it
 	# is set, a POS snapshot with the old cost must not overwrite the web edit.
 	pending_cost_price = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+	# The cost before the waiting web cost was saved, put back if the update is cancelled.
+	previous_cost_price = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
 	# Name set on the website that the branch POS has not reported back yet; while it is
 	# set, a POS snapshot with the old name must not overwrite the web edit.
 	pending_product_name = models.CharField(max_length=250, blank=True, default='')

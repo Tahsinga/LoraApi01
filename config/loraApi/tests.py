@@ -575,6 +575,25 @@ class ProductTaxRateTests(TestCase):
 		states = {item['branch']: item['state'] for item in self.client.get('/api/products/cost-price/progress/').json()['branches']}
 		self.assertEqual(states['BranchA'], 'done')
 
+	def test_cancel_cost_updates_puts_the_old_cost_back(self):
+		for branch, cost in [('BranchA', '2.00'), ('BranchB', '3.00'), ('BranchC', None)]:
+			ProductCatalog.objects.create(branch=branch, product_id=641, product_name='P641', cost_price=cost)
+		self._save_cost('6.00', product_id=641)
+		self._save_cost('7.00', product_id=641)
+		cost = lambda branch: ProductCatalog.objects.get(branch=branch, product_id=641)
+		self.assertEqual(str(cost('BranchB').previous_cost_price), '3.00')
+
+		one = self.client.post('/api/products/cost-price/cancel/', data=json.dumps({'branch': 'branchb'}), content_type='application/json')
+		self.assertEqual(one.json()['cancelled'], 1)
+		self.assertEqual((str(cost('BranchB').cost_price), cost('BranchB').pending_cost_price), ('3.00', None))
+		self.assertEqual(str(cost('BranchA').pending_cost_price), '7.00')
+
+		self.client.post('/api/products/cost-price/cancel/', data=json.dumps({}), content_type='application/json')
+		self.assertEqual((str(cost('BranchA').cost_price), cost('BranchA').pending_cost_price), ('2.00', None))
+		self.assertIsNone(cost('BranchC').cost_price)
+		shared = next(item for item in self.client.get('/api/products/shared/').json()['products'] if item['product_id'] == 641)
+		self.assertNotIn('cost_price', shared)
+
 	def test_adjust_all_costs_needs_reported_costs(self):
 		ProductCatalog.objects.create(branch='BranchA', product_id=611, product_name='P611')
 		response = self.client.post('/api/products/cost-price/copy-branch/', data=json.dumps({'branch': 'BranchA'}), content_type='application/json')

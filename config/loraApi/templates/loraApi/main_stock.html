@@ -219,6 +219,11 @@
     .cost-state.offline { color:#6d7b7d; background:#e8eeea; }
     .cost-state.needs_update { color:#8a2a12; background:#fdd9b5; }
     .cost-progress-note { margin:12px 0 0; }
+    .cost-progress-head .cost-progress-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+    .cost-progress-row .cost-row-end { display:flex; align-items:center; gap:8px; }
+    .cost-cancel-button { width:auto; margin:0; padding:6px 10px; color:#8b2d20; background:#f7d9d3; font-size:10px; }
+    .cost-cancel-button:hover { background:#f0c3ba; }
+    .cost-cancel-button:disabled { opacity:.5; cursor:not-allowed; }
     .adjust-costs-stats { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); border:1px solid var(--line); }
     .adjust-costs-stats div { display:grid; gap:4px; padding:10px 12px; }
     .adjust-costs-stats div + div { border-left:1px solid var(--line); }
@@ -451,7 +456,7 @@
       </div>
     </section>
     <dialog id="cost-progress-dialog" class="product-movement-dialog cost-progress-dialog" aria-labelledby="cost-progress-title">
-      <div class="cost-progress-head"><div><h2 id="cost-progress-title">Cost price updates</h2><p id="cost-progress-summary" class="sub">Loading branches...</p></div><button id="cost-progress-close" class="product-delete-cancel" type="button">Close</button></div>
+      <div class="cost-progress-head"><div><h2 id="cost-progress-title">Cost price updates</h2><p id="cost-progress-summary" class="sub">Loading branches...</p></div><div class="cost-progress-actions"><button id="cost-progress-cancel-all" class="cost-cancel-button" type="button" hidden>Cancel all waiting</button><button id="cost-progress-close" class="product-delete-cancel" type="button">Close</button></div></div>
       <div class="cost-progress-bar" aria-hidden="true"><span id="cost-progress-fill"></span></div>
       <div id="cost-progress-list" class="cost-progress-list"></div>
       <p class="sub cost-progress-note">A branch is done once its POS has written the new cost prices into Quantum and reported them back. Updates every 5 seconds while this is open.</p>
@@ -1543,8 +1548,10 @@
           : item.state === 'needs_update' ? `${left.toLocaleString()} waiting · install Lora 1.44 at this branch`
           : item.state === 'offline' ? `${left.toLocaleString()} waiting · applies when the branch comes online`
           : `${left.toLocaleString()} left to apply`;
-        return `<div class="cost-progress-row"><div><strong>${escapeHtml(item.branch)}</strong><small>${escapeHtml(detail)}</small></div><span class="cost-state ${escapeHtml(item.state)}">${escapeHtml(costStateLabels[item.state] || item.state)}</span></div>`;
+        const cancel = left ? `<button class="cost-cancel-button" type="button" data-cost-cancel="${escapeHtml(item.branch)}">Cancel</button>` : '';
+        return `<div class="cost-progress-row"><div><strong>${escapeHtml(item.branch)}</strong><small>${escapeHtml(detail)}</small></div><div class="cost-row-end">${cancel}<span class="cost-state ${escapeHtml(item.state)}">${escapeHtml(costStateLabels[item.state] || item.state)}</span></div></div>`;
       }).join('');
+      document.querySelector('#cost-progress-cancel-all').hidden = !Number(data.waiting);
     } catch (error) {
       document.querySelector('#cost-progress-summary').textContent = error.message;
     }
@@ -1558,6 +1565,28 @@
   costProgressDialog.addEventListener('close', () => { clearInterval(costProgressTimer); costProgressTimer = null; });
   document.querySelector('#cost-progress-close').addEventListener('click', () => costProgressDialog.close());
   document.querySelector('#cost-progress-open').addEventListener('click', openCostProgress);
+  async function cancelCostUpdates(branch, button) {
+    const where = branch ? `at ${branch}` : 'at ALL branches';
+    if (!confirm(`Cancel the cost price updates still waiting ${where}?\n\nBranches that have not applied them yet will keep their current cost, and the website goes back to the old cost. Branches already marked Done are not changed.`)) return;
+    if (button) button.disabled = true;
+    try {
+      const response = await fetch('/api/products/cost-price/cancel/', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ branch }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'The cost updates could not be cancelled.');
+      const count = Number(data.cancelled) || 0;
+      productCatalogStatus.textContent = `Cancelled ${count.toLocaleString()} waiting cost price${count === 1 ? '' : 's'} ${where}.`;
+      await loadCostProgress();
+      if (selectedBranch.value) loadBranchProducts(false);
+    } catch (error) {
+      document.querySelector('#cost-progress-summary').textContent = error.message;
+      if (button) button.disabled = false;
+    }
+  }
+  document.querySelector('#cost-progress-cancel-all').addEventListener('click', event => cancelCostUpdates('', event.currentTarget));
+  document.querySelector('#cost-progress-list').addEventListener('click', event => {
+    const button = event.target.closest('[data-cost-cancel]');
+    if (button) cancelCostUpdates(button.dataset.costCancel, button);
+  });
   document.querySelector('#adjust-costs-cancel').addEventListener('click', () => adjustCostsDialog.close());
   adjustCostsForm.addEventListener('submit', async event => {
     event.preventDefault();
