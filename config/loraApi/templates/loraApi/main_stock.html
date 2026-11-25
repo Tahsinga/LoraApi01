@@ -113,6 +113,7 @@
     .branch-price-section { margin-top:0; }
     .branch-price-form { grid-template-columns:minmax(0,1.4fr) repeat(4, minmax(110px,.7fr)) auto; align-items:end; gap:12px; margin:0; padding:0; border:0; }
     .branch-price-form input { height:40px; padding:8px 11px; }
+    input.locked-field, input.locked-field:focus { color:#55625e; background:#eef1ef; border-color:#d9e0dc; border-style:dashed; box-shadow:none; cursor:not-allowed; pointer-events:none; user-select:none; }
     .branch-price-form button { grid-column:auto; margin:0; padding:10px 14px; white-space:nowrap; }
     .product-list { display:grid; gap:8px; max-height:360px; overflow:auto; margin-top:14px; }
     .product-row { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:16px; align-items:center; width:100%; margin:0; padding:12px 14px; color:var(--ink); background:#fbfcfa; border:1px solid var(--line); text-align:left; text-transform:none; letter-spacing:0; }
@@ -431,9 +432,9 @@
           <form id="branch-price-form" class="transfer-form branch-price-form">
             <label class="product-picker">Product<input id="branch-price-search" type="search" autocomplete="off" required placeholder="Type to filter branch products"><datalist id="branch-price-products"></datalist><div id="branch-price-product-options" class="product-picker-options" role="listbox"></div></label>
             <input id="branch-price-product" type="hidden"><input id="branch-price-name" type="hidden">
-            <label>Current cost price<input id="branch-current-cost" type="text" readonly placeholder="Select a branch product"></label>
+            <label>Current cost price<input id="branch-current-cost" class="locked-field" type="text" readonly tabindex="-1" aria-readonly="true" placeholder="Select a branch product"></label>
             <label>New cost price<input id="branch-cost-input" type="number" min="0" step="0.01" placeholder="Same for all branches"></label>
-            <label>Current branch price<input id="branch-current-price" type="text" readonly placeholder="Select a branch product"></label>
+            <label>Current branch price<input id="branch-current-price" class="locked-field" type="text" readonly tabindex="-1" aria-readonly="true" placeholder="Select a branch product"></label>
             <label>New branch price<input id="branch-price-input" type="number" min="0" step="0.01" placeholder="Current price appears after selecting a product"></label>
             <button id="branch-price-submit" type="submit">Save prices</button>
           </form>
