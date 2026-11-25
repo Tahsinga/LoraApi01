@@ -10,8 +10,8 @@ from what the branch last synced to Lora:
   every branch catalog the Main sync keeps) and prints the same script.
 
 The script is idempotent: products are matched by ProductID and the branch
-stock balance is SET to the backed-up value, never added. It runs as a dry run
-until @Apply is changed to 1.
+stock balance is SET to the backed-up value, never added. It restores when run;
+set @Apply = 0 in the script for a dry run that saves nothing.
 """
 from decimal import Decimal
 from pathlib import Path
@@ -173,9 +173,9 @@ def restore_header(branch, source, generated_at, product_count, total_units, sto
         '   2. Do NOT start the branch sync (POSViewer) yet.',
         '   3. Open this file in SQL Server Management Studio, connected to the',
         '      branch Quantum database (pick it in the database list at the top).',
-        '   4. Run it once as it is: it is a DRY RUN and only shows what would change.',
-        '   5. Change   @Apply = 0   to   @Apply = 1   below and run it again.',
-        '   6. Start POSViewer. Stock transfers still queued on the website are',
+        '   4. Press Execute once. It RESTORES straight away and shows the totals.',
+        '      (To only preview first, change @Apply = 1 to @Apply = 0 below.)',
+        '   5. Start POSViewer. Stock transfers still queued on the website are',
         '      applied by the sync as usual.',
         '',
         '   Safe to run again: products are matched by ProductID and each branch',
@@ -185,7 +185,7 @@ def restore_header(branch, source, generated_at, product_count, total_units, sto
         'SET NOCOUNT ON;',
         'SET XACT_ABORT ON;',
         '',
-        'DECLARE @Apply bit = 0;                 -- 0 = dry run (nothing saved), 1 = restore',
+        'DECLARE @Apply bit = 1;                 -- 1 = restore, 0 = dry run (nothing saved)',
         f'DECLARE @Branch varchar(50) = {sql_text(branch)};',
         f'DECLARE @CompanyId int = {POS_COMPANY_ID};',
         f'DECLARE @OldPosCompanyId int = {POS_COMPANY_ID};   -- company older POSViewer versions always used',
@@ -274,7 +274,7 @@ def build_main_fallback_sql():
         '      or in SQL Server Management Studio: run it, then copy everything from',
         '      the Messages tab into a new file.',
         '   3. Run the produced restore script on the branch\'s new Quantum database',
-        '      (it explains itself; it starts as a dry run).',
+        '      (it explains itself; it restores when you press Execute).',
         '   ========================================================================== */',
         'SET NOCOUNT ON;',
         '',

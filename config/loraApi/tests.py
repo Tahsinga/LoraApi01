@@ -3517,7 +3517,7 @@ class BranchRestoreTests(TestCase):
 		self.assertIn('attachment; filename="restore_WEST_', response['Content-Disposition'])
 		script = response.content.decode()
 		self.assertIn("DECLARE @Branch varchar(50) = N'WEST';", script)
-		self.assertIn('DECLARE @Apply bit = 0;', script)
+		self.assertIn('DECLARE @Apply bit = 1;', script)
 		self.assertIn('DECLARE @CompanyId int = 412;', script)
 		self.assertIn("(701, N'KELLOGG''S', N'702', N'600', 2.5, 15, 24)", script)
 		# website rename and price win; empty code falls back to ProductID + 1 like the POS sync

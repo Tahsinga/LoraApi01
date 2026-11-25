@@ -103,8 +103,7 @@
         <ol class="steps">
           <li>Install Quantum POS and create its database as normal. <strong>Don't start the Lora branch sync (POSViewer) yet.</strong></li>
           <li>Click <strong>Download restore script</strong> for that branch above and copy the <code>.sql</code> file to the branch PC.</li>
-          <li>Open it in <strong>SQL Server Management Studio</strong>, select the branch's Quantum database at the top, and press <strong>Execute</strong>. The first run is a <strong>dry run</strong>: it shows how many products and stock rows it would restore and saves nothing.</li>
-          <li>If the numbers look right, change <code>@Apply = 0</code> to <code>@Apply = 1</code> near the top and press <strong>Execute</strong> again.</li>
+          <li>Open it in <strong>SQL Server Management Studio</strong>, select the branch's Quantum database at the top, and press <strong>Execute</strong>. It restores the products and stock straight away; the <strong>Result</strong> column says <strong>RESTORED</strong>. (To only preview first, change <code>@Apply = 1</code> to <code>@Apply = 0</code> near the top.)</li>
           <li>Start POSViewer with the same branch name. Stock transfers still queued on the website are applied by the sync as usual.</li>
         </ol>
         <div class="callout warn">The backup is the stock as of the branch's <strong>last sync</strong> (shown in the table). Sales made after that and never synced cannot be recovered. Running the script again is safe: stock is set to the backed-up value, never added on top.</div>
