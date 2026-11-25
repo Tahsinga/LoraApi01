@@ -113,7 +113,8 @@
     .branch-price-section { margin-top:0; }
     .branch-price-form { grid-template-columns:minmax(0,1.4fr) repeat(4, minmax(110px,.7fr)) auto; align-items:end; gap:12px; margin:0; padding:0; border:0; }
     .branch-price-form input { height:40px; padding:8px 11px; }
-    input.locked-field, input.locked-field:focus { color:#55625e; background:#eef1ef; border-color:#d9e0dc; border-style:dashed; box-shadow:none; cursor:not-allowed; pointer-events:none; user-select:none; }
+    input.locked-field, input.locked-field:focus { color:#0b6b5f; font-weight:700; -webkit-text-fill-color:#0b6b5f; opacity:1; background:#e6f4f1; border-color:#9fcfc6; border-style:dashed; box-shadow:none; cursor:not-allowed; pointer-events:none; user-select:none; }
+    input.locked-field::placeholder { color:#8a9894; font-weight:400; -webkit-text-fill-color:#8a9894; }
     .branch-price-form button { grid-column:auto; margin:0; padding:10px 14px; white-space:nowrap; }
     .product-list { display:grid; gap:8px; max-height:360px; overflow:auto; margin-top:14px; }
     .product-row { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:16px; align-items:center; width:100%; margin:0; padding:12px 14px; color:var(--ink); background:#fbfcfa; border:1px solid var(--line); text-align:left; text-transform:none; letter-spacing:0; }
