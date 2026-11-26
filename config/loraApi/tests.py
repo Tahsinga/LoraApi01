@@ -1565,9 +1565,16 @@ class StockTransferTests(TestCase):
 		ProductCatalog.objects.create(branch='BranchA', product_id=1003, product_name='Already queued', available_quantity=5)
 		ProductCatalog.objects.create(branch='BranchA', product_id=1004, product_name='Negative stock', available_quantity=-1)
 		ProductCatalog.objects.create(branch='BranchB', product_id=1005, product_name='Other branch', available_quantity=8)
+		ProductCatalog.objects.create(branch='BranchA', product_id=1006, product_name='Waiting from earlier', available_quantity=4)
+		# The branch is applying this one right now: it is left out.
 		StockTransfer.objects.create(
 			transfer_id='STOCKTAKE_BranchA_1003_existing', branch='BranchA', product_id=1003,
-			product_name='Already queued', quantity=5, target_quantity=5,
+			product_name='Already queued', quantity=5, target_quantity=5, claimed_at=timezone.now(),
+		)
+		# Not picked up by the branch yet: replaced by the new adjustment.
+		StockTransfer.objects.create(
+			transfer_id='STOCKTAKE_BranchA_1006_earlier', branch='BranchA', product_id=1006,
+			product_name='Waiting from earlier', quantity=9, target_quantity=9,
 		)
 
 		response = self.client.post(
@@ -1577,21 +1584,27 @@ class StockTransferTests(TestCase):
 		)
 
 		self.assertEqual(response.status_code, 200)
-		self.assertEqual(response.json()['queued'], 3)
+		self.assertEqual(response.json()['queued'], 4)
 		self.assertEqual(response.json()['skipped_pending'], 1)
+		self.assertEqual(response.json()['replaced'], 1)
 		self.assertEqual(response.json()['negative_zeroed'], 1)
 		batch_id = response.json()['batch_id']
-		queued = StockTransfer.objects.filter(branch='BranchA', target_quantity__isnull=False).exclude(product_id=1003)
+		queued = StockTransfer.objects.filter(branch='BranchA', transfer_id__startswith=f'STOCKTAKE_BULK_{batch_id}_')
 		self.assertEqual(
 			list(queued.order_by('product_id').values_list('product_id', 'quantity', 'target_quantity')),
-			[(1001, 2, 2), (1002, 0, 0), (1004, 0, 0)],
+			[(1001, 2, 2), (1002, 0, 0), (1004, 0, 0), (1006, 4, 4)],
 		)
+		self.assertEqual(StockTransfer.objects.get(transfer_id='STOCKTAKE_BranchA_1006_earlier').status, 'cancelled')
+		self.assertEqual(StockTransfer.objects.get(transfer_id='STOCKTAKE_BranchA_1003_existing').status, 'pending')
 		self.assertFalse(MainStockBalance.objects.filter(product_id__in=[1001, 1002, 1003, 1004]).exists())
 		self.assertFalse(StockMovement.objects.exists())
 		progress = self.client.get(f'/api/stock/branch/stocktake-batches/{batch_id}/')
 		self.assertEqual(progress.status_code, 200)
-		self.assertEqual(progress.json()['counts']['pending'], 3)
-		self.assertEqual(progress.json()['total'], 3)
+		self.assertEqual(progress.json()['counts']['pending'], 4)
+		self.assertEqual(progress.json()['total'], 4)
+		# The page finds the running adjustment again after a reload.
+		running = self.client.get('/api/stock/branch/stocktake-reports/', {'branch': 'BranchA'}).json()['batches'][0]
+		self.assertEqual((running['batch_id'], running['pending'], running['in_progress']), (batch_id, 4, 0))
 
 	def test_movement_adjustment_report_shows_before_and_branch_synced_after_balances(self):
 		ProductCatalog.objects.create(

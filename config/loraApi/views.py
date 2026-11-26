@@ -1056,6 +1056,16 @@ def stocktake_branch_products(request):
             product_id__in=deleted_product_id_subquery(),
         ).order_by('product_id'))
         product_ids = [product.product_id for product in products]
+        # Adjustments the branch has not picked up yet are replaced by this one, so every
+        # product is in the new adjustment with its current branch quantity.
+        replaced = StockTransfer.objects.filter(
+            branch__iexact=branch,
+            product_id__in=product_ids,
+            target_quantity__isnull=False,
+            status='pending',
+            claimed_at__isnull=True,
+        ).update(status='cancelled')
+        # Only the ones the branch is applying right now are left alone.
         pending_product_ids = set(StockTransfer.objects.filter(
             branch__iexact=branch,
             product_id__in=product_ids,
@@ -1092,6 +1102,7 @@ def stocktake_branch_products(request):
         'queued': len(queued_transfers),
         'skipped_pending': skipped_pending,
         'negative_zeroed': negative_zeroed,
+        'replaced': replaced,
     })
 
 
@@ -1235,6 +1246,8 @@ def stocktake_branch_reports(request):
         total=Count('transfer_id'),
         completed=Count('transfer_id', filter=Q(status='completed')),
         failed=Count('transfer_id', filter=Q(status='failed')),
+        pending=Count('transfer_id', filter=Q(status='pending', claimed_at__isnull=True)),
+        in_progress=Count('transfer_id', filter=Q(status='processing') | Q(status='pending', claimed_at__isnull=False)),
         created_by=Max('created_by'),
     ).order_by('-started')
     return JsonResponse({
@@ -1247,6 +1260,8 @@ def stocktake_branch_reports(request):
             'total': row['total'],
             'completed': row['completed'],
             'failed': row['failed'],
+            'pending': row['pending'],
+            'in_progress': row['in_progress'],
             'created_by': row['created_by'] or '',
         } for row in rows[:200]],
     })

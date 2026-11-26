@@ -657,6 +657,7 @@
   const branchStocktakeProductList = document.querySelector('#stocktake-product-list');
   const branchStocktakeCancelAll = document.querySelector('#stocktake-cancel-all');
   let currentStocktakeBatchId = '';
+  let currentStocktakeBranch = '';
   let currentStocktakeProducts = [];
   let currentStocktakeSkipped = {pending: 0, negativeZeroed: 0};
   let pendingMovementAdjustment = null;
@@ -1193,7 +1194,8 @@
     document.querySelector('#stocktake-cancelled-count').textContent = counts.cancelled || 0;
     currentStocktakeProducts = data.products || [];
     const skipped = [];
-    if (currentStocktakeSkipped.pending) skipped.push(`${currentStocktakeSkipped.pending} already pending`);
+    if (currentStocktakeSkipped.replaced) skipped.push(`${currentStocktakeSkipped.replaced} waiting from an earlier adjustment were replaced by this one`);
+    if (currentStocktakeSkipped.pending) skipped.push(`${currentStocktakeSkipped.pending} left out because the branch is applying them right now`);
     if (currentStocktakeSkipped.negativeZeroed) skipped.push(`${currentStocktakeSkipped.negativeZeroed} negative quantities set to zero`);
     const skipText = skipped.length ? ` ${skipped.join('; ')}.` : '';
     branchStocktakeSummary.textContent = `${counts.completed || 0} done; ${counts.in_progress || 0} in progress; ${counts.pending || 0} pending; ${counts.failed || 0} failed; ${counts.cancelled || 0} cancelled.${skipText}`;
@@ -1247,8 +1249,9 @@
   });
   async function showMovementAdjustmentProgress(branch, data) {
     currentStocktakeBatchId = data.batch_id;
+    currentStocktakeBranch = branch;
     stocktakeBatchRunning = data.queued > 0;
-    currentStocktakeSkipped = {pending: data.skipped_pending || 0, negativeZeroed: data.negative_zeroed || 0};
+    currentStocktakeSkipped = {pending: data.skipped_pending || 0, negativeZeroed: data.negative_zeroed || 0, replaced: data.replaced || 0};
     branchStocktakeBranch.textContent = branch;
     branchStocktakeFilter.value = '';
     currentStocktakeProducts = [];
@@ -1508,7 +1511,38 @@
     }
   });
   refreshStockButton.addEventListener('click', () => loadBranchProducts(true));
+  // After a reload or a branch change, pick up an adjustment that is still running for this
+  // branch, so the button shows its progress instead of starting a second one.
+  async function restoreRunningStocktake(branch) {
+    if (currentStocktakeBranch !== branch) {
+      stopStocktakePolling();
+      currentStocktakeBatchId = '';
+      currentStocktakeBranch = '';
+      stocktakeBatchRunning = false;
+      updateBranchStocktakeButton();
+    }
+    if (!branch || (stocktakeBatchRunning && currentStocktakeBranch === branch)) return;
+    try {
+      const response = await fetch(`/api/stock/branch/stocktake-reports/?${new URLSearchParams({branch, _:Date.now()})}`, {cache:'no-store'});
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || selectedBranch.value !== branch) return;
+      const running = (data.batches || []).find(batch => (batch.pending || 0) + (batch.in_progress || 0) > 0);
+      if (!running) return;
+      currentStocktakeBatchId = running.batch_id;
+      currentStocktakeBranch = branch;
+      currentStocktakeSkipped = {pending: 0, negativeZeroed: 0};
+      branchStocktakeBranch.textContent = branch;
+      stocktakeBatchRunning = true;
+      updateBranchStocktakeButton();
+      stopStocktakePolling();
+      stocktakePollingTimer = setInterval(refreshStocktakeProgress, 3000);
+      void refreshStocktakeProgress();
+    } catch (error) {
+      // The adjust button still works; progress just is not picked up.
+    }
+  }
   function requestBranchLoad() {
+    void restoreRunningStocktake(selectedBranch.value);
     loadStockButton.disabled = true;
     loadStockButton.textContent = 'Loading products...';
     loadStockButton.setAttribute('aria-busy', 'true');
