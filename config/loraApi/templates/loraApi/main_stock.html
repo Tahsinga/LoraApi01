@@ -162,6 +162,11 @@
     .highlight-label.cost-above { color:#8a4510; background:#f9d3a8; }
     .stock-table tr.zero-cost td { background:#fff4c2; }
     .highlight-label.zero-cost { color:#6b5600; background:#f7e38f; }
+    #highlight-moved .chip-dot { background:#3566c8; }
+    #highlight-moved[aria-pressed="true"] { color:#fff; background:#3566c8; }
+    .stock-table tr.moved-on-date td { background:#e3ecff; }
+    .stock-table tr.moved-on-date td:first-child { box-shadow:inset 4px 0 0 #3566c8; }
+    .highlight-label.moved { color:#1f3f86; background:#c9d8fb; }
     .negative-stock-label { display:inline-block; margin-left:8px; padding:3px 6px; color:#8b2d20; background:#f7d9d3; font:700 9px Arial,sans-serif; text-transform:uppercase; }
     .stock-table button { margin:0; padding:8px 10px; font-size:9px; }
     .stock-table td:last-child { white-space:nowrap; }
@@ -444,7 +449,7 @@
       </div>
       </div>
       <div id="products-panel" class="panel panel-wide product-browser branch-data-card" data-branch-loading-card>
-        <div class="products-heading"><div class="products-title"><h2>Branch products</h2><span id="product-catalog-status" class="catalog-status">Select a branch to load products.</span></div><div class="products-toolbar"><div class="toolbar-row" role="group" aria-label="Highlight products"><span class="toolbar-label">Highlight</span><div class="highlight-tools"><button id="highlight-duplicates" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products that share a name"><span class="chip-dot" aria-hidden="true"></span>Same names<span class="chip-count" data-chip-count>0</span></button><div class="price-chip-group"><button id="highlight-low-prices" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products priced at or under the limit"><span class="chip-dot" aria-hidden="true"></span>Low prices<span class="chip-count" data-chip-count>0</span></button><label class="low-price-limit">&le;<input id="low-price-limit" type="number" min="0" step="0.01" value="0.50" aria-label="Low price limit"></label></div><button id="highlight-cost-above" class="highlight-chip" type="button" aria-pressed="false" title="Products whose cost price is more than the selling price are highlighted; press to list them first"><span class="chip-dot" aria-hidden="true"></span>Cost above price<span class="chip-count" data-chip-count>0</span></button><button id="highlight-zero-cost" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products whose cost price is 0.00"><span class="chip-dot" aria-hidden="true"></span>Zero cost<span class="chip-count" data-chip-count>0</span></button></div></div><div class="toolbar-row" role="group" aria-label="Cost prices"><span class="toolbar-label">Cost prices</span><div class="toolbar-items"><button id="cost-progress-open" class="rename-status-button refresh-stock-button" type="button" title="See which branches have applied the new cost prices">Cost updates</button><button id="adjust-all-costs" class="adjust-costs-button" type="button" disabled title="Use this branch's cost prices at all the other branches">Adjust all cost prices</button></div></div><div class="toolbar-row" role="group" aria-label="View"><span class="toolbar-label">View</span><div class="toolbar-items"><label class="activity-date-label">Movement date<input id="product-movement-date" type="date"></label><button id="rename-status-open" class="rename-status-button refresh-stock-button" type="button" title="See which branches have received renamed products">Renames</button></div></div></div></div>
+        <div class="products-heading"><div class="products-title"><h2>Branch products</h2><span id="product-catalog-status" class="catalog-status">Select a branch to load products.</span></div><div class="products-toolbar"><div class="toolbar-row" role="group" aria-label="Highlight products"><span class="toolbar-label">Highlight</span><div class="highlight-tools"><button id="highlight-duplicates" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products that share a name"><span class="chip-dot" aria-hidden="true"></span>Same names<span class="chip-count" data-chip-count>0</span></button><div class="price-chip-group"><button id="highlight-low-prices" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products priced at or under the limit"><span class="chip-dot" aria-hidden="true"></span>Low prices<span class="chip-count" data-chip-count>0</span></button><label class="low-price-limit">&le;<input id="low-price-limit" type="number" min="0" step="0.01" value="0.50" aria-label="Low price limit"></label></div><button id="highlight-cost-above" class="highlight-chip" type="button" aria-pressed="false" title="Products whose cost price is more than the selling price are highlighted; press to list them first"><span class="chip-dot" aria-hidden="true"></span>Cost above price<span class="chip-count" data-chip-count>0</span></button><button id="highlight-zero-cost" class="highlight-chip" type="button" aria-pressed="false" title="Highlight products whose cost price is 0.00"><span class="chip-dot" aria-hidden="true"></span>Zero cost<span class="chip-count" data-chip-count>0</span></button><button id="highlight-moved" class="highlight-chip" type="button" aria-pressed="false" title="Show only the products that had Lora movement (new stock, sold, sent, maintained, adjusted) on the movement date"><span class="chip-dot" aria-hidden="true"></span>Moved on date<span class="chip-count" data-chip-count>0</span></button></div></div><div class="toolbar-row" role="group" aria-label="Cost prices"><span class="toolbar-label">Cost prices</span><div class="toolbar-items"><button id="cost-progress-open" class="rename-status-button refresh-stock-button" type="button" title="See which branches have applied the new cost prices">Cost updates</button><button id="adjust-all-costs" class="adjust-costs-button" type="button" disabled title="Use this branch's cost prices at all the other branches">Adjust all cost prices</button></div></div><div class="toolbar-row" role="group" aria-label="View"><span class="toolbar-label">View</span><div class="toolbar-items"><label class="activity-date-label">Movement date<input id="product-movement-date" type="date"></label><button id="rename-status-open" class="rename-status-button refresh-stock-button" type="button" title="See which branches have received renamed products">Renames</button></div></div></div></div>
         <label>Search products<input id="branch-product-search" type="search" placeholder="Search products by name, code, or barcode" autocomplete="off"></label>
         <div id="branch-products" class="stock-table-wrap"><p class="empty">Select a branch to see its products.</p></div>
       </div>
@@ -550,6 +555,7 @@
   const highlightCostAboveButton = document.querySelector('#highlight-cost-above');
   const adjustAllCostsButton = document.querySelector('#adjust-all-costs');
   const highlightZeroCostButton = document.querySelector('#highlight-zero-cost');
+  const highlightMovedButton = document.querySelector('#highlight-moved');
   const adjustCostsDialog = document.querySelector('#adjust-costs-dialog');
   const adjustCostsForm = document.querySelector('#adjust-costs-form');
   const adjustCostsSkipZero = document.querySelector('#adjust-costs-skip-zero');
@@ -560,6 +566,7 @@
   let highlightLowPrices = false;
   let highlightCostAbove = false;
   let highlightZeroCost = false;
+  let highlightMoved = false;
   const productMovementDate = document.querySelector('#product-movement-date');
   const branchProducts = document.querySelector('#branch-products');
   const productDeleteDialog = document.querySelector('#product-delete-dialog');
@@ -772,6 +779,17 @@
   function isZeroCost(product) {
     return hasCost(product) && Number(product.cost_price) === 0;
   }
+  const dayMovementLabels = {received:'New stock', sold:'Sold', sent:'Sent', stocktake:'Movement adjustment', maintained:'Maintained', adjusted:'Adjusted'};
+  function dayMovements(product) {
+    const types = new Set(product.day_movements || []);
+    if (Number(product.sent_quantity) > 0) types.add('sent');
+    if (Number(product.sold_quantity) !== 0) types.add('sold');
+    if (Number(product.received_quantity) > 0) types.add('received');
+    return [...types];
+  }
+  function movedOnDate(product) {
+    return dayMovements(product).length > 0;
+  }
   function updateHighlightButtons(duplicateCount, lowPriceCount, costAboveCount, zeroCostCount) {
     highlightDuplicatesButton.querySelector('[data-chip-count]').textContent = duplicateCount.toLocaleString();
     highlightLowPricesButton.querySelector('[data-chip-count]').textContent = lowPriceCount.toLocaleString();
@@ -781,6 +799,8 @@
     highlightCostAboveButton.setAttribute('aria-pressed', String(highlightCostAbove));
     highlightZeroCostButton.querySelector('[data-chip-count]').textContent = zeroCostCount.toLocaleString();
     highlightZeroCostButton.setAttribute('aria-pressed', String(highlightZeroCost));
+    highlightMovedButton.querySelector('[data-chip-count]').textContent = branchCatalogProducts.filter(movedOnDate).length.toLocaleString();
+    highlightMovedButton.setAttribute('aria-pressed', String(highlightMoved));
   }
   function renderBranchProducts() {
     const query = branchProductSearch.value.trim().toLowerCase();
@@ -807,12 +827,13 @@
         return aDuplicate ? normalizedProductName(a).localeCompare(normalizedProductName(b)) : 0;
       });
     }
+    if (highlightMoved) products = products.filter(movedOnDate);
     if (highlightCostAbove) {
       products = [...products].sort((a, b) => Number(isCostAbovePrice(b)) - Number(isCostAbovePrice(a)));
     }
     branchProducts.innerHTML = products.length
-      ? `<table class="stock-table"><thead><tr><th>Product</th><th>Cost price</th><th>Selling price</th><th>Tax rate</th><th>Branch<br>balance</th><th>Movement<br>balance</th><th>Sent</th><th>Sold</th><th>Actions</th></tr></thead><tbody>${products.map(product => { const productId = escapeHtml(product.product_id); const isNegative = Number(product.available_quantity) < 0; const isNegativeMovement = Number(product.movement_balance) < 0; const movementMismatch = Number(product.available_quantity) !== Number(product.movement_balance); const duplicateRow = highlightDuplicates && isDuplicateName(product); const lowPriceRow = highlightLowPrices && isLowPrice(product); const costAbove = isCostAbovePrice(product); const costAboveRow = costAbove; const zeroCostRow = highlightZeroCost && isZeroCost(product); return `<tr class="${isNegative || isNegativeMovement ? 'negative-stock' : ''}${movementMismatch ? ' movement-mismatch' : ''}${duplicateRow ? ' duplicate-name' : ''}${lowPriceRow ? ' low-price' : ''}${costAboveRow ? ' cost-above' : ''}${zeroCostRow ? ' zero-cost' : ''}" data-product-id="${productId}"><td class="product-name">${escapeHtml(product.product_name)}${duplicateRow ? '<span class="highlight-label duplicate">Same name</span>' : ''}${lowPriceRow ? '<span class="highlight-label low-price">Low price</span>' : ''}${costAboveRow ? '<span class="highlight-label cost-above">Cost above price</span>' : ''}${zeroCostRow ? '<span class="highlight-label zero-cost">Zero cost</span>' : ''}</td><td${costAbove ? ' class="cost-above-price" title="Cost price is more than the selling price"' : ''}>${escapeHtml(product.cost_price ?? '')}</td><td>${escapeHtml(product.selling_price)}</td><td><form class="tax-rate-form" data-product-tax-rate="${productId}"><input type="number" min="0" max="100" step="0.01" value="${escapeHtml(product.tax_rate ?? 0)}" aria-label="Tax rate percentage for ${escapeHtml(product.product_name)}"><button type="submit">Save tax</button></form></td><td><strong>${escapeHtml(product.available_quantity)}</strong>${isNegative ? '<span class="negative-stock-label">Negative stock</span>' : ''}</td><td><strong>${escapeHtml(product.movement_balance)}</strong>${isNegativeMovement ? '<span class="negative-stock-label">Negative movement</span>' : ''}</td><td>${escapeHtml(product.sent_quantity)}</td><td>${escapeHtml(product.sold_quantity)}</td><td><button type="button" data-product-rename="${productId}">Rename</button><button type="button" data-product-movement="${productId}">Movement</button><button type="button" data-product-select="${productId}">Select</button><button type="button" class="delete-product-button" data-product-delete="${productId}" aria-label="Delete ${escapeHtml(product.product_name)} from all branches">Delete from all branches</button></td></tr>`; }).join('')}</tbody></table>`
-      : '<p class="empty">No products match your search.</p>';
+      ? `<table class="stock-table"><thead><tr><th>Product</th><th>Cost price</th><th>Selling price</th><th>Tax rate</th><th>Branch<br>balance</th><th>Movement<br>balance</th><th>Sent</th><th>Sold</th><th>Actions</th></tr></thead><tbody>${products.map(product => { const productId = escapeHtml(product.product_id); const isNegative = Number(product.available_quantity) < 0; const isNegativeMovement = Number(product.movement_balance) < 0; const movementMismatch = Number(product.available_quantity) !== Number(product.movement_balance); const duplicateRow = highlightDuplicates && isDuplicateName(product); const lowPriceRow = highlightLowPrices && isLowPrice(product); const costAbove = isCostAbovePrice(product); const costAboveRow = costAbove; const zeroCostRow = highlightZeroCost && isZeroCost(product); const movedRow = highlightMoved && movedOnDate(product); return `<tr class="${isNegative || isNegativeMovement ? 'negative-stock' : ''}${movementMismatch ? ' movement-mismatch' : ''}${duplicateRow ? ' duplicate-name' : ''}${lowPriceRow ? ' low-price' : ''}${costAboveRow ? ' cost-above' : ''}${zeroCostRow ? ' zero-cost' : ''}${movedRow ? ' moved-on-date' : ''}" data-product-id="${productId}"><td class="product-name">${escapeHtml(product.product_name)}${duplicateRow ? '<span class="highlight-label duplicate">Same name</span>' : ''}${lowPriceRow ? '<span class="highlight-label low-price">Low price</span>' : ''}${costAboveRow ? '<span class="highlight-label cost-above">Cost above price</span>' : ''}${zeroCostRow ? '<span class="highlight-label zero-cost">Zero cost</span>' : ''}${movedRow ? `<span class="highlight-label moved">${escapeHtml(dayMovements(product).map(type => dayMovementLabels[type] || type).join(', '))}</span>` : ''}</td><td${costAbove ? ' class="cost-above-price" title="Cost price is more than the selling price"' : ''}>${escapeHtml(product.cost_price ?? '')}</td><td>${escapeHtml(product.selling_price)}</td><td><form class="tax-rate-form" data-product-tax-rate="${productId}"><input type="number" min="0" max="100" step="0.01" value="${escapeHtml(product.tax_rate ?? 0)}" aria-label="Tax rate percentage for ${escapeHtml(product.product_name)}"><button type="submit">Save tax</button></form></td><td><strong>${escapeHtml(product.available_quantity)}</strong>${isNegative ? '<span class="negative-stock-label">Negative stock</span>' : ''}</td><td><strong>${escapeHtml(product.movement_balance)}</strong>${isNegativeMovement ? '<span class="negative-stock-label">Negative movement</span>' : ''}</td><td>${escapeHtml(product.sent_quantity)}</td><td>${escapeHtml(product.sold_quantity)}</td><td><button type="button" data-product-rename="${productId}">Rename</button><button type="button" data-product-movement="${productId}">Movement</button><button type="button" data-product-select="${productId}">Select</button><button type="button" class="delete-product-button" data-product-delete="${productId}" aria-label="Delete ${escapeHtml(product.product_name)} from all branches">Delete from all branches</button></td></tr>`; }).join('')}</tbody></table>`
+      : `<p class="empty">${highlightMoved ? `No products had Lora movement on ${escapeHtml(productMovementDate.value || 'this date')}.` : 'No products match your search.'}</p>`;
   }
   function renderProductMovementHistory(movements) {
     productMovementTable.innerHTML = movements.length
@@ -1617,6 +1638,10 @@
       adjustCostsStatus.textContent = error.message;
       adjustCostsSubmit.disabled = false;
     }
+  });
+  highlightMovedButton.addEventListener('click', () => {
+    highlightMoved = !highlightMoved;
+    renderBranchProducts();
   });
   highlightZeroCostButton.addEventListener('click', () => {
     highlightZeroCost = !highlightZeroCost;

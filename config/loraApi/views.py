@@ -1381,6 +1381,16 @@ def stock_summary(request):
         elif movement['movement_type'] == 'sold':
             sold_by_product[movement['product_id']] = movement['total'] or 0
 
+    # Every kind of Lora movement each product had on the selected day.
+    day_movement_types = {}
+    for row in StockMovement.objects.filter(
+        branch__iexact=branch,
+        product_id__in=product_ids,
+        created_at__gte=selected_day_start,
+        created_at__lt=selected_day_end,
+    ).order_by().values('product_id', 'movement_type').distinct():
+        day_movement_types.setdefault(row['product_id'], set()).add(row['movement_type'])
+
     sent_by_product = {
         row['product_id']: row['total'] or 0
         for row in StockTransfer.objects.filter(
@@ -1449,6 +1459,7 @@ def stock_summary(request):
             ),
             'available_quantity': str(product.available_quantity),
             'movement_balance': str(movement_balance),
+            'day_movements': sorted(day_movement_types.get(product.product_id, ())),
         })
     response_data = {
         'status': 'ok',

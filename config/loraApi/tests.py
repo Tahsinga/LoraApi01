@@ -2775,6 +2775,26 @@ class StockTransferTests(TestCase):
 		self.assertEqual(product['sold_quantity'], '4')
 		self.assertEqual(product['sent_quantity'], '7')
 
+	def test_stock_summary_lists_the_movement_types_of_the_selected_day(self):
+		selected_date = timezone.localdate() - timedelta(days=1)
+		day_start = timezone.make_aware(datetime.combine(selected_date, datetime.min.time()))
+		for product_id in (1201, 1202):
+			ProductCatalog.objects.create(branch='BranchA', product_id=product_id, product_name=f'P{product_id}', available_quantity=5)
+		for movement_type in ('maintained', 'sold', 'sold'):
+			movement = StockMovement.objects.create(
+				branch='BranchA', product_id=1201, product_name='P1201', movement_type=movement_type, quantity=1, source='test',
+			)
+			StockMovement.objects.filter(pk=movement.pk).update(created_at=day_start)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=1202, product_name='P1202', movement_type='received', quantity=3, source='today',
+		)
+
+		response = self.client.get('/api/stock/summary/', {'branch': 'BranchA', 'date': selected_date.isoformat()})
+
+		products = {item['product_id']: item for item in response.json()['products']}
+		self.assertEqual(products[1201]['day_movements'], ['maintained', 'sold'])
+		self.assertEqual(products[1202]['day_movements'], [])
+
 	def test_stock_summary_rejects_invalid_selected_date(self):
 		response = self.client.get('/api/stock/summary/?branch=BranchA&date=not-a-date')
 		self.assertEqual(response.status_code, 400)
