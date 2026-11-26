@@ -396,13 +396,19 @@ public sealed class BranchSyncDashboardForm : Form
                     COALESCE(daily_movements.SoldQuantity, 0) AS SoldQuantity,
                     COALESCE(daily_movements.ReceivedQuantity, 0) AS ReceivedQuantity
                 FROM [dbo].[Products] AS p
-                OUTER APPLY (
-                    SELECT SUM(stock.StockBal) AS AvailableQuantity
-                    FROM [dbo].[ProductStockBalances] AS stock
-                    WHERE stock.ProductID = p.ProductID
-                        AND stock.coid = @companyId
-                        AND stock.branch = @branch
-                ) AS branch_stock
+                -- The balance Quantum's Product Movement screen shows (dbo.StockBalByEntryNo):
+                -- every stock-in minus every stock-out at this branch, TranCode 4 excluded.
+                -- ProductStockBalances is only Quantum's quick-access copy and drifts, so the
+                -- website follows the movement history instead.
+                LEFT JOIN (
+                    SELECT movement.ProductID,
+                        SUM(CASE WHEN movement.IsStockIn = 1 THEN COALESCE(movement.Quantity, 0) ELSE -COALESCE(movement.Quantity, 0) END) AS AvailableQuantity
+                    FROM [dbo].[Movement] AS movement
+                    WHERE movement.coid = @companyId
+                        AND movement.branch = @branch
+                        AND movement.TranCode <> 4
+                    GROUP BY movement.ProductID
+                ) AS branch_stock ON branch_stock.ProductID = p.ProductID
                 LEFT JOIN (
                     SELECT movement.ProductID,
                         SUM(CASE WHEN movement.TranCode = 3 AND (movement.DateCancelled IS NULL OR movement.DateCancelled = 0) THEN ABS(COALESCE(movement.Quantity, 0)) ELSE 0 END) AS SoldQuantity,
