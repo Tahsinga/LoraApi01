@@ -2795,6 +2795,24 @@ class StockTransferTests(TestCase):
 		self.assertEqual(products[1201]['day_movements'], ['maintained', 'sold'])
 		self.assertEqual(products[1202]['day_movements'], [])
 
+	def test_stock_summary_shows_the_quantum_movement_balance_beside_the_branch_balance(self):
+		snapshot = lambda **extra: self.client.post('/api/stock/snapshot/', data=json.dumps({
+			'branch': 'BranchA',
+			'products': [{'product_id': 5576, 'product_name': 'WILLARDS CORNFLAKES 500G', 'available_quantity': '12', **extra}],
+		}), content_type='application/json')
+		self.assertEqual(snapshot().status_code, 200)
+		product = self.client.get('/api/stock/summary/', {'branch': 'BranchA'}).json()['products'][0]
+		self.assertEqual(product['available_quantity'], '12')
+
+		self.assertEqual(snapshot(movement_balance='-6.00000').status_code, 200)
+		cache.clear()
+		product = next(
+			item for item in self.client.get('/api/stock/summary/', {'branch': 'BranchA'}).json()['products']
+			if item['product_id'] == 5576
+		)
+		self.assertEqual(product['available_quantity'], '12')
+		self.assertEqual(product['movement_balance'], '-6')
+
 	def test_stock_summary_rejects_invalid_selected_date(self):
 		response = self.client.get('/api/stock/summary/?branch=BranchA&date=not-a-date')
 		self.assertEqual(response.status_code, 400)

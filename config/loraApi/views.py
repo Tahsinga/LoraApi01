@@ -1444,6 +1444,9 @@ def stock_summary(request):
     summary = []
     for product in products:
         movement_balance = latest_adjustment_by_product.get(product.product_id, 0) + movement_deltas.get(product.product_id, 0)
+        if product.pos_movement_balance is not None:
+            # The branch reports the balance its Quantum Product Movement screen shows.
+            movement_balance = product.pos_movement_balance
         has_pos_daily_totals = product.pos_movement_date == selected_date
         summary.append({
             **product_payload(product),
@@ -2176,6 +2179,9 @@ def publish_branch_stock_snapshot(request):
             quantity = Decimal(str(item.get('available_quantity')))
             sold_quantity = abs(Decimal(str(item.get('sold_quantity', 0) or 0))) if 'sold_quantity' in item else None
             received_quantity = Decimal(str(item.get('received_quantity', 0) or 0)) if 'received_quantity' in item else None
+            pos_movement_balance = None
+            if item.get('movement_balance') not in (None, ''):
+                pos_movement_balance = Decimal(str(item.get('movement_balance'))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
             if product_id <= 0 or not product_name or quantity != whole_quantity(quantity):
                 raise ValueError
             if sold_quantity is not None and sold_quantity != whole_quantity(sold_quantity):
@@ -2192,6 +2198,7 @@ def publish_branch_stock_snapshot(request):
                 'pos_movement_date': movement_date if sold_quantity is not None or received_quantity is not None else None,
                 'pos_sold_quantity': sold_quantity,
                 'pos_received_quantity': received_quantity,
+                'pos_movement_balance': pos_movement_balance,
                 'tax_rate': pos_tax_rate_from_snapshot(item),
                 'cost_price': pos_cost_price_from_snapshot(item),
             })
@@ -2285,7 +2292,7 @@ def publish_branch_stock_snapshot(request):
                 if getattr(product, field) != snapshot[field]:
                     setattr(product, field, snapshot[field])
                     changed_fields.append(field)
-            for field in ('pos_movement_date', 'pos_sold_quantity', 'pos_received_quantity'):
+            for field in ('pos_movement_date', 'pos_sold_quantity', 'pos_received_quantity', 'pos_movement_balance'):
                 if snapshot[field] is not None and getattr(product, field) != snapshot[field]:
                     setattr(product, field, snapshot[field])
                     changed_fields.append(field)

@@ -146,6 +146,9 @@ class ProductCatalog(models.Model):
 	pos_movement_date = models.DateField(null=True, blank=True)
 	pos_sold_quantity = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
 	pos_received_quantity = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
+	# The balance Quantum's Product Movement screen shows (all stock-in minus stock-out at the
+	# branch). Reported by POSViewer 1.46+; null means the branch has not reported it yet.
+	pos_movement_balance = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
 	branch_confirmed = models.BooleanField(default=True)
 	pending_price_update = models.BooleanField(default=False)
 	pending_selling_price = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)

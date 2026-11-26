@@ -23,7 +23,7 @@ public sealed class BranchSyncDashboardForm : Form
     private readonly Button _backButton = new();
     private readonly System.Windows.Forms.Timer _autoPollTimer = new();
     private readonly SemaphoreSlim _syncGate = new(1, 1);
-    private readonly Dictionary<int, (decimal Balance, decimal Sold, decimal Received, string Date, string Name, decimal Cost)> _publishedStockStates = new();
+    private readonly Dictionary<int, (decimal Balance, decimal Sold, decimal Received, string Date, string Name, decimal Cost, decimal MovementBalance)> _publishedStockStates = new();
     private DateTimeOffset? _sharedProductCatalogSince;
     private string? _publishedStockSnapshotBranch;
 
@@ -393,22 +393,29 @@ public sealed class BranchSyncDashboardForm : Form
                     COALESCE(p.TaxRate, 0) AS TaxRate,
                     COALESCE(p.Cost, 0) AS Cost,
                     COALESCE(branch_stock.AvailableQuantity, 0) AS AvailableQuantity,
+                    COALESCE(movement_stock.MovementBalance, 0) AS MovementBalance,
                     COALESCE(daily_movements.SoldQuantity, 0) AS SoldQuantity,
                     COALESCE(daily_movements.ReceivedQuantity, 0) AS ReceivedQuantity
                 FROM [dbo].[Products] AS p
+                OUTER APPLY (
+                    SELECT SUM(stock.StockBal) AS AvailableQuantity
+                    FROM [dbo].[ProductStockBalances] AS stock
+                    WHERE stock.ProductID = p.ProductID
+                        AND stock.coid = @companyId
+                        AND stock.branch = @branch
+                ) AS branch_stock
                 -- The balance Quantum's Product Movement screen shows (dbo.StockBalByEntryNo):
                 -- every stock-in minus every stock-out at this branch, TranCode 4 excluded.
-                -- ProductStockBalances is only Quantum's quick-access copy and drifts, so the
-                -- website follows the movement history instead.
+                -- Sent beside the stock balance so the website shows both.
                 LEFT JOIN (
                     SELECT movement.ProductID,
-                        SUM(CASE WHEN movement.IsStockIn = 1 THEN COALESCE(movement.Quantity, 0) ELSE -COALESCE(movement.Quantity, 0) END) AS AvailableQuantity
+                        SUM(CASE WHEN movement.IsStockIn = 1 THEN COALESCE(movement.Quantity, 0) ELSE -COALESCE(movement.Quantity, 0) END) AS MovementBalance
                     FROM [dbo].[Movement] AS movement
                     WHERE movement.coid = @companyId
                         AND movement.branch = @branch
                         AND movement.TranCode <> 4
                     GROUP BY movement.ProductID
-                ) AS branch_stock ON branch_stock.ProductID = p.ProductID
+                ) AS movement_stock ON movement_stock.ProductID = p.ProductID
                 LEFT JOIN (
                     SELECT movement.ProductID,
                         SUM(CASE WHEN movement.TranCode = 3 AND (movement.DateCancelled IS NULL OR movement.DateCancelled = 0) THEN ABS(COALESCE(movement.Quantity, 0)) ELSE 0 END) AS SoldQuantity,
@@ -433,13 +440,14 @@ public sealed class BranchSyncDashboardForm : Form
             command.Parameters.AddWithValue("@movementDate", movementDateNumber);
 
             var products = new List<object>();
-            var changedStates = new Dictionary<int, (decimal Balance, decimal Sold, decimal Received, string Date, string Name, decimal Cost)>();
+            var changedStates = new Dictionary<int, (decimal Balance, decimal Sold, decimal Received, string Date, string Name, decimal Cost, decimal MovementBalance)>();
             using (var reader = await command.ExecuteReaderAsync())
             {
                 while (await reader.ReadAsync())
                 {
                     var productId = Convert.ToInt32(reader["ProductID"], CultureInfo.InvariantCulture);
                     var availableQuantity = Convert.ToDecimal(reader["AvailableQuantity"], CultureInfo.InvariantCulture);
+                    var movementBalance = Math.Round(Convert.ToDecimal(reader["MovementBalance"], CultureInfo.InvariantCulture), 0, MidpointRounding.AwayFromZero);
                     var soldQuantity = Convert.ToDecimal(reader["SoldQuantity"], CultureInfo.InvariantCulture);
                     var receivedQuantity = Convert.ToDecimal(reader["ReceivedQuantity"], CultureInfo.InvariantCulture);
                     // The name is part of the state so a rename applied from the website is reported back
@@ -448,7 +456,7 @@ public sealed class BranchSyncDashboardForm : Form
                     var productName = reader["ProductDesc"]?.ToString()?.Trim() ?? string.Empty;
                     // Cost is in the state too, so a cost saved on the website is reported back once applied.
                     var costPrice = Math.Round(Convert.ToDecimal(reader["Cost"], CultureInfo.InvariantCulture), 2, MidpointRounding.AwayFromZero);
-                    var currentState = (availableQuantity, soldQuantity, receivedQuantity, movementDateText, productName, costPrice);
+                    var currentState = (availableQuantity, soldQuantity, receivedQuantity, movementDateText, productName, costPrice, movementBalance);
                     if (_publishedStockStates.TryGetValue(productId, out var previousState)
                         && previousState == currentState)
                     {
@@ -467,6 +475,7 @@ public sealed class BranchSyncDashboardForm : Form
                         received_quantity = receivedQuantity,
                         tax_rate = Convert.ToDecimal(reader["TaxRate"], CultureInfo.InvariantCulture),
                         cost_price = costPrice,
+                        movement_balance = movementBalance,
                     });
                     changedStates[productId] = currentState;
                 }
