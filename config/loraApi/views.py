@@ -16,8 +16,8 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.forms import SetPasswordForm, UserCreationForm
 from django.core.cache import cache
 from django.db import OperationalError, ProgrammingError, close_old_connections, connection, transaction
-from django.db.models import Count, BigIntegerField, Case, DateTimeField, F, IntegerField, Max, OuterRef, Q, Subquery, Sum, Value, When
-from django.db.models.functions import Cast, Coalesce
+from django.db.models import Count, BigIntegerField, Case, DateTimeField, F, IntegerField, Max, Min, OuterRef, Q, Subquery, Sum, Value, When
+from django.db.models.functions import Cast, Coalesce, Substr
 from django.http import JsonResponse, HttpResponse
 from django.shortcuts import render
 from django.utils import timezone
@@ -1079,6 +1079,8 @@ def stocktake_branch_products(request):
                 quantity=quantity,
                 target_quantity=quantity,
                 created_by=request.user.get_username(),
+                before_branch_quantity=product.available_quantity,
+                before_movement_balance=product.pos_movement_balance,
             ))
 
         StockTransfer.objects.bulk_create(queued_transfers)
@@ -1207,6 +1209,49 @@ def submit_branch_stock_updates(request):
     }, status=202)
 
 
+def report_balance(value):
+    return str(value) if value is not None else None
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
+def stocktake_branch_reports(request):
+    """The movement adjustments done for a branch, newest first, for the report's date list."""
+    if request.method != 'GET':
+        return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
+    branch = str(request.GET.get('branch', '')).strip()
+    if not branch:
+        return JsonResponse({'status': 'error', 'message': 'Branch is required.'}, status=400)
+    prefix = 'STOCKTAKE_BULK_'
+    rows = StockTransfer.objects.filter(
+        branch__iexact=branch,
+        transfer_id__startswith=prefix,
+        target_quantity__isnull=False,
+    ).annotate(
+        batch=Substr('transfer_id', len(prefix) + 1, 32),
+    ).values('batch').annotate(
+        started=Min('created_at'),
+        finished=Max('completed_at'),
+        total=Count('transfer_id'),
+        completed=Count('transfer_id', filter=Q(status='completed')),
+        failed=Count('transfer_id', filter=Q(status='failed')),
+        created_by=Max('created_by'),
+    ).order_by('-started')
+    return JsonResponse({
+        'status': 'ok',
+        'branch': branch,
+        'batches': [{
+            'batch_id': row['batch'],
+            'started': row['started'].isoformat() if row['started'] else None,
+            'finished': row['finished'].isoformat() if row['finished'] else None,
+            'total': row['total'],
+            'completed': row['completed'],
+            'failed': row['failed'],
+            'created_by': row['created_by'] or '',
+        } for row in rows[:200]],
+    })
+
+
 @login_required(login_url='/login/')
 @csrf_exempt
 def stocktake_branch_batch(request, batch_id):
@@ -1267,11 +1312,20 @@ def stocktake_branch_batch(request, batch_id):
             'quantity': str(transfer.target_quantity),
             'status': status,
             'can_cancel': status == 'pending',
+            'before_branch_quantity': report_balance(transfer.before_branch_quantity),
+            'before_movement_balance': report_balance(transfer.before_movement_balance),
+            'after_branch_quantity': report_balance(transfer.after_branch_quantity),
+            'after_movement_balance': report_balance(transfer.after_movement_balance),
+            'completed_at': transfer.completed_at.isoformat() if transfer.completed_at else None,
         })
 
+    started = min((transfer.created_at for transfer in transfers), default=None)
     return JsonResponse({
         'status': 'ok',
         'batch_id': batch_id,
+        'branch': transfers[0].branch if transfers else '',
+        'started': started.isoformat() if started else None,
+        'created_by': transfers[0].created_by if transfers else '',
         'total': len(transfers),
         'counts': counts,
         'products': products,
@@ -4040,6 +4094,20 @@ def complete_stock_transfer(request):
 
     if not transfer.branch.casefold() == branch.casefold():
         return JsonResponse({'status': 'error', 'message': 'Transfer branch does not match.'}, status=403)
+
+    if payload.get('success') and transfer.target_quantity is not None:
+        # Balances the branch read back from Quantum after the stock take, for the report.
+        reported = {}
+        for key, field in (('branch_quantity', 'after_branch_quantity'), ('movement_balance', 'after_movement_balance')):
+            try:
+                if payload.get(key) not in (None, ''):
+                    reported[field] = Decimal(str(payload.get(key))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+            except (InvalidOperation, ValueError):
+                pass
+        if reported:
+            StockTransfer.objects.filter(pk=transfer.pk).update(**reported)
+            for field, value in reported.items():
+                setattr(transfer, field, value)
 
     if payload.get('success'):
         if transfer.status != 'completed':

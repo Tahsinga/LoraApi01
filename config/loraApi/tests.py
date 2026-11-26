@@ -1593,6 +1593,41 @@ class StockTransferTests(TestCase):
 		self.assertEqual(progress.json()['counts']['pending'], 3)
 		self.assertEqual(progress.json()['total'], 3)
 
+	def test_movement_adjustment_report_shows_before_and_branch_synced_after_balances(self):
+		ProductCatalog.objects.create(
+			branch='BranchA', product_id=5576, product_name='WILLARDS CORNFLAKES 500G',
+			available_quantity=12, pos_movement_balance=-6,
+		)
+		ProductCatalog.objects.create(branch='BranchA', product_id=5577, product_name='Not synced yet', available_quantity=3)
+		queued = self.client.post(
+			'/api/stock/branch/stocktake-all/',
+			data=json.dumps({'branch': 'BranchA', 'pin': 'TransferPass4182!'}),
+			content_type='application/json',
+		).json()
+		batch_id = queued['batch_id']
+
+		completed = self.client.post('/api/stock/transfers/complete/', data=json.dumps({
+			'transfer_id': f'STOCKTAKE_BULK_{batch_id}_5576', 'branch': 'BranchA', 'success': True,
+			'branch_quantity': 12, 'movement_balance': 12,
+		}), content_type='application/json')
+		self.assertEqual(completed.status_code, 200)
+
+		dates = self.client.get('/api/stock/branch/stocktake-reports/', {'branch': 'brancha'}).json()['batches']
+		self.assertEqual(len(dates), 1)
+		self.assertEqual(dates[0]['batch_id'], batch_id)
+		self.assertEqual((dates[0]['total'], dates[0]['completed']), (2, 1))
+
+		report = {row['product_id']: row for row in self.client.get(f'/api/stock/branch/stocktake-batches/{batch_id}/').json()['products']}
+		cornflakes = report[5576]
+		self.assertEqual(
+			(cornflakes['before_branch_quantity'], cornflakes['after_branch_quantity'],
+			 cornflakes['before_movement_balance'], cornflakes['after_movement_balance']),
+			('12', '12', '-6', '12'),
+		)
+		self.assertEqual(cornflakes['status'], 'completed')
+		self.assertEqual((report[5577]['before_branch_quantity'], report[5577]['after_branch_quantity']), ('3', None))
+		self.assertEqual(self.client.get('/api/stock/branch/stocktake-reports/').status_code, 400)
+
 	def test_branch_stocktake_all_requires_a_branch(self):
 		response = self.client.post(
 			'/api/stock/branch/stocktake-all/',

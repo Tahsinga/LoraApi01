@@ -95,6 +95,12 @@ class StockTransfer(models.Model):
 	retry_after = models.DateTimeField(null=True, blank=True)
 	completed_at = models.DateTimeField(null=True, blank=True)
 	branch_stock_applied = models.BooleanField(default=False)
+	# Movement adjustment report: the balances when the adjustment was queued, and the
+	# balances the branch read back from Quantum after applying it (POSViewer 1.47+).
+	before_branch_quantity = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
+	before_movement_balance = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
+	after_branch_quantity = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
+	after_movement_balance = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
 
 	class Meta:
 		ordering = ['created_at']

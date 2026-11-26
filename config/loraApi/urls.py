@@ -2,7 +2,7 @@ from django.urls import path
 from .views import (
     branch_status, branch_sync, cancel_sale, health_check, main_sync,
     index, favicon, confirm_deletion, cancellation_history_api, request_sales_report, complete_sales_report, request_invoice_reprint, complete_invoice_reprint,
-    adjust_main_stock, stocktake_branch_products, stocktake_branch_batch, submit_branch_stock_updates, create_stock_transfer, complete_stock_transfer, pending_stock_transfers, request_branch_price_update, update_product_tax_rate, update_product_cost_price, copy_branch_cost_prices, cost_price_progress, cancel_cost_price_updates, cancel_queue_item, rename_product, product_rename_status, rename_tracking_branches, force_product_rename, complete_branch_price_update, create_branch_product, complete_branch_product_creation, delete_branch_product, complete_branch_product_deletion, product_catalog, deleted_products, restore_deleted_product, branch_restore_branches, branch_restore_script, branch_restore_main_fallback, delete_product_at_remaining_branches, product_catalog_sync_disabled,
+    adjust_main_stock, stocktake_branch_products, stocktake_branch_batch, stocktake_branch_reports, submit_branch_stock_updates, create_stock_transfer, complete_stock_transfer, pending_stock_transfers, request_branch_price_update, update_product_tax_rate, update_product_cost_price, copy_branch_cost_prices, cost_price_progress, cancel_cost_price_updates, cancel_queue_item, rename_product, product_rename_status, rename_tracking_branches, force_product_rename, complete_branch_price_update, create_branch_product, complete_branch_product_creation, delete_branch_product, complete_branch_product_deletion, product_catalog, deleted_products, restore_deleted_product, branch_restore_branches, branch_restore_script, branch_restore_main_fallback, delete_product_at_remaining_branches, product_catalog_sync_disabled,
     product_sync_inbox, shared_product_catalog, publish_product_catalog, publish_branch_stock_snapshot, stock_summary, product_stock_matrix_data, stock_movements, product_movement_history_api, stock_transfer_logs, whatsapp_stock_lookup, movement_adjustment_history_api, stock_transfer_device_logs, stock_movement_device_logs, cancellation_device_logs, record_branch_sales, sales_report_schedules,
 )
 
@@ -22,6 +22,7 @@ urlpatterns = [
     path('invoice-reprint/complete/', complete_invoice_reprint, name='complete_invoice_reprint'),
     path('stock/main/adjust/', adjust_main_stock, name='adjust_main_stock'),
     path('stock/branch/stocktake-all/', stocktake_branch_products, name='stocktake_branch_products'),
+    path('stock/branch/stocktake-reports/', stocktake_branch_reports, name='stocktake_branch_reports'),
     path('stock/branch/stocktake-batches/<str:batch_id>/', stocktake_branch_batch, name='stocktake_branch_batch'),
     path('stock/branch/updates/', submit_branch_stock_updates, name='submit_branch_stock_updates'),
     path('stock/transfers/', create_stock_transfer, name='create_stock_transfer'),

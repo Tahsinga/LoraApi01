@@ -1314,6 +1314,8 @@ public sealed class BranchSyncDashboardForm : Form
     {
         var success = false;
         var error = string.Empty;
+        decimal? reportedBranchQuantity = null;
+        decimal? reportedMovementBalance = null;
         try
         {
             var configuredBranch = _settings.BranchName?.Trim();
@@ -1338,6 +1340,18 @@ public sealed class BranchSyncDashboardForm : Form
             var finalBalance = await RecordStockMovementAsync(transfer, branchName, isStockTake, quantity, targetQuantity);
 
             success = true;
+            if (isStockTake)
+            {
+                // Report both balances as Quantum now has them, for the website's adjustment report.
+                try
+                {
+                    (reportedBranchQuantity, reportedMovementBalance) = await GetBranchBalancesAsync(transfer.product_id, branchName);
+                }
+                catch (Exception balanceError)
+                {
+                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Could not read balances for the report: {balanceError.Message}");
+                }
+            }
             _syncQueueListBox.Items.Insert(0, isStockTake
                 ? $"[{DateTime.Now:HH:mm:ss}] ✓ STOCK TAKE APPLIED: {transfer.product_name} (Product {transfer.product_id}), exact quantity {finalBalance} recorded in product movement."
                 : $"[{DateTime.Now:HH:mm:ss}] ✓ STOCK RECEIVED: {transfer.product_name} (Product {transfer.product_id}), quantity {quantity}; movement balance {finalBalance}.");
@@ -1354,11 +1368,36 @@ public sealed class BranchSyncDashboardForm : Form
             branch = branchName,
             success,
             error,
+            branch_quantity = reportedBranchQuantity,
+            movement_balance = reportedMovementBalance,
         };
         using var content = new StringContent(JsonSerializer.Serialize(completion), Encoding.UTF8, "application/json");
         var completionResponse = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/stock/transfers/complete/", content);
         _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [TRANSFER] API acknowledgement for {transfer.id}: {(completionResponse.IsSuccessStatusCode ? "accepted" : completionResponse.StatusCode)}");
         return success && completionResponse.IsSuccessStatusCode;
+    }
+
+    private async Task<(decimal BranchQuantity, decimal MovementBalance)> GetBranchBalancesAsync(int productId, string branchName)
+    {
+        using var connection = new SqlConnection(_settings.BuildConnectionString());
+        await connection.OpenAsync();
+        const string query = @"
+            SELECT
+                COALESCE((SELECT SUM(stock.StockBal) FROM [dbo].[ProductStockBalances] AS stock
+                    WHERE stock.ProductID = @productId AND stock.coid = @coid AND stock.branch = @branch), 0) AS BranchQuantity,
+                COALESCE((SELECT SUM(CASE WHEN movement.IsStockIn = 1 THEN COALESCE(movement.Quantity, 0) ELSE -COALESCE(movement.Quantity, 0) END)
+                    FROM [dbo].[Movement] AS movement
+                    WHERE movement.ProductID = @productId AND movement.coid = @coid AND movement.branch = @branch
+                        AND movement.TranCode <> 4), 0) AS MovementBalance;";
+        using var command = new SqlCommand(query, connection) { CommandTimeout = BranchSqlCommandTimeoutSeconds };
+        command.Parameters.AddWithValue("@productId", productId);
+        command.Parameters.AddWithValue("@coid", BranchCompanyId);
+        command.Parameters.AddWithValue("@branch", branchName);
+        using var reader = await command.ExecuteReaderAsync();
+        await reader.ReadAsync();
+        return (
+            Math.Round(Convert.ToDecimal(reader["BranchQuantity"], CultureInfo.InvariantCulture), 0, MidpointRounding.AwayFromZero),
+            Math.Round(Convert.ToDecimal(reader["MovementBalance"], CultureInfo.InvariantCulture), 0, MidpointRounding.AwayFromZero));
     }
 
     private static async Task<HashSet<string>> GetStoredProcedureParameterNamesAsync(

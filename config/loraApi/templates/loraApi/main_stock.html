@@ -79,6 +79,32 @@
     .transfer-panel .branch-load-actions #branch-stocktake-button { color:var(--teal-dark); background:#e7f2ee; border:1px solid #c9ddd5; }
     .transfer-panel .branch-load-actions #branch-stocktake-button:hover { color:#fff; background:var(--teal); }
     .transfer-panel .branch-load-actions #branch-stocktake-button:disabled { color:#63716f; background:#eef2ef; border-color:#dbe3df; }
+    .transfer-panel .branch-load-actions #adjustment-reports-button { color:#1f3f86; background:#e9effd; border:1px solid #c9d8fb; }
+    .transfer-panel .branch-load-actions #adjustment-reports-button:hover { color:#fff; background:#3566c8; }
+    .adjustment-report-dialog { width:min(1040px, calc(100% - 28px)); max-height:90vh; padding:22px; color:var(--ink); background:var(--white); border:1px solid var(--line); border-radius:8px; box-shadow:0 18px 60px rgba(0,0,0,.24); }
+    .adjustment-report-dialog::backdrop { background:rgba(15,29,28,.58); }
+    .adjustment-report-dialog h2, .adjustment-report-dialog p { margin:0; }
+    .adjustment-report-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:14px; }
+    .adjustment-report-controls { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) auto; align-items:end; gap:10px; margin-bottom:12px; }
+    .adjustment-report-controls select, .adjustment-report-controls input { height:40px; padding:8px 11px; }
+    .adjustment-report-only { display:flex; flex-direction:row; align-items:center; gap:7px; height:40px; font:700 11px Arial,sans-serif; white-space:nowrap; }
+    .adjustment-report-only input { width:auto; height:auto; }
+    .adjustment-report-summary { min-height:20px; margin-bottom:10px !important; color:var(--muted); font:11px/1.5 Arial,sans-serif; }
+    .adjustment-report-table-wrap { max-height:56vh; overflow:auto; border:1px solid var(--line); border-radius:5px; }
+    .adjustment-report-table { width:100%; border-collapse:collapse; font:12px Arial,sans-serif; }
+    .adjustment-report-table th { position:sticky; top:0; z-index:1; padding:9px 10px; color:var(--muted); background:#f3f7f4; border-bottom:1px solid var(--line); font:700 10px Arial,sans-serif; letter-spacing:.6px; text-align:left; text-transform:uppercase; }
+    .adjustment-report-table th.group { text-align:center; border-left:1px solid var(--line); }
+    .adjustment-report-table td { padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:middle; }
+    .adjustment-report-table td.num { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+    .adjustment-report-table td.first { border-left:1px solid var(--line); }
+    .adjustment-report-table td.was { color:var(--muted); }
+    .adjustment-report-table td.now { font-weight:700; }
+    .adjustment-report-table td.changed { color:#1f3f86; background:#eef3ff; }
+    .adjustment-report-table td.waiting { color:var(--muted); font-style:italic; font-weight:400; }
+    .adjustment-report-table small { display:block; margin-top:2px; color:var(--muted); font-size:10px; }
+    .adjustment-report-actions { display:flex; justify-content:flex-end; margin-top:14px; }
+    .adjustment-report-dialog button { width:auto; grid-column:auto; margin:0; padding:10px 13px; }
+    @media (max-width:700px) { .adjustment-report-controls { grid-template-columns:1fr; } }
     .load-stock-button { flex:0 0 auto; width:auto; margin:0; padding:14px 16px; background:var(--teal); }
     .load-stock-button:hover { background:var(--teal-dark); }
     .transfer-panel { padding:24px; }
@@ -411,6 +437,7 @@
             <button id="load-stock-button" class="load-stock-button" type="button">Load stock</button>
             <button id="refresh-stock-button" class="refresh-stock-button" type="button">Refresh figures</button>
             <button id="branch-stocktake-button" type="button" disabled>Adjust all product movements</button>
+            <button id="adjustment-reports-button" type="button" title="Before and after balances of each movement adjustment">Adjustment reports</button>
           </div>
         </div>
         <section class="transfer-section">
@@ -519,6 +546,16 @@
         <div class="movement-adjustment-actions"><button id="movement-adjustment-cancel" class="movement-adjustment-cancel" type="button">Cancel</button><button id="movement-adjustment-submit" type="submit">Confirm adjustment</button></div>
         <p id="movement-adjustment-confirm-status" class="notice" role="status"></p>
       </form>
+    </dialog>
+    <dialog id="adjustment-report-dialog" class="adjustment-report-dialog" aria-labelledby="adjustment-report-title">
+      <div class="adjustment-report-header"><div><h2 id="adjustment-report-title">Movement adjustment report</h2><p id="adjustment-report-branch" class="sub"></p></div><button id="adjustment-report-close" class="branch-stocktake-close" type="button">Close</button></div>
+      <div class="adjustment-report-controls">
+        <label>Adjustment date<select id="adjustment-report-date"><option value="">Loading...</option></select></label>
+        <label>Filter products<input id="adjustment-report-filter" type="search" placeholder="Search product name or ID"></label>
+        <label class="adjustment-report-only"><input id="adjustment-report-changed" type="checkbox">Only changed</label>
+      </div>
+      <p id="adjustment-report-summary" class="adjustment-report-summary" role="status" aria-live="polite"></p>
+      <div id="adjustment-report-table" class="adjustment-report-table-wrap"></div>
     </dialog>
     <dialog id="branch-stocktake-dialog" class="branch-stocktake-dialog" aria-labelledby="branch-stocktake-title">
       <div class="branch-stocktake-header"><h2 id="branch-stocktake-title">Movement adjustment progress</h2><span id="branch-stocktake-branch" class="catalog-status"></span></div>
@@ -1016,6 +1053,102 @@
       if (showLoading) setBranchCardsLoading(false);
     }
   }
+  // Movement adjustment report: before and after balances, as synced back from the branch.
+  const adjustmentReportDialog = document.querySelector('#adjustment-report-dialog');
+  const adjustmentReportDate = document.querySelector('#adjustment-report-date');
+  const adjustmentReportFilter = document.querySelector('#adjustment-report-filter');
+  const adjustmentReportChanged = document.querySelector('#adjustment-report-changed');
+  const adjustmentReportSummary = document.querySelector('#adjustment-report-summary');
+  const adjustmentReportTable = document.querySelector('#adjustment-report-table');
+  let adjustmentReportRows = [];
+  let adjustmentReportRequest = 0;
+  const reportDateTime = value => value ? new Intl.DateTimeFormat(undefined, {dateStyle:'medium', timeStyle:'short'}).format(new Date(value)) : '';
+  const reportNumber = value => value == null || value === '' ? null : Number(value);
+  function reportCell(value, className) {
+    return value == null ? `<td class="num ${className} waiting">-</td>` : `<td class="num ${className}">${escapeHtml(Number(value).toLocaleString())}</td>`;
+  }
+  function reportNowCell(before, after, status, first) {
+    const firstClass = first ? ' first' : '';
+    if (after == null) {
+      const label = status === 'completed' ? 'Not reported' : status === 'failed' ? 'Failed' : status === 'cancelled' ? 'Cancelled' : 'Waiting for branch';
+      return `<td class="num now waiting${firstClass}">${escapeHtml(label)}</td>`;
+    }
+    const changed = before != null && Number(before) !== Number(after);
+    return `<td class="num now${changed ? ' changed' : ''}${firstClass}">${escapeHtml(Number(after).toLocaleString())}</td>`;
+  }
+  function rowChanged(row) {
+    const branchChanged = row.after_branch_quantity != null && Number(row.before_branch_quantity) !== Number(row.after_branch_quantity);
+    const movementChanged = row.after_movement_balance != null && Number(row.before_movement_balance) !== Number(row.after_movement_balance);
+    return branchChanged || movementChanged;
+  }
+  function renderAdjustmentReport() {
+    const query = adjustmentReportFilter.value.trim().toLowerCase();
+    let rows = adjustmentReportRows.filter(row => [row.product_name, row.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
+    if (adjustmentReportChanged.checked) rows = rows.filter(rowChanged);
+    adjustmentReportTable.innerHTML = rows.length
+      ? `<table class="adjustment-report-table"><thead><tr><th rowspan="2">Product</th><th class="group" colspan="2">Branch balance</th><th class="group" colspan="2">Movement balance</th></tr><tr><th class="group">Was</th><th>Now</th><th class="group">Was</th><th>Now</th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.product_name)}<small>ID ${escapeHtml(row.product_id)}${row.completed_at ? ` · synced ${escapeHtml(reportDateTime(row.completed_at))}` : ''}</small></td>${reportCell(reportNumber(row.before_branch_quantity), 'was first')}${reportNowCell(reportNumber(row.before_branch_quantity), reportNumber(row.after_branch_quantity), row.status, false)}${reportCell(reportNumber(row.before_movement_balance), 'was first')}${reportNowCell(reportNumber(row.before_movement_balance), reportNumber(row.after_movement_balance), row.status, false)}</tr>`).join('')}</tbody></table>`
+      : `<p class="empty">${adjustmentReportRows.length ? 'No products match.' : 'No products in this adjustment.'}</p>`;
+  }
+  async function loadAdjustmentReport() {
+    const batchId = adjustmentReportDate.value;
+    const requestId = ++adjustmentReportRequest;
+    adjustmentReportRows = [];
+    if (!batchId) { adjustmentReportTable.innerHTML = ''; return; }
+    adjustmentReportSummary.textContent = 'Loading report...';
+    adjustmentReportTable.innerHTML = '<p class="empty loading-state"><span class="loading-spinner" aria-hidden="true"></span>Loading report...</p>';
+    try {
+      const response = await fetch(`/api/stock/branch/stocktake-batches/${encodeURIComponent(batchId)}/`, {cache:'no-store'});
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'The report could not be loaded.');
+      if (requestId !== adjustmentReportRequest) return;
+      adjustmentReportRows = data.products || [];
+      const synced = adjustmentReportRows.filter(row => row.after_branch_quantity != null || row.after_movement_balance != null).length;
+      const changed = adjustmentReportRows.filter(rowChanged).length;
+      adjustmentReportSummary.textContent = `${adjustmentReportRows.length.toLocaleString()} products · ${synced.toLocaleString()} synced back from the branch · ${changed.toLocaleString()} changed · started by ${data.created_by || 'unknown'} on ${reportDateTime(data.started)}.`;
+      renderAdjustmentReport();
+    } catch (error) {
+      if (requestId !== adjustmentReportRequest) return;
+      adjustmentReportSummary.textContent = error.message;
+      adjustmentReportTable.innerHTML = '';
+    }
+  }
+  async function openAdjustmentReports() {
+    const branch = selectedBranch.value;
+    document.querySelector('#adjustment-report-branch').textContent = branch ? `${branch} · balances as synced from the branch` : '';
+    adjustmentReportFilter.value = '';
+    adjustmentReportChanged.checked = false;
+    adjustmentReportRows = [];
+    adjustmentReportTable.innerHTML = '';
+    if (!adjustmentReportDialog.open) adjustmentReportDialog.showModal();
+    if (!branch) {
+      adjustmentReportDate.innerHTML = '<option value="">Select a branch first</option>';
+      adjustmentReportSummary.textContent = 'Select a branch at the top of the page to see its adjustment reports.';
+      return;
+    }
+    adjustmentReportDate.innerHTML = '<option value="">Loading dates...</option>';
+    adjustmentReportSummary.textContent = 'Loading adjustment dates...';
+    try {
+      const response = await fetch(`/api/stock/branch/stocktake-reports/?${new URLSearchParams({branch, _:Date.now()})}`, {cache:'no-store'});
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'Adjustment dates could not be loaded.');
+      const batches = data.batches || [];
+      if (!batches.length) {
+        adjustmentReportDate.innerHTML = '<option value="">No adjustments yet</option>';
+        adjustmentReportSummary.textContent = `No movement adjustments have been done for ${branch} yet.`;
+        return;
+      }
+      adjustmentReportDate.innerHTML = batches.map(batch => `<option value="${escapeHtml(batch.batch_id)}">${escapeHtml(reportDateTime(batch.started))} · ${escapeHtml(batch.created_by || 'unknown')} · ${escapeHtml(batch.completed.toLocaleString())}/${escapeHtml(batch.total.toLocaleString())} done</option>`).join('');
+      await loadAdjustmentReport();
+    } catch (error) {
+      adjustmentReportDate.innerHTML = '<option value="">Unavailable</option>';
+      adjustmentReportSummary.textContent = error.message;
+    }
+  }
+  document.querySelector('#adjustment-reports-button').addEventListener('click', openAdjustmentReports);
+  document.querySelector('#adjustment-report-close').addEventListener('click', () => adjustmentReportDialog.close());
+  adjustmentReportDate.addEventListener('change', loadAdjustmentReport);
+  adjustmentReportFilter.addEventListener('input', renderAdjustmentReport);
+  adjustmentReportChanged.addEventListener('change', renderAdjustmentReport);
   function updateBranchStocktakeButton() {
     if (stocktakeBatchRunning) {
       branchStocktakeButton.textContent = 'View adjustment progress';
