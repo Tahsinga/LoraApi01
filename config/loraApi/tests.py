@@ -1671,6 +1671,11 @@ class StockTransferTests(TestCase):
 		self.assertEqual(fix.status_code, 200)
 		self.assertEqual(fix.json()['queued'], 1)
 		self.assertEqual(self.client.get('/api/stock/transfers/pending/?branch=BranchA&limit=25').json()['pending_transfers'], [])
+		# The main branch sync hands fixes only to POSViewer 1.50+, which says live=1.
+		self.assertEqual(self.client.get('/api/branch-sync/?branch=BranchA').json()['pending_transfers'], [])
+		from_sync = self.client.get('/api/branch-sync/?branch=BranchA&live=1').json()['pending_transfers']
+		self.assertEqual(from_sync[0]['repair_of'], f'STOCKTAKE_BULK_{batch_id}_5576')
+		StockTransfer.objects.filter(repair_of__gt='').update(claimed_at=None)
 		fix_command = self.client.get('/api/stock/transfers/pending/?branch=BranchA&limit=25&live=1').json()['pending_transfers'][0]
 		self.assertEqual(fix_command['repair_of'], f'STOCKTAKE_BULK_{batch_id}_5576')
 		self.assertTrue(fix_command['live_balance'])

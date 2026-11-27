@@ -4528,8 +4528,10 @@ def branch_sync(request):
                 report.status = 'processing'
                 report.save(update_fields=['status'])
 
-        transfer = claim_next_stock_transfer(branch_name)
-        transfers = [transfer] if transfer else []
+        # POSViewer 1.50+ says live=1: it understands fix commands, so they count here too.
+        # (1.49 only asked for them after something else was pending, so a queue of nothing
+        # but fixes was never picked up.)
+        transfers = claim_stock_transfers(branch_name, 1, include_repairs=request.GET.get('live') == '1')
 
         pending_product_deletions = list(ProductDeletionRequest.objects.filter(
             branch__iexact=branch_name,

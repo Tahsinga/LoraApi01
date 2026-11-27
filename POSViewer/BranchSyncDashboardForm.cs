@@ -197,7 +197,7 @@ public sealed class BranchSyncDashboardForm : Form
             }
             
             // Poll for pending deletions specific to this branch
-            var branchFilter = $"?branch={Uri.EscapeDataString(branchName)}";
+            var branchFilter = $"?branch={Uri.EscapeDataString(branchName)}&live=1";
             var response = await client.GetAsync($"{apiBaseUrl}/api/branch-sync/{branchFilter}");
 
             if (!response.IsSuccessStatusCode)
