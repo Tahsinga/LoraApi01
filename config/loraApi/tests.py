@@ -1641,6 +1641,48 @@ class StockTransferTests(TestCase):
 		self.assertEqual((report[5577]['before_branch_quantity'], report[5577]['after_branch_quantity']), ('3', None))
 		self.assertEqual(self.client.get('/api/stock/branch/stocktake-reports/').status_code, 400)
 
+	def test_adjust_all_keeps_sales_made_while_it_waited_and_can_fix_older_ones(self):
+		ProductCatalog.objects.create(branch='BranchA', product_id=5576, product_name='WILLARDS CORNFLAKES 500G', available_quantity=12)
+		batch_id = self.client.post(
+			'/api/stock/branch/stocktake-all/',
+			data=json.dumps({'branch': 'BranchA', 'pin': 'TransferPass4182!'}),
+			content_type='application/json',
+		).json()['batch_id']
+		claimed = self.client.get('/api/stock/transfers/pending/?branch=BranchA&limit=25&live=1').json()['pending_transfers']
+		self.assertEqual(len(claimed), 1)
+		self.assertTrue(claimed[0]['live_balance'])
+		self.assertIsNone(claimed[0]['repair_of'])
+
+		# 1 was sold while it waited: the branch applies the live 11 and reports it back.
+		self.client.post('/api/stock/transfers/complete/', data=json.dumps({
+			'transfer_id': f'STOCKTAKE_BULK_{batch_id}_5576', 'branch': 'BranchA', 'success': True,
+			'branch_quantity': 11, 'movement_balance': 11,
+		}), content_type='application/json')
+		product = ProductCatalog.objects.get(branch='BranchA', product_id=5576)
+		self.assertEqual((product.available_quantity, product.pos_movement_balance), (11, 11))
+		self.assertEqual(StockMovement.objects.get(product_id=5576, movement_type='stocktake').quantity, 11)
+
+		# Fixing an older adjustment queues a fix command that only POSViewer 1.49+ receives.
+		fix = self.client.post(
+			f'/api/stock/branch/stocktake-batches/{batch_id}/repair/',
+			data=json.dumps({'pin': 'TransferPass4182!'}),
+			content_type='application/json',
+		)
+		self.assertEqual(fix.status_code, 200)
+		self.assertEqual(fix.json()['queued'], 1)
+		self.assertEqual(self.client.get('/api/stock/transfers/pending/?branch=BranchA&limit=25').json()['pending_transfers'], [])
+		fix_command = self.client.get('/api/stock/transfers/pending/?branch=BranchA&limit=25&live=1').json()['pending_transfers'][0]
+		self.assertEqual(fix_command['repair_of'], f'STOCKTAKE_BULK_{batch_id}_5576')
+		self.assertTrue(fix_command['live_balance'])
+		self.assertIsNotNone(fix_command['repair_since'])
+		fix_rows = self.client.get(f'/api/stock/branch/stocktake-batches/{fix.json()["batch_id"]}/').json()['products']
+		self.assertTrue(fix_rows[0]['is_fix'])
+		self.assertEqual(self.client.post(
+			f'/api/stock/branch/stocktake-batches/{batch_id}/repair/',
+			data=json.dumps({'pin': 'wrong'}),
+			content_type='application/json',
+		).status_code, 403)
+
 	def test_branch_stocktake_all_requires_a_branch(self):
 		response = self.client.post(
 			'/api/stock/branch/stocktake-all/',
@@ -1807,6 +1849,23 @@ class StockTransferTests(TestCase):
 		self.assertIsNotNone(StockTransfer.objects.get().claimed_at)
 		second_poll = self.client.get('/api/branch-sync/?branch=BranchA')
 		self.assertEqual(second_poll.json()['pending_transfers'], [])
+
+	def test_pending_transfers_can_be_claimed_several_at_a_time_in_order(self):
+		for index in range(5):
+			StockTransfer.objects.create(
+				transfer_id=f'STOCKTAKE_BULK_{index}', branch='BranchA', product_id=2000 + index,
+				product_name=f'P{index}', quantity=1, target_quantity=1,
+			)
+		first = self.client.get('/api/stock/transfers/pending/?branch=BranchA&limit=3').json()['pending_transfers']
+		self.assertEqual([item['product_id'] for item in first], [2000, 2001, 2002])
+		# Claimed ones are not handed out again; the next poll waits for them to finish.
+		self.assertEqual(self.client.get('/api/stock/transfers/pending/?branch=BranchA&limit=3').json()['pending_transfers'], [])
+		StockTransfer.objects.filter(product_id__in=[2000, 2001, 2002]).update(status='completed')
+		next_batch = self.client.get('/api/stock/transfers/pending/?branch=BranchA&limit=50').json()['pending_transfers']
+		self.assertEqual([item['product_id'] for item in next_batch], [2003, 2004])
+		# Older POSViewer versions do not send a limit and still get one.
+		StockTransfer.objects.filter(product_id__in=[2003, 2004]).update(claimed_at=None)
+		self.assertEqual(len(self.client.get('/api/stock/transfers/pending/?branch=BranchA').json()['pending_transfers']), 1)
 
 	def test_pending_transfer_queue_skips_failed_item_during_retry_backoff(self):
 		first = StockTransfer.objects.create(

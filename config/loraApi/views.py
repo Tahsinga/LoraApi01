@@ -394,7 +394,19 @@ def transfer_payload(transfer):
 		'target_quantity': str(transfer.target_quantity) if transfer.target_quantity is not None else None,
         'status': transfer.status,
         'created_at': transfer.created_at.timestamp(),
+        # Adjust-all commands: POSViewer 1.49+ uses the branch's live Quantum balance at the
+        # moment it applies them, so sales made while the command waited are not undone.
+        'live_balance': transfer.target_quantity is not None and transfer.transfer_id.startswith('STOCKTAKE_BULK_'),
+        'repair_of': transfer.repair_of or None,
+        'repair_since': repair_since(transfer),
     }
+
+
+def repair_since(transfer):
+    if not transfer.repair_of:
+        return None
+    original = StockTransfer.objects.filter(transfer_id=transfer.repair_of).values_list('created_at', flat=True).first()
+    return original.isoformat() if original else None
 
 
 def product_payload(product):
@@ -1269,6 +1281,82 @@ def stocktake_branch_reports(request):
 
 @login_required(login_url='/login/')
 @csrf_exempt
+def repair_stocktake_branch_batch(request, batch_id):
+    """Take back off the sales an earlier adjustment undid.
+
+    Adjustments queued before POSViewer 1.49 set each product to the branch balance saved when
+    the button was pressed, so anything sold while it waited was added back. For each product of
+    that adjustment the branch now adds up, in Quantum, the sales minus receipts between the
+    button press and the adjustment line, and takes them off its current stock.
+    """
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+    try:
+        batch_id = uuid.UUID(batch_id).hex
+        payload = json.loads(request.body or '{}')
+    except (ValueError, json.JSONDecodeError):
+        return JsonResponse({'status': 'error', 'message': 'Invalid request.'}, status=400)
+    pin = str(payload.get('pin', '')).strip()
+    if not pin or not request.user.check_password(pin):
+        return JsonResponse({'status': 'error', 'message': 'Enter the correct PIN for your signed-in account.'}, status=403)
+
+    originals = list(StockTransfer.objects.filter(
+        transfer_id__startswith=f'STOCKTAKE_BULK_{batch_id}_',
+        target_quantity__isnull=False,
+        status='completed',
+        repair_of='',
+    ).order_by('product_id'))
+    if not originals:
+        return JsonResponse({'status': 'error', 'message': 'This adjustment has no completed products to fix.'}, status=400)
+    branch = originals[0].branch
+    new_batch_id = uuid.uuid4().hex
+    queued = []
+    skipped_pending = 0
+    with transaction.atomic():
+        catalog = {
+            product.product_id: product
+            for product in ProductCatalog.objects.filter(
+                branch__iexact=branch,
+                product_id__in=[transfer.product_id for transfer in originals],
+            )
+        }
+        busy = set(StockTransfer.objects.filter(
+            branch__iexact=branch,
+            product_id__in=[transfer.product_id for transfer in originals],
+            target_quantity__isnull=False,
+            status__in=['pending', 'processing'],
+        ).values_list('product_id', flat=True))
+        for original in originals:
+            if original.product_id in busy:
+                skipped_pending += 1
+                continue
+            product = catalog.get(original.product_id)
+            current = product.available_quantity if product else Decimal('0')
+            queued.append(StockTransfer(
+                transfer_id=f'STOCKTAKE_BULK_{new_batch_id}_{original.product_id}',
+                branch=original.branch,
+                product_id=original.product_id,
+                product_name=original.product_name,
+                quantity=max(current, Decimal('0')),
+                target_quantity=max(current, Decimal('0')),
+                created_by=request.user.get_username(),
+                before_branch_quantity=current,
+                before_movement_balance=product.pos_movement_balance if product else None,
+                repair_of=original.transfer_id,
+            ))
+        StockTransfer.objects.bulk_create(queued)
+    return JsonResponse({
+        'status': 'ok',
+        'branch': branch,
+        'batch_id': new_batch_id,
+        'queued': len(queued),
+        'skipped_pending': skipped_pending,
+        'negative_zeroed': 0,
+    })
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
 def stocktake_branch_batch(request, batch_id):
     if request.method not in {'GET', 'POST'}:
         return JsonResponse({'status': 'error', 'message': 'Use GET or POST method'}, status=405)
@@ -1332,6 +1420,7 @@ def stocktake_branch_batch(request, batch_id):
             'after_branch_quantity': report_balance(transfer.after_branch_quantity),
             'after_movement_balance': report_balance(transfer.after_movement_balance),
             'completed_at': transfer.completed_at.isoformat() if transfer.completed_at else None,
+            'is_fix': bool(transfer.repair_of),
         })
 
     started = min((transfer.created_at for transfer in transfers), default=None)
@@ -4136,15 +4225,21 @@ def complete_stock_transfer(request):
                     },
                 )
                 is_stock_take = transfer.target_quantity is not None
+                applied_quantity = transfer.target_quantity
+                if is_stock_take and transfer.after_branch_quantity is not None:
+                    # POSViewer 1.49+ applies the live balance and reports what it set.
+                    applied_quantity = transfer.after_branch_quantity
                 if is_stock_take:
                     catalog.product_name = transfer.product_name or catalog.product_name
-                    catalog.available_quantity = transfer.target_quantity
+                    catalog.available_quantity = applied_quantity
+                    if transfer.after_movement_balance is not None:
+                        catalog.pos_movement_balance = transfer.after_movement_balance
                     movement_source = f'{transfer.created_by or "System"} (stock take)'
                     legacy_movement_exists = StockMovement.objects.filter(
                         branch__iexact=transfer.branch,
                         product_id=transfer.product_id,
                         movement_type='stocktake',
-                        quantity=transfer.target_quantity,
+                        quantity=applied_quantity,
                         source=movement_source,
                         created_at__gte=transfer.created_at - timedelta(seconds=10),
                         created_at__lte=transfer.created_at + timedelta(seconds=10),
@@ -4155,7 +4250,7 @@ def complete_stock_transfer(request):
                             product_id=transfer.product_id,
                             product_name=transfer.product_name,
                             movement_type='stocktake',
-                            quantity=transfer.target_quantity,
+                            quantity=applied_quantity,
                             source=movement_source,
                         )
                 elif not created and not transfer.branch_stock_applied:
@@ -4186,6 +4281,8 @@ def complete_stock_transfer(request):
                     update_fields = ['product_name', 'available_quantity', 'pending_stock_adjustment', 'pending_stock_quantity', 'updated_at']
                     if not is_stock_take and applied_stock:
                         update_fields.extend(['pos_movement_date', 'pos_sold_quantity', 'pos_received_quantity'])
+                    if is_stock_take and transfer.after_movement_balance is not None:
+                        update_fields.append('pos_movement_balance')
                     catalog.save(update_fields=update_fields)
                 transfer.status = 'completed'
                 transfer.completed_at = transfer.completed_at or timezone.now()
@@ -4315,6 +4412,13 @@ def cleanup_stale_pending_transfers(now=None):
 
 
 def claim_next_stock_transfer(branch_name=''):
+    claimed = claim_stock_transfers(branch_name, 1)
+    return claimed[0] if claimed else None
+
+
+def claim_stock_transfers(branch_name='', limit=1, include_repairs=False):
+    """Claim up to ``limit`` of the oldest pending transfers, in order. Stops at the first one
+    another poll claimed less than two minutes ago, so transfers are still applied in order."""
     now = timezone.now()
     cleanup_stale_pending_transfers(now)
     stale_before = now - timedelta(minutes=2)
@@ -4327,14 +4431,19 @@ def claim_next_stock_transfer(branch_name=''):
     ).order_by('created_at')
     if branch_name:
         transfer_query = transfer_query.filter(branch__iexact=branch_name)
+    if not include_repairs:
+        transfer_query = transfer_query.filter(repair_of='')
     with transaction.atomic():
-        transfer = transfer_query.select_for_update().first()
-        if transfer and (transfer.claimed_at is None or transfer.claimed_at < stale_before):
-            transfer.claimed_at = now
-            transfer.save(update_fields=['claimed_at'])
-        else:
-            transfer = None
-    return transfer
+        claimed = []
+        for transfer in transfer_query.select_for_update()[:max(1, limit)]:
+            if transfer.claimed_at is not None and transfer.claimed_at >= stale_before:
+                break
+            claimed.append(transfer)
+        if claimed:
+            StockTransfer.objects.filter(pk__in=[transfer.pk for transfer in claimed]).update(claimed_at=now)
+            for transfer in claimed:
+                transfer.claimed_at = now
+    return claimed
 
 
 @csrf_exempt
@@ -4346,8 +4455,13 @@ def pending_stock_transfers(request):
     if not branch_name:
         return JsonResponse({'status': 'error', 'message': 'Branch is required.'}, status=400)
 
-    transfer = claim_next_stock_transfer(branch_name)
-    transfers = [transfer] if transfer else []
+    # POSViewer 1.48+ asks for several at a time (a movement adjustment is thousands of
+    # products); older versions ask for one.
+    try:
+        limit = min(max(int(request.GET.get('limit', 1)), 1), 50)
+    except (TypeError, ValueError):
+        limit = 1
+    transfers = claim_stock_transfers(branch_name, limit, include_repairs=request.GET.get('live') == '1')
     return JsonResponse({
         'status': 'ok',
         'branch_filter': branch_name,

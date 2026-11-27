@@ -103,6 +103,15 @@
     .adjustment-report-table td.waiting { color:var(--muted); font-style:italic; font-weight:400; }
     .adjustment-report-table small { display:block; margin-top:2px; color:var(--muted); font-size:10px; }
     .adjustment-report-actions { display:flex; justify-content:flex-end; margin-top:14px; }
+    .adjustment-fix { display:grid; gap:10px; margin:0 0 12px; padding:12px 14px; background:#fff8e6; border:1px solid #f0d58a; border-radius:5px; font:12px/1.5 Arial,sans-serif; }
+    .adjustment-fix[hidden] { display:none; }
+    .adjustment-fix-row { display:flex; align-items:end; gap:10px; flex-wrap:wrap; }
+    .adjustment-fix-row label { min-width:180px; }
+    .adjustment-fix-row input { height:40px; padding:8px 11px; }
+    .adjustment-fix-row button { color:#fff; background:#a35d00; }
+    .adjustment-fix-row button:hover { background:#7d4700; }
+    .adjustment-fix-status { min-height:16px; color:#7d4700; font-weight:700; }
+    .adjustment-report-table .fix-tag { display:inline-block; margin-left:6px; padding:1px 6px; color:#7d4700; background:#ffe9b8; border-radius:3px; font:700 9px Arial,sans-serif; text-transform:uppercase; }
     .adjustment-report-dialog button { width:auto; grid-column:auto; margin:0; padding:10px 13px; }
     @media (max-width:700px) { .adjustment-report-controls { grid-template-columns:1fr; } }
     .load-stock-button { flex:0 0 auto; width:auto; margin:0; padding:14px 16px; background:var(--teal); }
@@ -555,6 +564,11 @@
         <label class="adjustment-report-only"><input id="adjustment-report-changed" type="checkbox">Only changed</label>
       </div>
       <p id="adjustment-report-summary" class="adjustment-report-summary" role="status" aria-live="polite"></p>
+      <form id="adjustment-fix-form" class="adjustment-fix" hidden>
+        <p><strong>Sales undone by this adjustment?</strong> Adjustments done before POSViewer 1.49 set each product to the balance saved when the button was pressed, so anything sold while it waited was added back (12 in stock, 1 sold, back to 12). The branch adds up those sales in Quantum and takes them off again. Needs POSViewer 1.49 at the branch.</p>
+        <div class="adjustment-fix-row"><label>Your PIN<input id="adjustment-fix-pin" type="password" autocomplete="current-password" required></label><button id="adjustment-fix-submit" type="submit">Fix undone sales</button></div>
+        <p id="adjustment-fix-status" class="adjustment-fix-status" role="status" aria-live="polite"></p>
+      </form>
       <div id="adjustment-report-table" class="adjustment-report-table-wrap"></div>
     </dialog>
     <dialog id="branch-stocktake-dialog" class="branch-stocktake-dialog" aria-labelledby="branch-stocktake-title">
@@ -1087,7 +1101,7 @@
     let rows = adjustmentReportRows.filter(row => [row.product_name, row.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
     if (adjustmentReportChanged.checked) rows = rows.filter(rowChanged);
     adjustmentReportTable.innerHTML = rows.length
-      ? `<table class="adjustment-report-table"><thead><tr><th rowspan="2">Product</th><th class="group" colspan="2">Branch balance</th><th class="group" colspan="2">Movement balance</th></tr><tr><th class="group">Was</th><th>Now</th><th class="group">Was</th><th>Now</th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.product_name)}<small>ID ${escapeHtml(row.product_id)}${row.completed_at ? ` · synced ${escapeHtml(reportDateTime(row.completed_at))}` : ''}</small></td>${reportCell(reportNumber(row.before_branch_quantity), 'was first')}${reportNowCell(reportNumber(row.before_branch_quantity), reportNumber(row.after_branch_quantity), row.status, false)}${reportCell(reportNumber(row.before_movement_balance), 'was first')}${reportNowCell(reportNumber(row.before_movement_balance), reportNumber(row.after_movement_balance), row.status, false)}</tr>`).join('')}</tbody></table>`
+      ? `<table class="adjustment-report-table"><thead><tr><th rowspan="2">Product</th><th class="group" colspan="2">Branch balance</th><th class="group" colspan="2">Movement balance</th></tr><tr><th class="group">Was</th><th>Now</th><th class="group">Was</th><th>Now</th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.product_name)}${row.is_fix ? '<span class="fix-tag">Fix</span>' : ''}<small>ID ${escapeHtml(row.product_id)}${row.completed_at ? ` · synced ${escapeHtml(reportDateTime(row.completed_at))}` : ''}</small></td>${reportCell(reportNumber(row.before_branch_quantity), 'was first')}${reportNowCell(reportNumber(row.before_branch_quantity), reportNumber(row.after_branch_quantity), row.status, false)}${reportCell(reportNumber(row.before_movement_balance), 'was first')}${reportNowCell(reportNumber(row.before_movement_balance), reportNumber(row.after_movement_balance), row.status, false)}</tr>`).join('')}</tbody></table>`
       : `<p class="empty">${adjustmentReportRows.length ? 'No products match.' : 'No products in this adjustment.'}</p>`;
   }
   async function loadAdjustmentReport() {
@@ -1103,6 +1117,9 @@
       if (!response.ok) throw new Error(data.message || 'The report could not be loaded.');
       if (requestId !== adjustmentReportRequest) return;
       adjustmentReportRows = data.products || [];
+      const isFixBatch = adjustmentReportRows.some(row => row.is_fix);
+      document.querySelector('#adjustment-fix-form').hidden = isFixBatch || !adjustmentReportRows.some(row => row.status === 'completed');
+      document.querySelector('#adjustment-fix-status').textContent = '';
       const synced = adjustmentReportRows.filter(row => row.after_branch_quantity != null || row.after_movement_balance != null).length;
       const changed = adjustmentReportRows.filter(rowChanged).length;
       adjustmentReportSummary.textContent = `${adjustmentReportRows.length.toLocaleString()} products · ${synced.toLocaleString()} synced back from the branch · ${changed.toLocaleString()} changed · started by ${data.created_by || 'unknown'} on ${reportDateTime(data.started)}.`;
@@ -1146,6 +1163,35 @@
     }
   }
   document.querySelector('#adjustment-reports-button').addEventListener('click', openAdjustmentReports);
+  document.querySelector('#adjustment-fix-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const batchId = adjustmentReportDate.value;
+    const pinInput = document.querySelector('#adjustment-fix-pin');
+    const status = document.querySelector('#adjustment-fix-status');
+    const button = document.querySelector('#adjustment-fix-submit');
+    if (!batchId) return;
+    button.disabled = true;
+    status.textContent = 'Checking PIN and queueing the fix...';
+    try {
+      const response = await fetch(`/api/stock/branch/stocktake-batches/${encodeURIComponent(batchId)}/repair/`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({pin: pinInput.value}),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'The fix could not be queued.');
+      pinInput.value = '';
+      adjustmentReportDialog.close();
+      await showMovementAdjustmentProgress(data.branch, data);
+      productCatalogStatus.textContent = `Fix queued for ${data.queued.toLocaleString()} products at ${data.branch}. The branch takes off the sales the earlier adjustment undid.`;
+    } catch (error) {
+      status.textContent = error.message;
+      pinInput.value = '';
+      pinInput.focus();
+    } finally {
+      button.disabled = false;
+    }
+  });
   document.querySelector('#adjustment-report-close').addEventListener('click', () => adjustmentReportDialog.close());
   adjustmentReportDate.addEventListener('change', loadAdjustmentReport);
   adjustmentReportFilter.addEventListener('input', renderAdjustmentReport);

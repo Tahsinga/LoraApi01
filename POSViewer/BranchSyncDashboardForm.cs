@@ -137,12 +137,12 @@ public sealed class BranchSyncDashboardForm : Form
             if (companyId > 0 && companyId != BranchCompanyId)
             {
                 BranchCompanyId = companyId;
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [SYNC] Using Quantum company ID {companyId} for {branchName}.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [SYNC] Using Quantum company ID {companyId} for {branchName}.");
             }
         }
         catch (Exception ex)
         {
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Could not read the Quantum company ID, using {BranchCompanyId}: {ex.Message}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] WARNING: Could not read the Quantum company ID, using {BranchCompanyId}: {ex.Message}");
         }
     }
 
@@ -184,11 +184,11 @@ public sealed class BranchSyncDashboardForm : Form
                 var heartbeatJson = JsonSerializer.Serialize(heartbeat);
                 using var heartbeatContent = new StringContent(heartbeatJson, Encoding.UTF8, "application/json");
                 var heartbeatResponse = await client.PostAsync($"{apiBaseUrl}/api/branches/", heartbeatContent);
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [CONNECTION] Web API reachable for branch {branchName}: {heartbeatResponse.StatusCode}.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [CONNECTION] Web API reachable for branch {branchName}: {heartbeatResponse.StatusCode}.");
             }
             catch (HttpRequestException ex)
             {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ [CONNECTION] Web API heartbeat failed: {ex.Message}");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ✗ [CONNECTION] Web API heartbeat failed: {ex.Message}");
             }
 
             if (!_sharedProductCatalogSince.HasValue || DateTimeOffset.UtcNow - _sharedProductCatalogSince.Value >= TimeSpan.FromMinutes(1))
@@ -212,7 +212,7 @@ public sealed class BranchSyncDashboardForm : Form
             {
                 _statusLabel.ForeColor = Color.DarkRed;
                 _statusLabel.Text = $"Sync failed: API returned {mediaType ?? "unknown content"} at {apiBaseUrl}";
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ API URL is not returning JSON. Check that one Django server is running on port 8000.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ✗ API URL is not returning JSON. Check that one Django server is running on port 8000.");
                 return;
             }
 
@@ -231,28 +231,28 @@ public sealed class BranchSyncDashboardForm : Form
             var pendingProductCreations = result.pending_product_creations ?? new List<BranchProductCreation>();
             var pendingProductDeletions = result.pending_product_deletions ?? new List<BranchProductDeletion>();
             var pendingInvoiceReprints = result.pending_invoice_reprints ?? new List<InvoiceReprintRequest>();
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [CONNECTION] Transfer poll succeeded for {branchName}: {pendingTransfers.Count} command(s).");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [CONNECTION] Transfer poll succeeded for {branchName}: {pendingTransfers.Count} command(s).");
             
             if (pendingDeletions.Count > 0 || pendingReports.Count > 0 || pendingTransfers.Count > 0 || pendingPriceUpdates.Count > 0 || pendingProductCreations.Count > 0 || pendingProductDeletions.Count > 0 || pendingInvoiceReprints.Count > 0)
             {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] RECEIVED {pendingDeletions.Count} cancellation command(s) from API for branch {branchName}.");
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] RECEIVED {pendingTransfers.Count} stock transfer(s) for branch {branchName}.");
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] === PROCESSING {pendingDeletions.Count} DELETION TRIGGER(S) ===");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] RECEIVED {pendingDeletions.Count} cancellation command(s) from API for branch {branchName}.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] RECEIVED {pendingTransfers.Count} stock transfer(s) for branch {branchName}.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] === PROCESSING {pendingDeletions.Count} DELETION TRIGGER(S) ===");
                 
                 foreach (var deletion in pendingDeletions)
                 {
-                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] RECEIVED COMMAND: Source={deletion.source}, Invoice={deletion.invoice}, Branch={deletion.branch}, Product={deletion.product_id}, Entry={deletion.entry_no}, ID={deletion.id}");
-                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] → Processing cancellation from {deletion.source}: Invoice={deletion.invoice}");
+                    AddSyncLog($"[{DateTime.Now:HH:mm:ss}] RECEIVED COMMAND: Source={deletion.source}, Invoice={deletion.invoice}, Branch={deletion.branch}, Product={deletion.product_id}, Entry={deletion.entry_no}, ID={deletion.id}");
+                    AddSyncLog($"[{DateTime.Now:HH:mm:ss}] → Processing cancellation from {deletion.source}: Invoice={deletion.invoice}");
                     
                     var deletedCount = await DeleteAndConfirmAsync(deletion, client);
                     
                     if (deletedCount > 0)
                     {
-                        _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✓ DELETED: {deletedCount} row(s) | Confirmed to API");
+                        AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ✓ DELETED: {deletedCount} row(s) | Confirmed to API");
                     }
                     else
                     {
-                        _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ⚠ NO ROWS: Invoice {deletion.invoice} - may already be deleted");
+                        AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ⚠ NO ROWS: Invoice {deletion.invoice} - may already be deleted");
                     }
                 }
 
@@ -260,7 +260,7 @@ public sealed class BranchSyncDashboardForm : Form
                 {
                     if (!string.Equals(report.branch?.Trim(), branchName.Trim(), StringComparison.OrdinalIgnoreCase))
                     {
-                        _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ SAFETY CHECK: Ignored report for branch {report.branch}; this app is {branchName}.");
+                        AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ✗ SAFETY CHECK: Ignored report for branch {report.branch}; this app is {branchName}.");
                         continue;
                     }
 
@@ -301,7 +301,7 @@ public sealed class BranchSyncDashboardForm : Form
                 {
                     if (!string.Equals(productDeletion.branch?.Trim(), branchName.Trim(), StringComparison.OrdinalIgnoreCase))
                     {
-                        _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ SAFETY CHECK: Ignored product deletion for branch {productDeletion.branch}; this app is {branchName}.");
+                        AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ✗ SAFETY CHECK: Ignored product deletion for branch {productDeletion.branch}; this app is {branchName}.");
                         continue;
                     }
 
@@ -315,8 +315,12 @@ public sealed class BranchSyncDashboardForm : Form
                     StockTransfer? transfer;
                     if (!transferQueue.TryDequeue(out transfer))
                     {
-                        transfer = await GetNextPendingStockTransferAsync(client, branchName);
-                        if (transfer is null)
+                        // Claim the next few at once: a movement adjustment is thousands of products.
+                        foreach (var next in await GetNextPendingStockTransfersAsync(client, branchName))
+                        {
+                            transferQueue.Enqueue(next);
+                        }
+                        if (!transferQueue.TryDequeue(out transfer))
                         {
                             break;
                         }
@@ -324,7 +328,7 @@ public sealed class BranchSyncDashboardForm : Form
 
                     if (!string.Equals(transfer.branch?.Trim(), branchName.Trim(), StringComparison.OrdinalIgnoreCase))
                     {
-                        _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ SAFETY CHECK: Ignored stock transfer for branch {transfer.branch}; this app is {branchName}.");
+                        AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ✗ SAFETY CHECK: Ignored stock transfer for branch {transfer.branch}; this app is {branchName}.");
                         transferQueueFailed = true;
                         break;
                     }
@@ -340,7 +344,7 @@ public sealed class BranchSyncDashboardForm : Form
                 _statusLabel.Text = transferQueueFailed
                     ? $"Transfer queued for retry | Branch: {branchName}"
                     : $"✓ Sync complete | Branch: {branchName}";
-                _syncQueueListBox.Items.Insert(0, transferQueueFailed
+                AddSyncLog(transferQueueFailed
                     ? $"[{DateTime.Now:HH:mm:ss}] [TRANSFER] Queue paused; retrying from the oldest pending transfer on the next poll."
                     : $"[{DateTime.Now:HH:mm:ss}] === SYNC COMPLETE ===");
             }
@@ -348,7 +352,7 @@ public sealed class BranchSyncDashboardForm : Form
             {
                 _statusLabel.ForeColor = Color.DarkGreen;
                 _statusLabel.Text = $"No pending transactions | Branch: {branchName}";
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [POLL] No pending transactions for {branchName}. Transfers={pendingTransfers.Count}, reports={pendingReports.Count}, cancellations={pendingDeletions.Count}.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [POLL] No pending transactions for {branchName}. Transfers={pendingTransfers.Count}, reports={pendingReports.Count}, cancellations={pendingDeletions.Count}.");
             }
 
             await PublishBranchStockSnapshotAsync(client, branchName);
@@ -357,7 +361,7 @@ public sealed class BranchSyncDashboardForm : Form
         {
             _statusLabel.ForeColor = Color.DarkRed;
             _statusLabel.Text = $"Sync error at {apiBaseUrl}: {ex.Message}";
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ ERROR at {apiBaseUrl}: {ex.Message}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ✗ ERROR at {apiBaseUrl}: {ex.Message}");
         }
         finally
         {
@@ -494,7 +498,7 @@ public sealed class BranchSyncDashboardForm : Form
                 var responseBody = await response.Content.ReadAsStringAsync();
                 if (!response.IsSuccessStatusCode)
                 {
-                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: POS stock snapshot failed: {(int)response.StatusCode} {responseBody}");
+                    AddSyncLog($"[{DateTime.Now:HH:mm:ss}] WARNING: POS stock snapshot failed: {(int)response.StatusCode} {responseBody}");
                     return;
                 }
             }
@@ -503,11 +507,11 @@ public sealed class BranchSyncDashboardForm : Form
             {
                 _publishedStockStates[item.Key] = item.Value;
             }
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK] Published {products.Count} changed POS stock balance(s) for {branchName}.");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK] Published {products.Count} changed POS stock balance(s) for {branchName}.");
         }
         catch (Exception ex)
         {
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: POS stock snapshot failed: {ex.Message}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] WARNING: POS stock snapshot failed: {ex.Message}");
         }
     }
 
@@ -525,7 +529,7 @@ public sealed class BranchSyncDashboardForm : Form
             using var response = await client.GetAsync(catalogUrl);
             if (!response.IsSuccessStatusCode)
             {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Shared product catalog request failed: {response.StatusCode}");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] WARNING: Shared product catalog request failed: {response.StatusCode}");
                 return false;
             }
 
@@ -667,7 +671,7 @@ public sealed class BranchSyncDashboardForm : Form
 
             if (added > 0 || updated > 0)
             {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✓ Synced {updated} shared product price/metadata row(s) and added {added} product(s) to {branchName} with zero opening stock.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ✓ Synced {updated} shared product price/metadata row(s) and added {added} product(s) to {branchName} with zero opening stock.");
             }
 
             _sharedProductCatalogSince = syncStartedAt;
@@ -675,7 +679,7 @@ public sealed class BranchSyncDashboardForm : Form
         }
         catch (Exception ex)
         {
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Shared product sync failed: {ex.Message}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] WARNING: Shared product sync failed: {ex.Message}");
             return false;
         }
     }
@@ -807,8 +811,8 @@ public sealed class BranchSyncDashboardForm : Form
             var stockLines = new List<(int ProductId, string ProductName, decimal Quantity, decimal UnitPrice, decimal LineTotal)>();
 
             // Log what we're about to delete
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] DEBUG: DeleteAndConfirmAsync called");
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] DEBUG: Invoice={invoiceNum} | Product={productId} | Branch={branchName} | Entry={entryNo}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] DEBUG: DeleteAndConfirmAsync called");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] DEBUG: Invoice={invoiceNum} | Product={productId} | Branch={branchName} | Entry={entryNo}");
 
             if (wholeInvoice)
             {
@@ -878,7 +882,7 @@ public sealed class BranchSyncDashboardForm : Form
 
             deleteSql += ";";
 
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] DEBUG: SQL Query:\n{deleteSql}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] DEBUG: SQL Query:\n{deleteSql}");
 
             ReceiptPrinter.ReturnSnapshot? returnSnapshot = null;
             if (productId > 0)
@@ -890,7 +894,7 @@ public sealed class BranchSyncDashboardForm : Form
                 }
                 catch (Exception ex)
                 {
-                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Could not read return line for the credit note: {ex.Message}");
+                    AddSyncLog($"[{DateTime.Now:HH:mm:ss}] WARNING: Could not read return line for the credit note: {ex.Message}");
                 }
             }
 
@@ -907,9 +911,9 @@ public sealed class BranchSyncDashboardForm : Form
                     command.Parameters.AddWithValue("@entryNo", entryNo);
                 }
 
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] DEBUG: Executing DELETE...");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] DEBUG: Executing DELETE...");
                 deletedCount = await command.ExecuteNonQueryAsync();
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] DEBUG: @@ROWCOUNT = {deletedCount}");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] DEBUG: @@ROWCOUNT = {deletedCount}");
             }
 
             if (deletedCount > 0 && deletion.quantity is > 0 && productId > 0)
@@ -935,7 +939,7 @@ public sealed class BranchSyncDashboardForm : Form
                 }
 
                 var restoredRows = await stockCommand.ExecuteNonQueryAsync();
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] STOCK RESTORED: {deletion.quantity.Value} unit(s) across {restoredRows} balance row(s)");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] STOCK RESTORED: {deletion.quantity.Value} unit(s) across {restoredRows} balance row(s)");
             }
 
             if (deletedCount > 0 && wholeInvoice)
@@ -955,7 +959,7 @@ public sealed class BranchSyncDashboardForm : Form
                     await stockCommand.ExecuteNonQueryAsync();
                 }
 
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] STOCK RESTORED: {stockLines.Count} invoice line(s)");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] STOCK RESTORED: {stockLines.Count} invoice line(s)");
             }
 
             // First, check if data exists before deletion (for debugging)
@@ -991,7 +995,7 @@ public sealed class BranchSyncDashboardForm : Form
 
                 var checkResult = await checkCmd.ExecuteScalarAsync();
                 int remainingCount = checkResult != null ? Convert.ToInt32(checkResult) : -1;
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] DEBUG: Remaining records after delete: {remainingCount}");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] DEBUG: Remaining records after delete: {remainingCount}");
             }
 
             // CONFIRMATION: Send back to API that deletion succeeded
@@ -1021,7 +1025,7 @@ public sealed class BranchSyncDashboardForm : Form
 
             if (confirmResponse.IsSuccessStatusCode && deletedCount > 0)
             {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] → API confirmed: deletion_id={deletion.id}");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] → API confirmed: deletion_id={deletion.id}");
 
                 bool printed;
                 string printError;
@@ -1059,18 +1063,18 @@ public sealed class BranchSyncDashboardForm : Form
 
                 if (!printed)
                 {
-                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Cancellation completed, but receipt was not printed: {printError}");
+                    AddSyncLog($"[{DateTime.Now:HH:mm:ss}] WARNING: Cancellation completed, but receipt was not printed: {printError}");
                 }
             }
             else
             {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ⚠ Cancellation not printed because no invoice rows were deleted (API: {confirmResponse.StatusCode}).");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ⚠ Cancellation not printed because no invoice rows were deleted (API: {confirmResponse.StatusCode}).");
             }
         }
         catch (Exception ex)
         {
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ Deletion error for invoice {deletion.invoice}: {ex.Message}");
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] Exception details: {ex.StackTrace}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ✗ Deletion error for invoice {deletion.invoice}: {ex.Message}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] Exception details: {ex.StackTrace}");
         }
 
         return deletedCount;
@@ -1119,12 +1123,12 @@ public sealed class BranchSyncDashboardForm : Form
             }
             catch (Exception ex)
             {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Quantum cancelled invoice {invoiceNum}, but credit-note details could not be loaded: {ex.Message}");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] WARNING: Quantum cancelled invoice {invoiceNum}, but credit-note details could not be loaded: {ex.Message}");
             }
         }
         else
         {
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] Invoice {invoiceNum} is already cancelled in Quantum; skipping duplicate cancellation.");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] Invoice {invoiceNum} is already cancelled in Quantum; skipping duplicate cancellation.");
         }
 
         bool printed;
@@ -1146,7 +1150,7 @@ public sealed class BranchSyncDashboardForm : Form
         }
         if (!printed)
         {
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Cancellation completed, but credit note was not printed: {printError}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] WARNING: Cancellation completed, but credit note was not printed: {printError}");
         }
 
         var completedCount = Math.Max(1, Math.Max(stockLines.Count, cancelledDetails.Rows.Count));
@@ -1177,16 +1181,16 @@ public sealed class BranchSyncDashboardForm : Form
 
             if (confirmResponse.IsSuccessStatusCode)
             {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] → Quantum cancellation confirmed to API: deletion_id={deletion.id}");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] → Quantum cancellation confirmed to API: deletion_id={deletion.id}");
             }
             else
             {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Invoice {invoiceNum} was cancelled locally, but API confirmation returned {confirmResponse.StatusCode}.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] WARNING: Invoice {invoiceNum} was cancelled locally, but API confirmation returned {confirmResponse.StatusCode}.");
             }
         }
         catch (Exception ex)
         {
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] WARNING: Invoice {invoiceNum} was cancelled locally, but API confirmation failed: {ex.Message}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] WARNING: Invoice {invoiceNum} was cancelled locally, but API confirmation failed: {ex.Message}");
         }
 
         return completedCount;
@@ -1301,13 +1305,36 @@ public sealed class BranchSyncDashboardForm : Form
             : 0m;
     }
 
-    private async Task<StockTransfer?> GetNextPendingStockTransferAsync(HttpClient client, string branchName)
+    private const int StockTransferClaimBatchSize = 25;
+
+    private async Task<List<StockTransfer>> GetNextPendingStockTransfersAsync(HttpClient client, string branchName)
     {
         var branchFilter = Uri.EscapeDataString(branchName);
-        using var response = await client.GetAsync($"{_settings.GetApiBaseUrl()}/api/stock/transfers/pending/?branch={branchFilter}");
+        using var response = await client.GetAsync($"{_settings.GetApiBaseUrl()}/api/stock/transfers/pending/?branch={branchFilter}&limit={StockTransferClaimBatchSize}&live=1");
         response.EnsureSuccessStatusCode();
         var result = await response.Content.ReadFromJsonAsync<PendingStockTransfersResponse>();
-        return result?.pending_transfers?.FirstOrDefault();
+        return result?.pending_transfers?.Where(item => item is not null).ToList() ?? new List<StockTransfer>();
+    }
+
+    // The on-screen log keeps the newest lines only; an unbounded list slowed every
+    // insert down during large movement adjustments.
+    private const int MaxSyncLogLines = 1000;
+
+    private void AddSyncLog(string message)
+    {
+        _syncQueueListBox.BeginUpdate();
+        try
+        {
+            _syncQueueListBox.Items.Insert(0, message);
+            while (_syncQueueListBox.Items.Count > MaxSyncLogLines)
+            {
+                _syncQueueListBox.Items.RemoveAt(_syncQueueListBox.Items.Count - 1);
+            }
+        }
+        finally
+        {
+            _syncQueueListBox.EndUpdate();
+        }
     }
 
     private async Task<bool> ApplyStockTransferAsync(StockTransfer transfer, HttpClient client, string branchName)
@@ -1333,7 +1360,7 @@ public sealed class BranchSyncDashboardForm : Form
                 throw new InvalidOperationException($"Invalid transfer quantity: {transfer.quantity}");
             }
 
-            _syncQueueListBox.Items.Insert(0, isStockTake
+            AddSyncLog(isStockTake
                 ? $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Replacing branch stock for product {transfer.product_id} with exact quantity {targetQuantity}."
                 : $"[{DateTime.Now:HH:mm:ss}] [TRANSFER] Adding quantity {quantity} for product {transfer.product_id}.");
 
@@ -1349,17 +1376,17 @@ public sealed class BranchSyncDashboardForm : Form
                 }
                 catch (Exception balanceError)
                 {
-                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Could not read balances for the report: {balanceError.Message}");
+                    AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Could not read balances for the report: {balanceError.Message}");
                 }
             }
-            _syncQueueListBox.Items.Insert(0, isStockTake
+            AddSyncLog(isStockTake
                 ? $"[{DateTime.Now:HH:mm:ss}] ✓ STOCK TAKE APPLIED: {transfer.product_name} (Product {transfer.product_id}), exact quantity {finalBalance} recorded in product movement."
                 : $"[{DateTime.Now:HH:mm:ss}] ✓ STOCK RECEIVED: {transfer.product_name} (Product {transfer.product_id}), quantity {quantity}; movement balance {finalBalance}.");
         }
         catch (Exception ex)
         {
             error = ex.Message;
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ STOCK TRANSFER FAILED: {error}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ✗ STOCK TRANSFER FAILED: {error}");
         }
 
         var completion = new
@@ -1373,7 +1400,7 @@ public sealed class BranchSyncDashboardForm : Form
         };
         using var content = new StringContent(JsonSerializer.Serialize(completion), Encoding.UTF8, "application/json");
         var completionResponse = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/stock/transfers/complete/", content);
-        _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [TRANSFER] API acknowledgement for {transfer.id}: {(completionResponse.IsSuccessStatusCode ? "accepted" : completionResponse.StatusCode)}");
+        AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [TRANSFER] API acknowledgement for {transfer.id}: {(completionResponse.IsSuccessStatusCode ? "accepted" : completionResponse.StatusCode)}");
         return success && completionResponse.IsSuccessStatusCode;
     }
 
@@ -1460,12 +1487,12 @@ public sealed class BranchSyncDashboardForm : Form
         if (isStockTake)
         {
             var authenticationMode = _settings.IntegratedSecurity ? "Windows" : "SQL Server";
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Opening POS database with {authenticationMode} authentication for command {transfer.id}.");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Opening POS database with {authenticationMode} authentication for command {transfer.id}.");
         }
         await connection.OpenAsync();
         if (isStockTake)
         {
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] POS database connection opened for command {transfer.id}.");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] POS database connection opened for command {transfer.id}.");
         }
         using (var lockTimeoutCommand = new SqlCommand("SET LOCK_TIMEOUT 15000;", connection)
         {
@@ -1495,7 +1522,7 @@ public sealed class BranchSyncDashboardForm : Form
                 existingMovementCommand.Parameters.AddWithValue("@branch", branchName);
                 if (isStockTake)
                 {
-                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Checking for an existing movement for command {transfer.id}.");
+                    AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Checking for an existing movement for command {transfer.id}.");
                 }
                 var existingMovement = await existingMovementCommand.ExecuteScalarAsync();
                 if (existingMovement is not null and not DBNull)
@@ -1504,7 +1531,7 @@ public sealed class BranchSyncDashboardForm : Form
                         ? targetQuantity
                         : await GetProductStockBalanceAsync(connection, transaction, transfer.product_id, branchName);
                     await transaction.CommitAsync();
-                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] Existing movement found for command {transfer.id}; skipped duplicate stock update.");
+                    AddSyncLog($"[{DateTime.Now:HH:mm:ss}] Existing movement found for command {transfer.id}; skipped duplicate stock update.");
                     return existingBalance;
                 }
             }
@@ -1521,7 +1548,7 @@ public sealed class BranchSyncDashboardForm : Form
                 productCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
                 if (isStockTake)
                 {
-                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Looking up POS product {transfer.product_id}.");
+                    AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Looking up POS product {transfer.product_id}.");
                 }
                 var cost = await productCommand.ExecuteScalarAsync();
                 if (cost is null or DBNull)
@@ -1532,25 +1559,43 @@ public sealed class BranchSyncDashboardForm : Form
                 productCost = Convert.ToDecimal(cost, CultureInfo.InvariantCulture);
             }
 
+            if (isStockTake && transfer.live_balance)
+            {
+                // Adjust all: use the stock as it is right now, not the number saved on the
+                // website when the button was pressed, so sales made while this command waited
+                // are kept. Read (and lock) the stock table before it is rebuilt below.
+                var liveBalance = await GetLockedStockTableBalanceAsync(connection, transaction, transfer.product_id, branchName);
+                var undone = 0m;
+                if (!string.IsNullOrWhiteSpace(transfer.repair_of))
+                {
+                    undone = await GetSalesUndoneByAdjustmentAsync(connection, transaction, transfer, branchName);
+                }
+                var liveTarget = Math.Max(0m, liveBalance - undone);
+                AddSyncLog(undone != 0m
+                    ? $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Fix for {transfer.product_name}: stock {liveBalance}, earlier adjustment undid {undone}; setting {liveTarget}."
+                    : $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Live stock for {transfer.product_name}: {liveBalance}; setting {liveTarget} (website had {targetQuantity}).");
+                targetQuantity = liveTarget;
+            }
+
             if (isStockTake)
             {
                 // Bring the stored balance in line with the movement history first, so the
                 // stock-take difference is posted against the same figure Quantum recalculates
                 // from. Otherwise a drifted ProductStockBalances row makes the final balance
                 // miss the counted quantity and the stock take is rolled back.
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Re-syncing POS balance from movement history for product {transfer.product_id}.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Re-syncing POS balance from movement history for product {transfer.product_id}.");
                 await RefreshStockBalanceFromMovementsAsync(connection, transaction, transfer.product_id, branchName);
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Reading current POS balance for product {transfer.product_id}.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Reading current POS balance for product {transfer.product_id}.");
             }
             var currentBalance = await GetProductStockBalanceAsync(connection, transaction, transfer.product_id, branchName);
             var expectedBalance = isStockTake ? targetQuantity : currentBalance + quantity;
             if (isStockTake)
             {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] POS balance {currentBalance}; target {targetQuantity} for command {transfer.id}.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] POS balance {currentBalance}; target {targetQuantity} for command {transfer.id}.");
             }
             if (isStockTake)
             {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Requesting movement number for command {transfer.id}.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Requesting movement number for command {transfer.id}.");
             }
             var invoiceNumber = await GetStockMovementInvoiceNumberAsync(connection, transaction, transfer.id, branchName, isStockTake);
             var today = int.Parse(DateTime.Today.ToString("yyyyMMdd", CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
@@ -1583,7 +1628,7 @@ public sealed class BranchSyncDashboardForm : Form
             }
             else if (targetQuantity < currentBalance)
             {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Executing stock-reduction movement procedure for command {transfer.id}.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Executing stock-reduction movement procedure for command {transfer.id}.");
                 var reductionProcedureParameters = await GetStoredProcedureParameterNamesAsync(connection, transaction, "InsertNewSaleStockTake");
                 using var movementCommand = new SqlCommand("InsertNewSaleStockTake", connection, transaction)
                 {
@@ -1609,11 +1654,11 @@ public sealed class BranchSyncDashboardForm : Form
                 movementCommand.Parameters.AddWithValue("@stockbal", currentBalance);
                 AddStoredProcedureParameterIfSupported(movementCommand, reductionProcedureParameters, "@machinename", Environment.MachineName);
                 await movementCommand.ExecuteNonQueryAsync();
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Quantum stock movement procedure completed for command {transfer.id}.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Quantum stock movement procedure completed for command {transfer.id}.");
             }
             else
             {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Executing stock-increase movement procedure for command {transfer.id}.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Executing stock-increase movement procedure for command {transfer.id}.");
                 var increaseProcedureParameters = await GetStoredProcedureParameterNamesAsync(connection, transaction, "InsertNewStockStockTake");
                 using var movementCommand = new SqlCommand("InsertNewStockStockTake", connection, transaction)
                 {
@@ -1637,7 +1682,7 @@ public sealed class BranchSyncDashboardForm : Form
                 AddStoredProcedureParameterIfSupported(movementCommand, increaseProcedureParameters, "@machinename", Environment.MachineName);
                 AddStoredProcedureParameterIfSupported(movementCommand, increaseProcedureParameters, "@trantime", DateTime.Now.ToString("HH:mm", CultureInfo.InvariantCulture));
                 await movementCommand.ExecuteNonQueryAsync();
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Quantum stock movement procedure completed for command {transfer.id}.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Quantum stock movement procedure completed for command {transfer.id}.");
             }
 
             if (isStockTake)
@@ -1712,6 +1757,73 @@ public sealed class BranchSyncDashboardForm : Form
         refreshBalanceCommand.Parameters.AddWithValue("@iswarehouse", 0);
         refreshBalanceCommand.Parameters.AddWithValue("@productid", productId);
         await refreshBalanceCommand.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<decimal> GetLockedStockTableBalanceAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int productId,
+        string branchName)
+    {
+        const string query = @"
+            SELECT COALESCE(SUM(StockBal), 0)
+            FROM [dbo].[ProductStockBalances] WITH (UPDLOCK, HOLDLOCK)
+            WHERE ProductID = @productId
+                AND coid = @coid
+                AND branch = @branch;";
+        using var command = new SqlCommand(query, connection, transaction) { CommandTimeout = BranchSqlCommandTimeoutSeconds };
+        command.Parameters.AddWithValue("@productId", productId);
+        command.Parameters.AddWithValue("@coid", BranchCompanyId);
+        command.Parameters.AddWithValue("@branch", branchName);
+        var value = await command.ExecuteScalarAsync();
+        return value is null or DBNull ? 0m : Convert.ToDecimal(value, CultureInfo.InvariantCulture);
+    }
+
+    // What an adjustment queued before 1.49 put back: everything sold (minus anything received)
+    // for this product between the button press on the website and that adjustment's own line.
+    private async Task<decimal> GetSalesUndoneByAdjustmentAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        StockTransfer transfer,
+        string branchName)
+    {
+        if (!DateTimeOffset.TryParse(transfer.repair_since, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var since))
+        {
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Fix for {transfer.product_name}: no adjustment time; nothing taken off.");
+            return 0m;
+        }
+        var sinceLocal = since.ToLocalTime();
+        var sinceStamp = long.Parse(sinceLocal.ToString("yyyyMMddHHmm", CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
+        const string query = @"
+            DECLARE @adjustmentEntry int = (
+                SELECT TOP (1) EntryNo FROM [dbo].[Movement]
+                WHERE OtherDetail = @marker AND ProductID = @productId AND coid = @coid
+                  AND UPPER(LTRIM(RTRIM(CAST(Branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
+                ORDER BY EntryNo);
+            IF @adjustmentEntry IS NULL
+                SELECT CAST(NULL AS decimal(18, 5));
+            ELSE
+                SELECT COALESCE(SUM(CASE WHEN IsStockIn = 1 THEN -COALESCE(Quantity, 0) ELSE COALESCE(Quantity, 0) END), 0)
+                FROM [dbo].[Movement]
+                WHERE ProductID = @productId AND coid = @coid AND branch = @branch
+                  AND TranCode <> 4
+                  AND EntryNo < @adjustmentEntry
+                  AND ISNULL(OtherDetail, '') NOT LIKE 'PV:STOCKTAKE%'
+                  AND CAST(TranDate AS bigint) * 10000
+                      + COALESCE(TRY_CAST(LEFT(REPLACE(ISNULL(TranTime, ''), ':', '') + '0000', 4) AS int), 0) >= @since;";
+        using var command = new SqlCommand(query, connection, transaction) { CommandTimeout = BranchSqlCommandTimeoutSeconds };
+        command.Parameters.AddWithValue("@marker", $"PV:{transfer.repair_of}");
+        command.Parameters.AddWithValue("@productId", transfer.product_id);
+        command.Parameters.AddWithValue("@coid", BranchCompanyId);
+        command.Parameters.AddWithValue("@branch", branchName);
+        command.Parameters.AddWithValue("@since", sinceStamp);
+        var value = await command.ExecuteScalarAsync();
+        if (value is null or DBNull)
+        {
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Fix for {transfer.product_name}: earlier adjustment not found in Quantum; nothing taken off.");
+            return 0m;
+        }
+        return Math.Round(Convert.ToDecimal(value, CultureInfo.InvariantCulture), 0, MidpointRounding.AwayFromZero);
     }
 
     private static async Task<decimal> GetProductStockBalanceAsync(
@@ -1804,12 +1916,12 @@ public sealed class BranchSyncDashboardForm : Form
             }
 
             success = true;
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] PRICE UPDATED: {priceUpdate.product_name} to {sellingPrice.ToString("0.00", CultureInfo.InvariantCulture)}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] PRICE UPDATED: {priceUpdate.product_name} to {sellingPrice.ToString("0.00", CultureInfo.InvariantCulture)}");
         }
         catch (Exception ex)
         {
             error = ex.Message;
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] PRICE UPDATE FAILED: {error}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] PRICE UPDATE FAILED: {error}");
         }
 
         var completion = new
@@ -1821,7 +1933,7 @@ public sealed class BranchSyncDashboardForm : Form
         };
         using var content = new StringContent(JsonSerializer.Serialize(completion), Encoding.UTF8, "application/json");
         var completionResponse = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/stock/prices/complete/", content);
-        _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [PRICE] API acknowledgement for product {priceUpdate.product_id}: {(completionResponse.IsSuccessStatusCode ? "accepted" : completionResponse.StatusCode)}");
+        AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [PRICE] API acknowledgement for product {priceUpdate.product_id}: {(completionResponse.IsSuccessStatusCode ? "accepted" : completionResponse.StatusCode)}");
     }
 
     private async Task ApplyBranchProductCreationAsync(BranchProductCreation productCreation, HttpClient client, string branchName)
@@ -1989,16 +2101,16 @@ public sealed class BranchSyncDashboardForm : Form
             }
             catch (SqlException ex) when ((ex.Number == 2627 || ex.Number == 2601) && attempt < 3)
             {
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [PRODUCT] {productCreation.product_name} (Product {productCreation.product_id}) was added at the same time by another sync; checking again.");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [PRODUCT] {productCreation.product_name} (Product {productCreation.product_id}) was added at the same time by another sync; checking again.");
             }
             }
             success = true;
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✓ PRODUCT CREATED: {productCreation.product_name} (Product {actualProductId})");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ✓ PRODUCT CREATED: {productCreation.product_name} (Product {actualProductId})");
         }
         catch (Exception ex)
         {
             error = ex.Message;
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] PRODUCT CREATION FAILED for {productCreation.product_name} (Product {productCreation.product_id}): {error}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] PRODUCT CREATION FAILED for {productCreation.product_name} (Product {productCreation.product_id}): {error}");
         }
 
         var completion = new
@@ -2011,7 +2123,7 @@ public sealed class BranchSyncDashboardForm : Form
         };
         using var content = new StringContent(JsonSerializer.Serialize(completion), Encoding.UTF8, "application/json");
         var completionResponse = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/products/create/complete/", content);
-        _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [PRODUCT] API acknowledgement: {(completionResponse.IsSuccessStatusCode ? "accepted" : completionResponse.StatusCode)}");
+        AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [PRODUCT] API acknowledgement: {(completionResponse.IsSuccessStatusCode ? "accepted" : completionResponse.StatusCode)}");
     }
 
     private async Task ApplyBranchProductDeletionAsync(BranchProductDeletion productDeletion, HttpClient client, string branchName)
@@ -2033,12 +2145,12 @@ public sealed class BranchSyncDashboardForm : Form
             }
 
             success = true;
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✓ PRODUCT DEACTIVATED: {productDeletion.product_name} (Product {productDeletion.product_id}) at {branchName}; sales history retained.");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ✓ PRODUCT DEACTIVATED: {productDeletion.product_name} (Product {productDeletion.product_id}) at {branchName}; sales history retained.");
         }
         catch (Exception ex)
         {
             error = ex.Message;
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ PRODUCT DELETION FAILED: {productDeletion.product_name} | {error}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ✗ PRODUCT DELETION FAILED: {productDeletion.product_name} | {error}");
         }
 
         var completion = new
@@ -2050,7 +2162,7 @@ public sealed class BranchSyncDashboardForm : Form
         };
         using var content = new StringContent(JsonSerializer.Serialize(completion), Encoding.UTF8, "application/json");
         var response = await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/products/delete/complete/", content);
-        _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] [PRODUCT] Deletion acknowledgement: {(response.IsSuccessStatusCode ? "accepted" : response.StatusCode)}");
+        AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [PRODUCT] Deletion acknowledgement: {(response.IsSuccessStatusCode ? "accepted" : response.StatusCode)}");
     }
 
     private async Task<int> DeleteLocalInvoiceAsync(string invoiceNum, string branchName, int productId = 0)
@@ -2090,7 +2202,7 @@ public sealed class BranchSyncDashboardForm : Form
                 
                 var result = await command.ExecuteNonQueryAsync();
                 totalDeletedRows += result;
-                _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] DEBUG: Strategy 1 (string match) deleted {result} row(s)");
+                AddSyncLog($"[{DateTime.Now:HH:mm:ss}] DEBUG: Strategy 1 (string match) deleted {result} row(s)");
             }
 
             // Strategy 2: If nothing deleted and InvoiceNum is numeric, try as INT
@@ -2118,7 +2230,7 @@ public sealed class BranchSyncDashboardForm : Form
                     
                     var result = await command.ExecuteNonQueryAsync();
                     totalDeletedRows += result;
-                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] DEBUG: Strategy 2 (CAST match) deleted {result} row(s)");
+                    AddSyncLog($"[{DateTime.Now:HH:mm:ss}] DEBUG: Strategy 2 (CAST match) deleted {result} row(s)");
                 }
             }
 
@@ -2147,7 +2259,7 @@ public sealed class BranchSyncDashboardForm : Form
                     
                     var result = await command.ExecuteNonQueryAsync();
                     totalDeletedRows += result;
-                    _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] DEBUG: Strategy 3 (case-insensitive) deleted {result} row(s)");
+                    AddSyncLog($"[{DateTime.Now:HH:mm:ss}] DEBUG: Strategy 3 (case-insensitive) deleted {result} row(s)");
                 }
             }
 
@@ -2172,7 +2284,7 @@ public sealed class BranchSyncDashboardForm : Form
                             {
                                 samples += $"[{reader[0]}],";
                             }
-                            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] DEBUG: {samples}");
+                            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] DEBUG: {samples}");
                         }
                     }
                 }
@@ -2182,7 +2294,7 @@ public sealed class BranchSyncDashboardForm : Form
         }
         catch (Exception ex)
         {
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ ERROR: Failed to delete invoice {invoiceNum}: {ex.Message}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ✗ ERROR: Failed to delete invoice {invoiceNum}: {ex.Message}");
             return 0;
         }
     }
@@ -2215,7 +2327,7 @@ public sealed class BranchSyncDashboardForm : Form
         };
         using var content = new StringContent(JsonSerializer.Serialize(completion), Encoding.UTF8, "application/json");
         await client.PostAsync($"{_settings.GetApiBaseUrl()}/api/invoice-reprint/complete/", content);
-        _syncQueueListBox.Items.Insert(0, success
+        AddSyncLog(success
             ? $"[{DateTime.Now:HH:mm:ss}] ✓ INVOICE REPRINTED: {reprint.invoice}"
             : $"[{DateTime.Now:HH:mm:ss}] ✗ INVOICE REPRINT FAILED: {reprint.invoice} | {error}");
     }
@@ -2312,14 +2424,14 @@ public sealed class BranchSyncDashboardForm : Form
                 reportDate,
                 out error);
 
-            _syncQueueListBox.Items.Insert(0, success
+            AddSyncLog(success
                 ? $"[{DateTime.Now:HH:mm:ss}] ✓ SALES REPORT PRINTED: {rowCount} row(s) for {branchName} on {reportDate:yyyy-MM-dd}"
                 : $"[{DateTime.Now:HH:mm:ss}] ✗ SALES REPORT NOT PRINTED: {error}");
         }
         catch (Exception ex)
         {
             error = ex.Message;
-            _syncQueueListBox.Items.Insert(0, $"[{DateTime.Now:HH:mm:ss}] ✗ SALES REPORT FAILED: {error}");
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] ✗ SALES REPORT FAILED: {error}");
         }
 
         var completion = new
@@ -2388,6 +2500,11 @@ public sealed class BranchSyncDashboardForm : Form
         public string? quantity { get; set; }
         public string? target_quantity { get; set; }
         public string? status { get; set; }
+        // Adjust-all command: apply the live Quantum balance instead of target_quantity.
+        public bool live_balance { get; set; }
+        // Fix command: take off what the earlier adjustment repair_of undid since repair_since.
+        public string? repair_of { get; set; }
+        public string? repair_since { get; set; }
     }
 
     private sealed class BranchPriceUpdate

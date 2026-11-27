@@ -101,6 +101,9 @@ class StockTransfer(models.Model):
 	before_movement_balance = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
 	after_branch_quantity = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
 	after_movement_balance = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
+	# Set on a fix command: the earlier adjustment whose undone sales this one takes back off.
+	# Only POSViewer 1.49+ (which asks with live=1) receives these.
+	repair_of = models.CharField(max_length=255, blank=True, default='')
 
 	class Meta:
 		ordering = ['created_at']
