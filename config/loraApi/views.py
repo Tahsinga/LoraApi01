@@ -398,15 +398,36 @@ def transfer_payload(transfer):
         # moment it applies them, so sales made while the command waited are not undone.
         'live_balance': transfer.target_quantity is not None and transfer.transfer_id.startswith('STOCKTAKE_BULK_'),
         'repair_of': transfer.repair_of or None,
-        'repair_since': repair_since(transfer),
+        **repair_details(transfer),
+        'repair_amount': str(transfer.repair_amount) if transfer.repair_amount is not None else None,
     }
 
 
-def repair_since(transfer):
+def repair_details(transfer):
+    """What POSViewer needs to work out how much an earlier adjustment wrongly added back.
+
+    repair_target: the number that adjustment set. repair_drift: branch balance minus movement
+    balance when it was queued (null when the branch did not report a movement balance then).
+    repair_earlier: earlier fix commands for the same adjustment, so nothing is taken off twice.
+    """
     if not transfer.repair_of:
-        return None
-    original = StockTransfer.objects.filter(transfer_id=transfer.repair_of).values_list('created_at', flat=True).first()
-    return original.isoformat() if original else None
+        return {'repair_since': None, 'repair_target': None, 'repair_drift': None, 'repair_earlier': []}
+    original = StockTransfer.objects.filter(transfer_id=transfer.repair_of).first()
+    if original is None:
+        return {'repair_since': None, 'repair_target': None, 'repair_drift': None, 'repair_earlier': []}
+    drift = None
+    if original.before_branch_quantity is not None and original.before_movement_balance is not None:
+        drift = original.before_branch_quantity - original.before_movement_balance
+    earlier = list(StockTransfer.objects.filter(
+        repair_of=original.transfer_id,
+        status='completed',
+    ).exclude(transfer_id=transfer.transfer_id).values_list('transfer_id', flat=True))
+    return {
+        'repair_since': original.created_at.isoformat(),
+        'repair_target': str(original.target_quantity) if original.target_quantity is not None else None,
+        'repair_drift': str(drift) if drift is not None else None,
+        'repair_earlier': earlier,
+    }
 
 
 def product_payload(product):
@@ -1232,6 +1253,139 @@ def submit_branch_stock_updates(request):
     }, status=202)
 
 
+def web_movement_balance_before(branch, product_id, row, fallback_balance=None, fallback_since=None):
+    """The website's movement balance for a product just before one of its movement rows.
+
+    Starts from the latest adjustment row before it; without one, from ``fallback_balance`` at
+    ``fallback_since`` (the branch balance saved when the adjustment was queued). None when
+    neither is known."""
+    earlier = StockMovement.objects.filter(branch__iexact=branch, product_id=product_id).filter(
+        Q(created_at__lt=row.created_at) | Q(created_at=row.created_at, id__lt=row.id),
+    )
+    last_adjustment = earlier.filter(
+        movement_type__in=['adjusted', 'stocktake', 'maintained'],
+    ).order_by('-created_at', '-id').first()
+    if last_adjustment:
+        balance = Decimal(str(last_adjustment.quantity))
+        after = earlier.filter(
+            Q(created_at__gt=last_adjustment.created_at)
+            | Q(created_at=last_adjustment.created_at, id__gt=last_adjustment.id),
+        )
+    elif fallback_balance is not None and fallback_since is not None:
+        balance = Decimal(str(fallback_balance))
+        after = earlier.filter(created_at__gte=fallback_since)
+    else:
+        return None
+    for movement_type, quantity in after.filter(movement_type__in=['received', 'sold']).values_list('movement_type', 'quantity'):
+        balance += Decimal(str(quantity)) if movement_type == 'received' else -Decimal(str(quantity))
+    return balance
+
+
+def adjustment_corrections(batch_id):
+    """For each product of a movement adjustment: what it set, the movement balance just before it,
+    what it wrongly added back, what earlier corrections already took off, and what is left."""
+    originals = list(StockTransfer.objects.filter(
+        transfer_id__startswith=f'STOCKTAKE_BULK_{batch_id}_',
+        target_quantity__isnull=False,
+        status='completed',
+        repair_of='',
+    ).order_by('product_name', 'product_id'))
+    if not originals:
+        return '', []
+    branch = originals[0].branch
+    product_ids = [transfer.product_id for transfer in originals]
+    started = min(transfer.created_at for transfer in originals)
+    stocktake_rows = {}
+    for row in StockMovement.objects.filter(
+        branch__iexact=branch,
+        product_id__in=product_ids,
+        movement_type='stocktake',
+        created_at__gte=started,
+        source__endswith='(stock take)',
+    ).order_by('created_at', 'id'):
+        stocktake_rows.setdefault(row.product_id, []).append(row)
+    already = {}
+    for repair_of, amount in StockTransfer.objects.filter(
+        repair_of__in=[transfer.transfer_id for transfer in originals],
+        status__in=['pending', 'processing', 'completed'],
+        repair_amount__isnull=False,
+    ).values_list('repair_of', 'repair_amount'):
+        already[repair_of] = already.get(repair_of, Decimal('0')) + amount
+    # Fixes run before corrections were worked out here did not record an amount: take what they
+    # changed from the history (movement balance before their line minus what they set).
+    for fix in StockTransfer.objects.filter(
+        repair_of__in=[transfer.transfer_id for transfer in originals],
+        status='completed',
+        repair_amount__isnull=True,
+    ):
+        fix_row = StockMovement.objects.filter(
+            branch__iexact=branch,
+            product_id=fix.product_id,
+            movement_type='stocktake',
+            source__endswith='(stock take)',
+            created_at__gte=fix.created_at,
+        ).order_by('created_at', 'id').first()
+        if fix_row is None:
+            continue
+        fix_before = web_movement_balance_before(branch, fix.product_id, fix_row)
+        if fix_before is not None:
+            already[fix.repair_of] = already.get(fix.repair_of, Decimal('0')) + (fix_before - Decimal(str(fix_row.quantity)))
+    rows = []
+    for transfer in originals:
+        row = next((
+            item for item in stocktake_rows.get(transfer.product_id, [])
+            if item.created_at >= transfer.created_at
+            and (transfer.completed_at is None or item.created_at <= transfer.completed_at + timedelta(minutes=5))
+        ), None)
+        if row is None:
+            continue
+        if transfer.after_branch_quantity is not None and transfer.after_branch_quantity != transfer.target_quantity:
+            continue  # applied with the live balance (POSViewer 1.49+): nothing was added back
+        set_to = Decimal(str(row.quantity))
+        before = web_movement_balance_before(
+            branch, transfer.product_id, row,
+            fallback_balance=transfer.before_branch_quantity, fallback_since=transfer.created_at,
+        )
+        if before is None:
+            continue  # no movement history to work from
+        added_back = set_to - before
+        if set_to == 0 and before < 0:
+            added_back = Decimal('0')  # a negative balance set to zero on purpose
+        taken = already.get(transfer.transfer_id, Decimal('0'))
+        rows.append({
+            'transfer_id': transfer.transfer_id,
+            'product_id': transfer.product_id,
+            'product_name': transfer.product_name,
+            'adjusted_at': row.created_at.isoformat(),
+            'before': str(before),
+            'set_to': str(set_to),
+            'added_back': str(added_back),
+            'already_corrected': str(taken),
+            'to_apply': str(added_back - taken),
+        })
+    return branch, rows
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
+def stocktake_branch_batch_corrections(request, batch_id):
+    if request.method != 'GET':
+        return JsonResponse({'status': 'error', 'message': 'Use GET method'}, status=405)
+    try:
+        batch_id = uuid.UUID(batch_id).hex
+    except ValueError:
+        return JsonResponse({'status': 'error', 'message': 'Invalid adjustment.'}, status=400)
+    branch, rows = adjustment_corrections(batch_id)
+    needed = [row for row in rows if Decimal(row['to_apply']) != 0]
+    return JsonResponse({
+        'status': 'ok',
+        'branch': branch,
+        'checked': len(rows),
+        'products': needed,
+        'units': str(sum((Decimal(row['to_apply']) for row in needed), Decimal('0'))),
+    })
+
+
 def report_balance(value):
     return str(value) if value is not None else None
 
@@ -1300,15 +1454,11 @@ def repair_stocktake_branch_batch(request, batch_id):
     if not pin or not request.user.check_password(pin):
         return JsonResponse({'status': 'error', 'message': 'Enter the correct PIN for your signed-in account.'}, status=403)
 
-    originals = list(StockTransfer.objects.filter(
-        transfer_id__startswith=f'STOCKTAKE_BULK_{batch_id}_',
-        target_quantity__isnull=False,
-        status='completed',
-        repair_of='',
-    ).order_by('product_id'))
-    if not originals:
-        return JsonResponse({'status': 'error', 'message': 'This adjustment has no completed products to fix.'}, status=400)
-    branch = originals[0].branch
+    branch, corrections = adjustment_corrections(batch_id)
+    corrections = {row['transfer_id']: row for row in corrections if Decimal(row['to_apply']) != 0}
+    if not corrections:
+        return JsonResponse({'status': 'error', 'message': 'Nothing to correct for this adjustment.'}, status=400)
+    originals = list(StockTransfer.objects.filter(transfer_id__in=list(corrections)).order_by('product_id'))
     new_batch_id = uuid.uuid4().hex
     queued = []
     skipped_pending = 0
@@ -1343,6 +1493,7 @@ def repair_stocktake_branch_batch(request, batch_id):
                 before_branch_quantity=current,
                 before_movement_balance=product.pos_movement_balance if product else None,
                 repair_of=original.transfer_id,
+                repair_amount=Decimal(corrections[original.transfer_id]['to_apply']),
             ))
         StockTransfer.objects.bulk_create(queued)
     return JsonResponse({

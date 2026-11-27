@@ -106,6 +106,8 @@ class StockTransfer(models.Model):
 	repair_of = models.CharField(max_length=255, blank=True, default='')
 	# Why the branch could not apply it the last time it tried (cleared once it succeeds).
 	last_error = models.CharField(max_length=500, blank=True, default='')
+	# Correction worked out on the website: units to take off (negative: put back).
+	repair_amount = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
 
 	class Meta:
 		ordering = ['created_at']

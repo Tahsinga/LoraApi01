@@ -1662,31 +1662,64 @@ class StockTransferTests(TestCase):
 		self.assertEqual((product.available_quantity, product.pos_movement_balance), (11, 11))
 		self.assertEqual(StockMovement.objects.get(product_id=5576, movement_type='stocktake').quantity, 11)
 
-		# Fixing an older adjustment queues a fix command that only POSViewer 1.49+ receives.
-		fix = self.client.post(
+		# Applied with the live balance: nothing was added back, so there is nothing to correct.
+		self.assertEqual(self.client.get(f'/api/stock/branch/stocktake-batches/{batch_id}/corrections/').json()['products'], [])
+		self.assertEqual(self.client.post(
 			f'/api/stock/branch/stocktake-batches/{batch_id}/repair/',
 			data=json.dumps({'pin': 'TransferPass4182!'}),
 			content_type='application/json',
-		)
-		self.assertEqual(fix.status_code, 200)
-		self.assertEqual(fix.json()['queued'], 1)
-		self.assertEqual(self.client.get('/api/stock/transfers/pending/?branch=BranchA&limit=25').json()['pending_transfers'], [])
-		# The main branch sync hands fixes only to POSViewer 1.50+, which says live=1.
-		self.assertEqual(self.client.get('/api/branch-sync/?branch=BranchA').json()['pending_transfers'], [])
-		from_sync = self.client.get('/api/branch-sync/?branch=BranchA&live=1').json()['pending_transfers']
-		self.assertEqual(from_sync[0]['repair_of'], f'STOCKTAKE_BULK_{batch_id}_5576')
-		StockTransfer.objects.filter(repair_of__gt='').update(claimed_at=None)
-		fix_command = self.client.get('/api/stock/transfers/pending/?branch=BranchA&limit=25&live=1').json()['pending_transfers'][0]
-		self.assertEqual(fix_command['repair_of'], f'STOCKTAKE_BULK_{batch_id}_5576')
-		self.assertTrue(fix_command['live_balance'])
-		self.assertIsNotNone(fix_command['repair_since'])
-		fix_rows = self.client.get(f'/api/stock/branch/stocktake-batches/{fix.json()["batch_id"]}/').json()['products']
-		self.assertTrue(fix_rows[0]['is_fix'])
-		self.assertEqual(self.client.post(
-			f'/api/stock/branch/stocktake-batches/{batch_id}/repair/',
-			data=json.dumps({'pin': 'wrong'}),
+		).status_code, 400)
+
+	def test_corrections_are_worked_out_on_the_website_then_applied(self):
+		ProductCatalog.objects.create(branch='Mini Market', product_id=5237, product_name='BAKERS INN BREAD 700G #B', available_quantity=42)
+		batch_id = self.client.post(
+			'/api/stock/branch/stocktake-all/',
+			data=json.dumps({'branch': 'Mini Market', 'pin': 'TransferPass4182!'}),
 			content_type='application/json',
+		).json()['batch_id']
+		# 1 sold while the adjustment waited; an older POSViewer then set the saved 42 anyway.
+		StockMovement.objects.create(branch='Mini Market', product_id=5237, product_name='BAKERS INN BREAD 700G #B', movement_type='sold', quantity=1, source='POS sales')
+		self.client.post('/api/stock/transfers/complete/', data=json.dumps({
+			'transfer_id': f'STOCKTAKE_BULK_{batch_id}_5237', 'branch': 'Mini Market', 'success': True,
+		}), content_type='application/json')
+
+		preview = self.client.get(f'/api/stock/branch/stocktake-batches/{batch_id}/corrections/').json()
+		self.assertEqual(preview['units'], '1')
+		row = preview['products'][0]
+		self.assertEqual((row['before'], row['set_to'], row['added_back'], row['already_corrected'], row['to_apply']), ('41', '42', '1', '0', '1'))
+
+		self.assertEqual(self.client.post(
+			f'/api/stock/branch/stocktake-batches/{batch_id}/repair/', data=json.dumps({'pin': 'wrong'}), content_type='application/json',
 		).status_code, 403)
+		applied = self.client.post(
+			f'/api/stock/branch/stocktake-batches/{batch_id}/repair/', data=json.dumps({'pin': 'TransferPass4182!'}), content_type='application/json',
+		)
+		self.assertEqual(applied.json()['queued'], 1)
+		# Only POSViewer versions that understand corrections receive it.
+		self.assertEqual(self.client.get('/api/branch-sync/?branch=Mini Market').json()['pending_transfers'], [])
+		command = self.client.get('/api/stock/transfers/pending/?branch=Mini Market&limit=25&live=1').json()['pending_transfers'][0]
+		self.assertEqual((command['repair_of'], command['repair_amount'], command['live_balance']), (f'STOCKTAKE_BULK_{batch_id}_5237', '1', True))
+		# Nothing is corrected twice.
+		self.assertEqual(self.client.get(f'/api/stock/branch/stocktake-batches/{batch_id}/corrections/').json()['products'], [])
+
+	def test_corrections_count_what_an_earlier_fix_already_took_off(self):
+		ProductCatalog.objects.create(branch='The Place', product_id=4899, product_name='WILLARDS THINGZ 75G', available_quantity=44)
+		batch_id = self.client.post(
+			'/api/stock/branch/stocktake-all/', data=json.dumps({'branch': 'The Place', 'pin': 'TransferPass4182!'}), content_type='application/json',
+		).json()['batch_id']
+		StockMovement.objects.create(branch='The Place', product_id=4899, product_name='WILLARDS THINGZ 75G', movement_type='sold', quantity=2, source='POS sales')
+		self.client.post('/api/stock/transfers/complete/', data=json.dumps({
+			'transfer_id': f'STOCKTAKE_BULK_{batch_id}_4899', 'branch': 'The Place', 'success': True,
+		}), content_type='application/json')
+		# An earlier fix (no recorded amount) already took the 2 off: 44 -> 42.
+		StockTransfer.objects.create(
+			transfer_id='STOCKTAKE_BULK_fix_4899', branch='The Place', product_id=4899, product_name='WILLARDS THINGZ 75G',
+			quantity=44, target_quantity=44, repair_of=f'STOCKTAKE_BULK_{batch_id}_4899',
+		)
+		self.client.post('/api/stock/transfers/complete/', data=json.dumps({
+			'transfer_id': 'STOCKTAKE_BULK_fix_4899', 'branch': 'The Place', 'success': True, 'branch_quantity': 42, 'movement_balance': 42,
+		}), content_type='application/json')
+		self.assertEqual(self.client.get(f'/api/stock/branch/stocktake-batches/{batch_id}/corrections/').json()['products'], [])
 
 	def test_adjustment_report_shows_why_a_product_failed(self):
 		ProductCatalog.objects.create(branch='BranchA', product_id=7001, product_name='Gone in Quantum', available_quantity=3)
@@ -1721,6 +1754,23 @@ class StockTransferTests(TestCase):
 		}), content_type='application/json')
 		product = ProductCatalog.objects.get(branch='BranchA', product_id=5576)
 		self.assertEqual((product.available_quantity, product.pos_movement_balance), (11, 11))
+
+	def test_fix_command_carries_what_the_adjustment_set_and_earlier_fixes(self):
+		StockTransfer.objects.create(
+			transfer_id='STOCKTAKE_BULK_aaa_5237', branch='Mini Market', product_id=5237, product_name='BAKERS INN BREAD 700G #B',
+			quantity=42, target_quantity=42, status='completed', before_branch_quantity=42, before_movement_balance=40,
+		)
+		StockTransfer.objects.create(
+			transfer_id='STOCKTAKE_BULK_bbb_5237', branch='Mini Market', product_id=5237, product_name='BAKERS INN BREAD 700G #B',
+			quantity=32, target_quantity=32, status='completed', repair_of='STOCKTAKE_BULK_aaa_5237',
+		)
+		StockTransfer.objects.create(
+			transfer_id='STOCKTAKE_BULK_ccc_5237', branch='Mini Market', product_id=5237, product_name='BAKERS INN BREAD 700G #B',
+			quantity=32, target_quantity=32, repair_of='STOCKTAKE_BULK_aaa_5237',
+		)
+		command = self.client.get('/api/stock/transfers/pending/?branch=Mini Market&limit=25&live=1').json()['pending_transfers'][0]
+		self.assertEqual(command['id'], 'STOCKTAKE_BULK_ccc_5237')
+		self.assertEqual((command['repair_target'], command['repair_drift'], command['repair_earlier']), ('42', '2', ['STOCKTAKE_BULK_bbb_5237']))
 
 	def test_branch_stocktake_all_requires_a_branch(self):
 		response = self.client.post(

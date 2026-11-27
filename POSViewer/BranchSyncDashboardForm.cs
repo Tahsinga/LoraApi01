@@ -1575,7 +1575,9 @@ public sealed class BranchSyncDashboardForm : Form
                 var undone = 0m;
                 if (!string.IsNullOrWhiteSpace(transfer.repair_of))
                 {
-                    undone = await GetSalesUndoneByAdjustmentAsync(connection, transaction, transfer, branchName);
+                    undone = decimal.TryParse(transfer.repair_amount, NumberStyles.Number, CultureInfo.InvariantCulture, out var approved)
+                        ? approved
+                        : await GetSalesUndoneByAdjustmentAsync(connection, transaction, transfer, branchName);
                 }
                 var liveTarget = Math.Max(0m, liveBalance - undone);
                 AddSyncLog(undone != 0m
@@ -1786,9 +1788,76 @@ public sealed class BranchSyncDashboardForm : Form
         return value is null or DBNull ? 0m : Convert.ToDecimal(value, CultureInfo.InvariantCulture);
     }
 
-    // What an adjustment queued before 1.49 put back: everything sold (minus anything received)
-    // for this product between the button press on the website and that adjustment's own line.
+    // What an adjustment queued before 1.49 wrongly put back, less what earlier fixes already took off.
+    // Best: the number it set minus what the branch really had just before its line in Quantum
+    // (the movement balance before that line plus the branch-minus-movement difference the website
+    // saw when it was queued). Without that difference: the sales between the button press and the line.
     private async Task<decimal> GetSalesUndoneByAdjustmentAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        StockTransfer transfer,
+        string branchName)
+    {
+        var earlier = (transfer.repair_earlier ?? new List<string>()).Where(id => !string.IsNullOrWhiteSpace(id)).ToList();
+        var earlierMarkers = earlier.Count == 0
+            ? "NULL"
+            : string.Join(", ", earlier.Select((_, index) => $"@earlier{index}"));
+        var balanceQuery = $@"
+            DECLARE @adjustmentEntry int = (
+                SELECT TOP (1) EntryNo FROM [dbo].[Movement]
+                WHERE OtherDetail = @marker AND ProductID = @productId AND coid = @coid
+                  AND UPPER(LTRIM(RTRIM(CAST(Branch AS nvarchar(100))))) = UPPER(LTRIM(RTRIM(@branch)))
+                ORDER BY EntryNo);
+            SELECT
+                @adjustmentEntry AS AdjustmentEntry,
+                (SELECT COALESCE(SUM(CASE WHEN IsStockIn = 1 THEN COALESCE(Quantity, 0) ELSE -COALESCE(Quantity, 0) END), 0)
+                    FROM [dbo].[Movement]
+                    WHERE ProductID = @productId AND coid = @coid AND branch = @branch
+                      AND TranCode <> 4 AND EntryNo < @adjustmentEntry) AS MovementBefore,
+                (SELECT COALESCE(SUM(CASE WHEN IsStockIn = 1 THEN -COALESCE(Quantity, 0) ELSE COALESCE(Quantity, 0) END), 0)
+                    FROM [dbo].[Movement]
+                    WHERE ProductID = @productId AND coid = @coid AND branch = @branch
+                      AND OtherDetail IN ({earlierMarkers})) AS AlreadyTakenOff;";
+        decimal? movementBefore = null;
+        var alreadyTakenOff = 0m;
+        using (var balanceCommand = new SqlCommand(balanceQuery, connection, transaction) { CommandTimeout = BranchSqlCommandTimeoutSeconds })
+        {
+            balanceCommand.Parameters.AddWithValue("@marker", $"PV:{transfer.repair_of}");
+            balanceCommand.Parameters.AddWithValue("@productId", transfer.product_id);
+            balanceCommand.Parameters.AddWithValue("@coid", BranchCompanyId);
+            balanceCommand.Parameters.AddWithValue("@branch", branchName);
+            for (var index = 0; index < earlier.Count; index++)
+            {
+                balanceCommand.Parameters.AddWithValue($"@earlier{index}", $"PV:{earlier[index]}");
+            }
+            using var reader = await balanceCommand.ExecuteReaderAsync();
+            if (await reader.ReadAsync())
+            {
+                if (reader["AdjustmentEntry"] is null or DBNull)
+                {
+                    AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Fix for {transfer.product_name}: earlier adjustment not found in Quantum; nothing taken off.");
+                    return 0m;
+                }
+                movementBefore = Convert.ToDecimal(reader["MovementBefore"], CultureInfo.InvariantCulture);
+                alreadyTakenOff = Convert.ToDecimal(reader["AlreadyTakenOff"], CultureInfo.InvariantCulture);
+            }
+        }
+
+        if (movementBefore.HasValue
+            && decimal.TryParse(transfer.repair_target, NumberStyles.Number, CultureInfo.InvariantCulture, out var adjustedTo)
+            && decimal.TryParse(transfer.repair_drift, NumberStyles.Number, CultureInfo.InvariantCulture, out var drift))
+        {
+            var addedBack = adjustedTo - (movementBefore.Value + drift);
+            var remaining = Math.Round(addedBack - alreadyTakenOff, 0, MidpointRounding.AwayFromZero);
+            AddSyncLog($"[{DateTime.Now:HH:mm:ss}] [STOCK TAKE] Fix for {transfer.product_name}: adjustment set {adjustedTo}, branch had {movementBefore.Value + drift}; added back {addedBack}, already taken off {alreadyTakenOff}.");
+            return remaining;
+        }
+
+        var bySales = await GetSalesSinceAdjustmentPressAsync(connection, transaction, transfer, branchName);
+        return Math.Round(bySales - alreadyTakenOff, 0, MidpointRounding.AwayFromZero);
+    }
+
+    private async Task<decimal> GetSalesSinceAdjustmentPressAsync(
         SqlConnection connection,
         SqlTransaction transaction,
         StockTransfer transfer,
@@ -2512,6 +2581,13 @@ public sealed class BranchSyncDashboardForm : Form
         // Fix command: take off what the earlier adjustment repair_of undid since repair_since.
         public string? repair_of { get; set; }
         public string? repair_since { get; set; }
+        // The number the earlier adjustment set, the branch-minus-movement difference when it was
+        // queued, and earlier fixes for it (already taken off).
+        public string? repair_target { get; set; }
+        public string? repair_drift { get; set; }
+        public List<string>? repair_earlier { get; set; }
+        // The correction worked out on the website and approved there: units to take off.
+        public string? repair_amount { get; set; }
     }
 
     private sealed class BranchPriceUpdate
