@@ -83,6 +83,20 @@
     .transfer-panel .branch-load-actions #adjustment-reports-button:hover { color:#fff; background:#3566c8; }
     .adjustment-report-dialog { width:min(1040px, calc(100% - 28px)); max-height:90vh; padding:22px; color:var(--ink); background:var(--white); border:1px solid var(--line); border-radius:8px; box-shadow:0 18px 60px rgba(0,0,0,.24); }
     .adjustment-report-dialog::backdrop { background:rgba(15,29,28,.58); }
+    .set-stock-dialog { width:min(440px, calc(100% - 28px)); padding:22px; color:var(--ink); background:var(--white); border:1px solid var(--line); border-radius:8px; box-shadow:0 18px 60px rgba(0,0,0,.24); }
+    .set-stock-dialog::backdrop { background:rgba(15,29,28,.58); }
+    .set-stock-dialog h2 { margin:0 0 4px; }
+    .set-stock-dialog form { display:grid; gap:12px; }
+    .set-stock-dialog .sub { margin:0; }
+    .set-stock-now { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .set-stock-now div { padding:9px 10px; background:#f3f7f4; border:1px solid var(--line); border-radius:5px; }
+    .set-stock-now span { display:block; color:var(--muted); font:700 10px Arial,sans-serif; text-transform:uppercase; }
+    .set-stock-now strong { display:block; margin-top:4px; font:600 18px Georgia,serif; }
+    .set-stock-note { margin:0; color:var(--muted); font:11px/1.5 Arial,sans-serif; }
+    .set-stock-status { min-height:16px; margin:0; color:#a33229; font:700 11px Arial,sans-serif; }
+    .set-stock-actions { display:flex; justify-content:flex-end; gap:8px; }
+    .set-stock-dialog button { width:auto; grid-column:auto; margin:0; padding:10px 13px; }
+    .stock-table .set-stock-button { color:#1f3f86; background:#e9effd; }
     .adjustment-report-dialog h2, .adjustment-report-dialog p { margin:0; }
     .adjustment-report-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:14px; }
     .adjustment-report-controls { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) auto; align-items:end; gap:10px; margin-bottom:12px; }
@@ -101,6 +115,8 @@
     .adjustment-report-table td.now { font-weight:700; }
     .adjustment-report-table td.changed { color:#1f3f86; background:#eef3ff; }
     .adjustment-report-table td.waiting { color:var(--muted); font-style:italic; font-weight:400; }
+    .adjustment-report-table td.waiting.failed { color:#a33229; font-style:normal; font-weight:700; }
+    .adjustment-report-table small.report-error { color:#a33229; }
     .adjustment-report-table small { display:block; margin-top:2px; color:var(--muted); font-size:10px; }
     .adjustment-report-actions { display:flex; justify-content:flex-end; margin-top:14px; }
     .adjustment-fix { display:grid; gap:10px; margin:0 0 12px; padding:12px 14px; background:#fff8e6; border:1px solid #f0d58a; border-radius:5px; font:12px/1.5 Arial,sans-serif; }
@@ -585,6 +601,18 @@
       <div id="stocktake-product-list" class="stocktake-product-list" role="list"></div>
       <div class="branch-stocktake-actions"><button id="stocktake-cancel-all" type="button">Cancel all pending</button><button id="stocktake-close" class="branch-stocktake-close" type="button">Close</button></div>
     </dialog>
+    <dialog id="set-stock-dialog" class="set-stock-dialog" aria-labelledby="set-stock-title">
+      <form id="set-stock-form">
+        <h2 id="set-stock-title">Set stock</h2>
+        <p id="set-stock-product" class="sub"></p>
+        <div class="set-stock-now"><div><span>Branch balance</span><strong id="set-stock-branch">-</strong></div><div><span>Movement balance</span><strong id="set-stock-movement">-</strong></div></div>
+        <label>Counted quantity<input id="set-stock-quantity" type="number" min="0" step="1" required></label>
+        <label>Your PIN<input id="set-stock-pin" type="password" autocomplete="current-password" required></label>
+        <p class="set-stock-note">The branch sets both its stock and its movement in Quantum to exactly this number on its next sync. Sales made before that are not counted, so enter what is on the shelf now.</p>
+        <p id="set-stock-status" class="set-stock-status" role="status" aria-live="polite"></p>
+        <div class="set-stock-actions"><button id="set-stock-cancel" type="button" class="branch-stocktake-close">Cancel</button><button id="set-stock-submit" type="submit">Set stock</button></div>
+      </form>
+    </dialog>
     <dialog id="product-movement-dialog" class="product-movement-dialog" aria-labelledby="product-movement-title">
       <div class="product-movement-header"><div><h2 id="product-movement-title">Product movements</h2><p id="product-movement-subtitle" class="sub"></p></div><button id="product-movement-close" class="product-movement-close" type="button">Close</button></div>
       <form id="product-movement-filters" class="product-movement-filters">
@@ -895,7 +923,7 @@
       products = [...products].sort((a, b) => Number(isCostAbovePrice(b)) - Number(isCostAbovePrice(a)));
     }
     branchProducts.innerHTML = products.length
-      ? `<table class="stock-table"><thead><tr><th>Product</th><th>Cost price</th><th>Selling price</th><th>Tax rate</th><th>Branch<br>balance</th><th>Movement<br>balance</th><th>Sent</th><th>Sold</th><th>Actions</th></tr></thead><tbody>${products.map(product => { const productId = escapeHtml(product.product_id); const isNegative = Number(product.available_quantity) < 0; const isNegativeMovement = Number(product.movement_balance) < 0; const movementMismatch = Number(product.available_quantity) !== Number(product.movement_balance); const duplicateRow = highlightDuplicates && isDuplicateName(product); const lowPriceRow = highlightLowPrices && isLowPrice(product); const costAbove = isCostAbovePrice(product); const costAboveRow = costAbove; const zeroCostRow = highlightZeroCost && isZeroCost(product); const movedRow = highlightMoved && movedOnDate(product); return `<tr class="${isNegative || isNegativeMovement ? 'negative-stock' : ''}${movementMismatch ? ' movement-mismatch' : ''}${duplicateRow ? ' duplicate-name' : ''}${lowPriceRow ? ' low-price' : ''}${costAboveRow ? ' cost-above' : ''}${zeroCostRow ? ' zero-cost' : ''}${movedRow ? ' moved-on-date' : ''}" data-product-id="${productId}"><td class="product-name">${escapeHtml(product.product_name)}${duplicateRow ? '<span class="highlight-label duplicate">Same name</span>' : ''}${lowPriceRow ? '<span class="highlight-label low-price">Low price</span>' : ''}${costAboveRow ? '<span class="highlight-label cost-above">Cost above price</span>' : ''}${zeroCostRow ? '<span class="highlight-label zero-cost">Zero cost</span>' : ''}${movedRow ? `<span class="highlight-label moved">${escapeHtml(dayMovements(product).map(type => dayMovementLabels[type] || type).join(', '))}</span>` : ''}</td><td${costAbove ? ' class="cost-above-price" title="Cost price is more than the selling price"' : ''}>${escapeHtml(product.cost_price ?? '')}</td><td>${escapeHtml(product.selling_price)}</td><td><form class="tax-rate-form" data-product-tax-rate="${productId}"><input type="number" min="0" max="100" step="0.01" value="${escapeHtml(product.tax_rate ?? 0)}" aria-label="Tax rate percentage for ${escapeHtml(product.product_name)}"><button type="submit">Save tax</button></form></td><td><strong>${escapeHtml(product.available_quantity)}</strong>${isNegative ? '<span class="negative-stock-label">Negative stock</span>' : ''}</td><td><strong>${escapeHtml(product.movement_balance)}</strong>${isNegativeMovement ? '<span class="negative-stock-label">Negative movement</span>' : ''}</td><td>${escapeHtml(product.sent_quantity)}</td><td>${escapeHtml(product.sold_quantity)}</td><td><button type="button" data-product-rename="${productId}">Rename</button><button type="button" data-product-movement="${productId}">Movement</button><button type="button" data-product-select="${productId}">Select</button><button type="button" class="delete-product-button" data-product-delete="${productId}" aria-label="Delete ${escapeHtml(product.product_name)} from all branches">Delete from all branches</button></td></tr>`; }).join('')}</tbody></table>`
+      ? `<table class="stock-table"><thead><tr><th>Product</th><th>Cost price</th><th>Selling price</th><th>Tax rate</th><th>Branch<br>balance</th><th>Movement<br>balance</th><th>Sent</th><th>Sold</th><th>Actions</th></tr></thead><tbody>${products.map(product => { const productId = escapeHtml(product.product_id); const isNegative = Number(product.available_quantity) < 0; const isNegativeMovement = Number(product.movement_balance) < 0; const movementMismatch = Number(product.available_quantity) !== Number(product.movement_balance); const duplicateRow = highlightDuplicates && isDuplicateName(product); const lowPriceRow = highlightLowPrices && isLowPrice(product); const costAbove = isCostAbovePrice(product); const costAboveRow = costAbove; const zeroCostRow = highlightZeroCost && isZeroCost(product); const movedRow = highlightMoved && movedOnDate(product); return `<tr class="${isNegative || isNegativeMovement ? 'negative-stock' : ''}${movementMismatch ? ' movement-mismatch' : ''}${duplicateRow ? ' duplicate-name' : ''}${lowPriceRow ? ' low-price' : ''}${costAboveRow ? ' cost-above' : ''}${zeroCostRow ? ' zero-cost' : ''}${movedRow ? ' moved-on-date' : ''}" data-product-id="${productId}"><td class="product-name">${escapeHtml(product.product_name)}${duplicateRow ? '<span class="highlight-label duplicate">Same name</span>' : ''}${lowPriceRow ? '<span class="highlight-label low-price">Low price</span>' : ''}${costAboveRow ? '<span class="highlight-label cost-above">Cost above price</span>' : ''}${zeroCostRow ? '<span class="highlight-label zero-cost">Zero cost</span>' : ''}${movedRow ? `<span class="highlight-label moved">${escapeHtml(dayMovements(product).map(type => dayMovementLabels[type] || type).join(', '))}</span>` : ''}</td><td${costAbove ? ' class="cost-above-price" title="Cost price is more than the selling price"' : ''}>${escapeHtml(product.cost_price ?? '')}</td><td>${escapeHtml(product.selling_price)}</td><td><form class="tax-rate-form" data-product-tax-rate="${productId}"><input type="number" min="0" max="100" step="0.01" value="${escapeHtml(product.tax_rate ?? 0)}" aria-label="Tax rate percentage for ${escapeHtml(product.product_name)}"><button type="submit">Save tax</button></form></td><td><strong>${escapeHtml(product.available_quantity)}</strong>${isNegative ? '<span class="negative-stock-label">Negative stock</span>' : ''}</td><td><strong>${escapeHtml(product.movement_balance)}</strong>${isNegativeMovement ? '<span class="negative-stock-label">Negative movement</span>' : ''}</td><td>${escapeHtml(product.sent_quantity)}</td><td>${escapeHtml(product.sold_quantity)}</td><td><button type="button" data-product-rename="${productId}">Rename</button><button type="button" data-product-movement="${productId}">Movement</button><button type="button" class="set-stock-button" data-product-set-stock="${productId}">Set stock</button><button type="button" data-product-select="${productId}">Select</button><button type="button" class="delete-product-button" data-product-delete="${productId}" aria-label="Delete ${escapeHtml(product.product_name)} from all branches">Delete from all branches</button></td></tr>`; }).join('')}</tbody></table>`
       : '<p class="empty">No products match your search.</p>';
     if (highlightMoved && products.length) addMovedSectionRows(products);
   }
@@ -1087,11 +1115,13 @@
   function reportCell(value, className) {
     return value == null ? `<td class="num ${className} waiting">-</td>` : `<td class="num ${className}">${escapeHtml(Number(value).toLocaleString())}</td>`;
   }
-  function reportNowCell(before, after, status, first) {
+  function reportNowCell(before, after, status, first, row = {}) {
     const firstClass = first ? ' first' : '';
     if (after == null) {
-      const label = status === 'completed' ? 'Not reported' : status === 'failed' ? 'Failed' : status === 'cancelled' ? 'Cancelled' : 'Waiting for branch';
-      return `<td class="num now waiting${firstClass}">${escapeHtml(label)}</td>`;
+      let label = status === 'completed' ? 'Not reported' : status === 'failed' ? 'Failed' : status === 'cancelled' ? 'Cancelled' : 'Waiting for branch';
+      if (status === 'pending' && row.error) label = `Retrying ${row.retry_after ? new Intl.DateTimeFormat(undefined, {timeStyle:'short'}).format(new Date(row.retry_after)) : 'soon'}`;
+      const failed = status === 'failed' || (status === 'pending' && row.error);
+      return `<td class="num now waiting${failed ? ' failed' : ''}${firstClass}"${row.error ? ` title="${escapeHtml(row.error)}"` : ''}>${escapeHtml(label)}</td>`;
     }
     const changed = before != null && Number(before) !== Number(after);
     return `<td class="num now${changed ? ' changed' : ''}${firstClass}">${escapeHtml(Number(after).toLocaleString())}</td>`;
@@ -1105,12 +1135,12 @@
     const query = adjustmentReportFilter.value.trim().toLowerCase();
     let rows = adjustmentReportRows.filter(row => [row.product_name, row.product_id].some(value => String(value ?? '').toLowerCase().includes(query)));
     if (adjustmentReportChanged.checked) rows = rows.filter(rowChanged);
-    const renderKey = `${query}|${adjustmentReportChanged.checked}|${rows.map(row => `${row.transfer_id}:${row.status}:${row.after_branch_quantity}:${row.after_movement_balance}`).join('|')}`;
+    const renderKey = `${query}|${adjustmentReportChanged.checked}|${rows.map(row => `${row.transfer_id}:${row.status}:${row.after_branch_quantity}:${row.after_movement_balance}:${row.error}:${row.retry_after}`).join('|')}`;
     if (!force && renderKey === adjustmentReportRenderKey) return;
     adjustmentReportRenderKey = renderKey;
     const scrollTop = adjustmentReportTable.scrollTop;
     adjustmentReportTable.innerHTML = rows.length
-      ? `<table class="adjustment-report-table"><thead><tr><th rowspan="2">Product</th><th class="group" colspan="2">Branch balance</th><th class="group" colspan="2">Movement balance</th></tr><tr><th class="group">Was</th><th>Now</th><th class="group">Was</th><th>Now</th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.product_name)}${row.is_fix ? '<span class="fix-tag">Fix</span>' : ''}<small>ID ${escapeHtml(row.product_id)}${row.completed_at ? ` · synced ${escapeHtml(reportDateTime(row.completed_at))}` : ''}</small></td>${reportCell(reportNumber(row.before_branch_quantity), 'was first')}${reportNowCell(reportNumber(row.before_branch_quantity), reportNumber(row.after_branch_quantity), row.status, false)}${reportCell(reportNumber(row.before_movement_balance), 'was first')}${reportNowCell(reportNumber(row.before_movement_balance), reportNumber(row.after_movement_balance), row.status, false)}</tr>`).join('')}</tbody></table>`
+      ? `<table class="adjustment-report-table"><thead><tr><th rowspan="2">Product</th><th class="group" colspan="2">Branch balance</th><th class="group" colspan="2">Movement balance</th></tr><tr><th class="group">Was</th><th>Now</th><th class="group">Was</th><th>Now</th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.product_name)}${row.is_fix ? '<span class="fix-tag">Fix</span>' : ''}<small>ID ${escapeHtml(row.product_id)}${row.completed_at && row.status === 'completed' ? ` · synced ${escapeHtml(reportDateTime(row.completed_at))}` : ''}</small>${row.error ? `<small class="report-error">${escapeHtml(row.error)}</small>` : ''}</td>${reportCell(reportNumber(row.before_branch_quantity), 'was first')}${reportNowCell(reportNumber(row.before_branch_quantity), reportNumber(row.after_branch_quantity), row.status, false, row)}${reportCell(reportNumber(row.before_movement_balance), 'was first')}${reportNowCell(reportNumber(row.before_movement_balance), reportNumber(row.after_movement_balance), row.status, false, row)}</tr>`).join('')}</tbody></table>`
       : `<p class="empty">${adjustmentReportRows.length ? 'No products match.' : 'No products in this adjustment.'}</p>`;
     adjustmentReportTable.scrollTop = scrollTop;
   }
@@ -1122,7 +1152,9 @@
     const synced = adjustmentReportRows.filter(row => row.after_branch_quantity != null || row.after_movement_balance != null).length;
     const changed = adjustmentReportRows.filter(rowChanged).length;
     const running = (counts.pending || 0) + (counts.in_progress || 0) > 0;
-    adjustmentReportSummary.textContent = `${adjustmentReportRows.length.toLocaleString()} products · ${(counts.completed || 0).toLocaleString()} done · ${synced.toLocaleString()} synced back from the branch · ${changed.toLocaleString()} changed · started by ${data.created_by || 'unknown'} on ${reportDateTime(data.started)}.${running ? ' Updating every 5 seconds.' : ''}`;
+    const retrying = adjustmentReportRows.filter(row => row.status === 'pending' && row.error).length;
+    const problems = [counts.failed ? `${counts.failed.toLocaleString()} failed` : '', retrying ? `${retrying.toLocaleString()} retrying` : ''].filter(Boolean).join(' · ');
+    adjustmentReportSummary.textContent = `${adjustmentReportRows.length.toLocaleString()} products · ${(counts.completed || 0).toLocaleString()} done${problems ? ` · ${problems}` : ''} · ${synced.toLocaleString()} synced back from the branch · ${changed.toLocaleString()} changed · started by ${data.created_by || 'unknown'} on ${reportDateTime(data.started)}.${running ? ' Updating every 5 seconds.' : ''}`;
     const option = [...adjustmentReportDate.options].find(item => item.value === data.batch_id);
     const batch = adjustmentReportBatches.find(item => item.batch_id === data.batch_id);
     if (option && batch) {
@@ -1549,12 +1581,59 @@
       submitButton.disabled = false;
     }
   });
+  const setStockDialog = document.querySelector('#set-stock-dialog');
+  let setStockProduct = null;
+  function openSetStock(product) {
+    setStockProduct = {product, branch: selectedBranch.value};
+    document.querySelector('#set-stock-product').textContent = `${product.product_name} · ID ${product.product_id} · ${selectedBranch.value}`;
+    document.querySelector('#set-stock-branch').textContent = product.available_quantity ?? '-';
+    document.querySelector('#set-stock-movement').textContent = product.movement_balance ?? '-';
+    document.querySelector('#set-stock-quantity').value = '';
+    document.querySelector('#set-stock-pin').value = '';
+    document.querySelector('#set-stock-status').textContent = '';
+    setStockDialog.showModal();
+    document.querySelector('#set-stock-quantity').focus();
+  }
+  document.querySelector('#set-stock-cancel').addEventListener('click', () => setStockDialog.close());
+  document.querySelector('#set-stock-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!setStockProduct) return;
+    const status = document.querySelector('#set-stock-status');
+    const submit = document.querySelector('#set-stock-submit');
+    const pin = document.querySelector('#set-stock-pin');
+    const quantity = document.querySelector('#set-stock-quantity').value;
+    submit.disabled = true;
+    status.textContent = '';
+    try {
+      const response = await fetch('/api/stock/branch/stocktake-one/', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({branch: setStockProduct.branch, product_id: setStockProduct.product.product_id, quantity, pin: pin.value}),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'The stock could not be set.');
+      setStockDialog.close();
+      productCatalogStatus.textContent = `${setStockProduct.product.product_name} will be set to ${data.quantity} at ${setStockProduct.branch} on the branch's next sync.`;
+    } catch (error) {
+      status.textContent = error.message;
+      pin.value = '';
+      pin.focus();
+    } finally {
+      submit.disabled = false;
+    }
+  });
   branchProducts.addEventListener('click', event => {
     if (branchProductsLoading) return;
     const renameButton = event.target.closest('[data-product-rename]');
     if (renameButton) {
       const product = branchCatalogProducts.find(item => String(item.product_id) === renameButton.dataset.productRename);
       if (product) renameProduct(product, renameButton);
+      return;
+    }
+    const setStockButton = event.target.closest('[data-product-set-stock]');
+    if (setStockButton) {
+      const product = branchCatalogProducts.find(item => String(item.product_id) === setStockButton.dataset.productSetStock);
+      if (product && selectedBranch.value) openSetStock(product);
       return;
     }
     const movementButton = event.target.closest('[data-product-movement]');

@@ -336,6 +336,13 @@ public sealed class BranchSyncDashboardForm : Form
                     if (!await ApplyStockTransferAsync(transfer, client, branchName))
                     {
                         transferQueueFailed = true;
+                        // Movement adjustments are independent of each other: one that fails is
+                        // retried later by the website, so carry on with the rest instead of
+                        // stalling the whole queue.
+                        if (!string.IsNullOrWhiteSpace(transfer.target_quantity))
+                        {
+                            continue;
+                        }
                         break;
                     }
                 }

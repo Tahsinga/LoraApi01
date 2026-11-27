@@ -104,6 +104,8 @@ class StockTransfer(models.Model):
 	# Set on a fix command: the earlier adjustment whose undone sales this one takes back off.
 	# Only POSViewer 1.49+ (which asks with live=1) receives these.
 	repair_of = models.CharField(max_length=255, blank=True, default='')
+	# Why the branch could not apply it the last time it tried (cleared once it succeeds).
+	last_error = models.CharField(max_length=500, blank=True, default='')
 
 	class Meta:
 		ordering = ['created_at']

@@ -1688,6 +1688,40 @@ class StockTransferTests(TestCase):
 			content_type='application/json',
 		).status_code, 403)
 
+	def test_adjustment_report_shows_why_a_product_failed(self):
+		ProductCatalog.objects.create(branch='BranchA', product_id=7001, product_name='Gone in Quantum', available_quantity=3)
+		batch_id = self.client.post('/api/stock/branch/stocktake-all/', data=json.dumps({'branch': 'BranchA', 'pin': 'TransferPass4182!'}), content_type='application/json').json()['batch_id']
+		self.client.post('/api/stock/transfers/complete/', data=json.dumps({
+			'transfer_id': f'STOCKTAKE_BULK_{batch_id}_7001', 'branch': 'BranchA', 'success': False,
+			'error': 'Product 7001 was not found for company 412.',
+		}), content_type='application/json')
+		row = self.client.get(f'/api/stock/branch/stocktake-batches/{batch_id}/').json()['products'][0]
+		self.assertEqual(row['error'], 'Product 7001 was not found for company 412.')
+		self.assertIsNotNone(row['retry_after'])
+		self.assertEqual(row['status'], 'pending')
+
+	def test_set_stock_sets_one_product_to_the_counted_quantity(self):
+		ProductCatalog.objects.create(branch='BranchA', product_id=5576, product_name='WILLARDS CORNFLAKES 500G', available_quantity=12, pos_movement_balance=12)
+		StockTransfer.objects.create(
+			transfer_id='STOCKTAKE_BULK_old_5576', branch='BranchA', product_id=5576,
+			product_name='WILLARDS CORNFLAKES 500G', quantity=12, target_quantity=12,
+		)
+		post = lambda **body: self.client.post('/api/stock/branch/stocktake-one/', data=json.dumps({
+			'branch': 'BranchA', 'product_id': 5576, 'quantity': 11, 'pin': 'TransferPass4182!', **body,
+		}), content_type='application/json')
+		self.assertEqual(post(pin='wrong').status_code, 403)
+		self.assertEqual(post(quantity=-1).status_code, 400)
+		response = post()
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(StockTransfer.objects.get(transfer_id='STOCKTAKE_BULK_old_5576').status, 'cancelled')
+		command = self.client.get('/api/stock/transfers/pending/?branch=BranchA&limit=25&live=1').json()['pending_transfers'][0]
+		self.assertEqual((command['target_quantity'], command['live_balance']), ('11', False))
+		self.client.post('/api/stock/transfers/complete/', data=json.dumps({
+			'transfer_id': command['id'], 'branch': 'BranchA', 'success': True, 'branch_quantity': 11, 'movement_balance': 11,
+		}), content_type='application/json')
+		product = ProductCatalog.objects.get(branch='BranchA', product_id=5576)
+		self.assertEqual((product.available_quantity, product.pos_movement_balance), (11, 11))
+
 	def test_branch_stocktake_all_requires_a_branch(self):
 		response = self.client.post(
 			'/api/stock/branch/stocktake-all/',

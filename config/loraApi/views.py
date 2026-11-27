@@ -1357,6 +1357,65 @@ def repair_stocktake_branch_batch(request, batch_id):
 
 @login_required(login_url='/login/')
 @csrf_exempt
+@retry_on_database_lock
+def stocktake_branch_product(request):
+    """Set one product at a branch to a counted quantity (stock and movement in Quantum)."""
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Use POST method'}, status=405)
+    try:
+        payload = json.loads(request.body or '{}')
+        branch = str(payload.get('branch', '')).strip()
+        product_id = int(payload.get('product_id'))
+        quantity = Decimal(str(payload.get('quantity')))
+        pin = str(payload.get('pin', '')).strip()
+    except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
+        return JsonResponse({'status': 'error', 'message': 'Branch, product and a counted quantity are required.'}, status=400)
+    if not branch or quantity < 0 or quantity != quantity.to_integral_value():
+        return JsonResponse({'status': 'error', 'message': 'Enter a whole quantity of 0 or more.'}, status=400)
+    if not pin or not request.user.check_password(pin):
+        return JsonResponse({'status': 'error', 'message': 'Enter the correct PIN for your signed-in account.'}, status=403)
+    product = ProductCatalog.objects.filter(branch__iexact=branch, product_id=product_id).first()
+    if product is None:
+        return JsonResponse({'status': 'error', 'message': 'That product is not at this branch.'}, status=404)
+    with transaction.atomic():
+        busy = StockTransfer.objects.filter(
+            branch__iexact=branch,
+            product_id=product_id,
+            target_quantity__isnull=False,
+            status='processing',
+        ).exists() or StockTransfer.objects.filter(
+            branch__iexact=branch,
+            product_id=product_id,
+            target_quantity__isnull=False,
+            status='pending',
+            claimed_at__isnull=False,
+        ).exists()
+        if busy:
+            return JsonResponse({'status': 'error', 'message': 'The branch is applying an adjustment for this product right now. Try again in a minute.'}, status=409)
+        # This count replaces any adjustment for the product the branch has not picked up yet.
+        StockTransfer.objects.filter(
+            branch__iexact=branch,
+            product_id=product_id,
+            target_quantity__isnull=False,
+            status='pending',
+            claimed_at__isnull=True,
+        ).update(status='cancelled')
+        transfer = StockTransfer.objects.create(
+            transfer_id=f'STOCKTAKE_ONE_{uuid.uuid4().hex}_{product_id}',
+            branch=product.branch,
+            product_id=product_id,
+            product_name=product.product_name,
+            quantity=quantity,
+            target_quantity=quantity,
+            created_by=request.user.get_username(),
+            before_branch_quantity=product.available_quantity,
+            before_movement_balance=product.pos_movement_balance,
+        )
+    return JsonResponse({'status': 'ok', 'transfer_id': transfer.transfer_id, 'quantity': str(quantity)})
+
+
+@login_required(login_url='/login/')
+@csrf_exempt
 def stocktake_branch_batch(request, batch_id):
     if request.method not in {'GET', 'POST'}:
         return JsonResponse({'status': 'error', 'message': 'Use GET or POST method'}, status=405)
@@ -1421,6 +1480,8 @@ def stocktake_branch_batch(request, batch_id):
             'after_movement_balance': report_balance(transfer.after_movement_balance),
             'completed_at': transfer.completed_at.isoformat() if transfer.completed_at else None,
             'is_fix': bool(transfer.repair_of),
+            'error': transfer.last_error if transfer.status != 'completed' else '',
+            'retry_after': transfer.retry_after.isoformat() if transfer.retry_after and transfer.status == 'pending' else None,
         })
 
     started = min((transfer.created_at for transfer in transfers), default=None)
@@ -4295,18 +4356,19 @@ def complete_stock_transfer(request):
                 ])
     elif transfer.status != 'completed':
         transfer.retry_count += 1
+        transfer.last_error = str(payload.get('error') or 'The branch could not apply it.').strip()[:500]
         if transfer.retry_count >= 6:
             transfer.status = 'failed'
             transfer.claimed_at = None
             transfer.retry_after = None
             transfer.completed_at = transfer.completed_at or timezone.now()
-            transfer.save(update_fields=['status', 'claimed_at', 'retry_count', 'retry_after', 'completed_at'])
+            transfer.save(update_fields=['status', 'claimed_at', 'retry_count', 'retry_after', 'completed_at', 'last_error'])
         else:
             retry_minutes = min(60, 5 * (2 ** min(transfer.retry_count - 1, 4)))
             transfer.status = 'pending'
             transfer.claimed_at = None
             transfer.retry_after = timezone.now() + timedelta(minutes=retry_minutes)
-            transfer.save(update_fields=['status', 'claimed_at', 'retry_count', 'retry_after'])
+            transfer.save(update_fields=['status', 'claimed_at', 'retry_count', 'retry_after', 'last_error'])
 
     return JsonResponse({'status': 'ok', 'transfer': transfer_payload(transfer)})
 
