@@ -1497,6 +1497,33 @@ class StockTransferTests(TestCase):
 		self.assertEqual(adjustment['adjusted_by'], 'admin')
 		self.assertEqual(payload['current_balances'], {'1500': '20'})
 
+	@override_settings(WHATSAPP_STOCK_API_TOKEN='test-whatsapp-token', WHATSAPP_STOCK_TIME_ZONE='UTC')
+	def test_whatsapp_received_report_shows_stock_take_without_receipt(self):
+		ProductCatalog.objects.create(branch='BranchA', product_id=4607, product_name='DELTA PET 440ML', available_quantity=22)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=4607, product_name='DELTA PET 440ML',
+			movement_type='maintained', quantity=69, source='pos_stock_snapshot',
+		)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=4607, product_name='DELTA PET 440ML',
+			movement_type='sold', quantity=1, source='Sold',
+		)
+		StockMovement.objects.create(
+			branch='BranchA', product_id=4607, product_name='DELTA PET 440ML',
+			movement_type='stocktake', quantity=31, source='Anesu (stock take)',
+		)
+
+		payload = self.client.get(
+			'/api/whatsapp/stock/?action=received&branch=BranchA',
+			HTTP_X_WHATSAPP_TOKEN='test-whatsapp-token',
+		).json()
+		self.assertEqual(payload['receipts'], [])
+		self.assertEqual(len(payload['adjustments']), 1)
+		adjustment = payload['adjustments'][0]
+		self.assertEqual((adjustment['from_quantity'], adjustment['to_quantity'], adjustment['change']), ('68', '31', '-37'))
+		self.assertEqual(adjustment['adjusted_by'], 'Anesu')
+		self.assertEqual(payload['current_balances'], {'4607': '22'})
+
 	@override_settings(WHATSAPP_STOCK_API_TOKEN='test-whatsapp-token')
 	def test_whatsapp_stock_lookup_rejects_unknown_action_and_invalid_date(self):
 		unknown_action = self.client.get(

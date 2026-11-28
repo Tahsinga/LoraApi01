@@ -2303,39 +2303,32 @@ def whatsapp_stock_lookup(request):
             created_at__lt=day_end,
         ).order_by('created_at', 'product_name')
         receipts = list(receipts)
-        first_received = {}
-        for receipt in receipts:
-            first_received.setdefault(receipt.product_id, receipt.created_at)
-        product_ids = list(first_received)
 
-        # Stock takes done the same day after a product was received (e.g. to undo stock sent by
-        # mistake): what the balance was just before, what it was set to, and the change.
+        # Every stock take done at the branch that day (e.g. to undo stock sent by mistake): the
+        # balance just before, what it was set to, and the change. Unchanged products are left out.
         adjustments = []
-        if product_ids:
-            stock_take_rows = StockMovement.objects.filter(
-                branch__iexact=branch,
-                product_id__in=product_ids,
-                movement_type__in=['stocktake', 'adjusted'],
-                created_at__gte=day_start,
-                created_at__lt=day_end,
-            ).exclude(source='pos_stock_snapshot').order_by('created_at', 'id')
-            for row in stock_take_rows:
-                if row.created_at < first_received[row.product_id]:
-                    continue
-                before = web_movement_balance_before(row.branch, row.product_id, row)
-                after = Decimal(str(row.quantity))
-                if before is not None and before == after:
-                    continue
-                adjustments.append({
-                    'product_id': row.product_id,
-                    'product_name': row.product_name,
-                    'from_quantity': str(before) if before is not None else None,
-                    'to_quantity': str(after),
-                    'change': str(after - before) if before is not None else None,
-                    'adjusted_by': row.source.removesuffix(' (stock take)').strip() or 'System',
-                    'adjusted_at': row.created_at.astimezone(stock_timezone).isoformat(),
-                })
+        stock_take_rows = StockMovement.objects.filter(
+            branch__iexact=branch,
+            movement_type__in=['stocktake', 'adjusted'],
+            created_at__gte=day_start,
+            created_at__lt=day_end,
+        ).exclude(source='pos_stock_snapshot').order_by('created_at', 'id')
+        for row in stock_take_rows:
+            before = web_movement_balance_before(row.branch, row.product_id, row)
+            after = Decimal(str(row.quantity))
+            if before is not None and before == after:
+                continue
+            adjustments.append({
+                'product_id': row.product_id,
+                'product_name': row.product_name,
+                'from_quantity': str(before) if before is not None else None,
+                'to_quantity': str(after),
+                'change': str(after - before) if before is not None else None,
+                'adjusted_by': row.source.removesuffix(' (stock take)').strip() or 'System',
+                'adjusted_at': row.created_at.astimezone(stock_timezone).isoformat(),
+            })
 
+        product_ids = {receipt.product_id for receipt in receipts} | {item['product_id'] for item in adjustments}
         balances = {
             str(product_id): str(quantity)
             for product_id, quantity in ProductCatalog.objects.filter(
