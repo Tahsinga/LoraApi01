@@ -470,6 +470,7 @@ def stock_summary_payload(product, branch):
         product_id=product.product_id,
         branch__iexact=branch,
         status__in=['pending', 'processing', 'completed'],
+        target_quantity__isnull=True,
     ))
     available = product.available_quantity
     return {
@@ -1769,6 +1770,8 @@ def stock_summary(request):
             status__in=['pending', 'processing', 'completed'],
             created_at__gte=selected_day_start,
             created_at__lt=selected_day_end,
+            # Stock takes set a balance; they are not stock sent to the branch.
+            target_quantity__isnull=True,
         ).values('product_id').annotate(total=Sum(Cast('quantity', IntegerField())))
     }
     # Per-product calculation (one indexed lookup per product) instead of two

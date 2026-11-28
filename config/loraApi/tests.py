@@ -3028,6 +3028,24 @@ class StockTransferTests(TestCase):
 		self.assertEqual(product['sold_quantity'], '4')
 		self.assertEqual(product['sent_quantity'], '7')
 
+	def test_stock_summary_sent_excludes_stock_takes(self):
+		ProductCatalog.objects.create(
+			branch='SentCheckBranch', product_id=1210000002, product_name='TEST PRODUCT', available_quantity=100,
+		)
+		StockTransfer.objects.create(
+			transfer_id='TRANSFER_SENT', branch='SentCheckBranch', product_id=1210000002,
+			product_name='TEST PRODUCT', quantity=100, status='completed',
+		)
+		StockTransfer.objects.create(
+			transfer_id='STOCKTAKE_BULK_x_1210000002', branch='SentCheckBranch', product_id=1210000002,
+			product_name='TEST PRODUCT', quantity=100, target_quantity=100, status='completed',
+		)
+
+		response = self.client.get('/api/stock/summary/', {'branch': 'SentCheckBranch'})
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()['products'][0]['sent_quantity'], '100')
+
 	def test_stock_summary_lists_the_movement_types_of_the_selected_day(self):
 		selected_date = timezone.localdate() - timedelta(days=1)
 		day_start = timezone.make_aware(datetime.combine(selected_date, datetime.min.time()))
