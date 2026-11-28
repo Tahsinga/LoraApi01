@@ -2333,6 +2333,23 @@
   activityDate.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
   transferLogDate.value = activityDate.value;
   productMovementDate.value = activityDate.value;
+  // Keep the date boxes on today when the page stays open past midnight.
+  // A box only moves if it is still on the old day, so a date someone picked stays put.
+  let currentDay = activityDate.value;
+  function followToday() {
+    const now = localDateValue(0);
+    if (now === currentDay) return;
+    const previousDay = currentDay;
+    currentDay = now;
+    [activityDate, transferLogDate, productMovementDate].forEach(input => {
+      if (input.value !== previousDay) return;
+      input.value = now;
+      input.dispatchEvent(new Event('change'));
+    });
+  }
+  setInterval(followToday, 60000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) followToday(); });
+  window.addEventListener('focus', followToday);
   document.addEventListener('click', event => {
     if (!event.target.closest('.product-picker')) productSearches.forEach(control => closePickerOptions(control.options));
   });
