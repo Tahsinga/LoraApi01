@@ -2302,6 +2302,47 @@ def whatsapp_stock_lookup(request):
             created_at__gte=day_start,
             created_at__lt=day_end,
         ).order_by('created_at', 'product_name')
+        receipts = list(receipts)
+        first_received = {}
+        for receipt in receipts:
+            first_received.setdefault(receipt.product_id, receipt.created_at)
+        product_ids = list(first_received)
+
+        # Stock takes done the same day after a product was received (e.g. to undo stock sent by
+        # mistake): what the balance was just before, what it was set to, and the change.
+        adjustments = []
+        if product_ids:
+            stock_take_rows = StockMovement.objects.filter(
+                branch__iexact=branch,
+                product_id__in=product_ids,
+                movement_type__in=['stocktake', 'adjusted'],
+                created_at__gte=day_start,
+                created_at__lt=day_end,
+            ).exclude(source='pos_stock_snapshot').order_by('created_at', 'id')
+            for row in stock_take_rows:
+                if row.created_at < first_received[row.product_id]:
+                    continue
+                before = web_movement_balance_before(row.branch, row.product_id, row)
+                after = Decimal(str(row.quantity))
+                if before is not None and before == after:
+                    continue
+                adjustments.append({
+                    'product_id': row.product_id,
+                    'product_name': row.product_name,
+                    'from_quantity': str(before) if before is not None else None,
+                    'to_quantity': str(after),
+                    'change': str(after - before) if before is not None else None,
+                    'adjusted_by': row.source.removesuffix(' (stock take)').strip() or 'System',
+                    'adjusted_at': row.created_at.astimezone(stock_timezone).isoformat(),
+                })
+
+        balances = {
+            str(product_id): str(quantity)
+            for product_id, quantity in ProductCatalog.objects.filter(
+                branch__iexact=branch,
+                product_id__in=product_ids,
+            ).values_list('product_id', 'available_quantity')
+        }
         return JsonResponse({
             'status': 'ok',
             'branch': branch,
@@ -2315,6 +2356,8 @@ def whatsapp_stock_lookup(request):
                 }
                 for receipt in receipts
             ],
+            'adjustments': adjustments,
+            'current_balances': balances,
         })
 
     transfers = StockTransfer.objects.filter(
